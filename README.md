@@ -72,6 +72,7 @@ the mod.
   **Save atmo** writes it without saving the mod.
 - **The game's own atmo** is unloaded when MGE starts, so the saved copy loaded in game doesn't show on
   top of the one you're editing. Your default atmo setting isn't changed.
+- **Players tab:** atmo objects remain visible as translucent ghosts, like on the Objects tab.
 - **Drawing:** the game draws only so many shapes per frame, and how many depends on its graphics settings.
   MGE draws every atmo object: in color on the Atmo list, as faint ghosts on the Objects list. The atmo
   holds 256 by default, which leaves room for the mod's 256 objects and 256 more shapes (outlines, the
@@ -81,6 +82,24 @@ the mod.
 - **Convert map** has two budgets: **Budget** is how many boxes become objects (up to the free ids),
   **Atmo** is how many more go to the atmo (the smaller boxes). Budget 0 puts every box in the atmo and
   leaves the object ids free. The placement view draws those boxes in purple.
+
+### Playable atmo (experimental)
+
+Atmo objects are only drawn: tori fall through them. A **playable atmo mod** makes them solid in game with
+the **Atmo Play** script, which the players need: it moves hidden objects onto the atmo objects near
+each player, in fights, and the game records those moves, so replays need nothing extra.
+
+- **World → Playable → To playable atmo:** the mod's static objects move into the atmo (like To
+  atmo; dynamic, joint-linked and model objects stay objects), and the mod becomes playable. One undo step.
+- **Save** then writes one file into `modmaker/` like any mod: the mod, the atmo inside it (as `#@` comment
+  lines the game skips) and a pool of hidden static objects on every free id. No separate `.atmo` file.
+- Opening a playable mod reads its atmo back into the Atmo list; the pool isn't shown (Save makes it again).
+- On a playable mod, **Convert** moves static objects added since, **Ordinary** makes it a normal mod again
+  (its atmo goes back to `MGE - <mod>.atmo` on the next save).
+- Solid are boxes, spheres and capsules with a position. Custom models and objects with `count`, random
+  (`rpos`, `rsize`), animated (`move`, `rotate`, draw functions) or parented lines are only drawn.
+- While editing, MGE draws the atmo itself and the working copy has no pool: test it by loading the saved
+  mod with Atmo Play running (and MGE closed).
 
 ## Keyboard shortcuts
 

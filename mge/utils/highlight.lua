@@ -388,6 +388,9 @@ add_hook("draw3d", MGE.hookname, function()
         if Highlight.placement then Highlight.placement() end -- map placement, on any list
         if not Main.window.displayed then return end -- the placement view hides the window, only it draws
         if Main.listTab == "players" then
+            -- the atmo as on the Objects list: faint ghosts in the atmo color, no selection highlight, so
+            -- what's only drawn stays apart from the mod's (solid) objects while placing players on the map
+            drawAtmo(false)
             -- the players list: the selected players, not the objects (they aren't what's edited there).
             -- During a scale drag the scaled players instead
             local Players = MGE.Players

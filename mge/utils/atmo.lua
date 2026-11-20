@@ -250,9 +250,10 @@ function Atmo.applyShader(restore)
     runCmd("lws " .. file)
 end
 
-function Atmo.load(modPath)
+---@param embedded string[]? a playable mod's atmo lines (utils/playable.lua): read instead of the file
+function Atmo.load(modPath, embedded)
     local name = Atmo.fileName(modPath)
-    local lines = name and readLines(name)
+    local lines = embedded or (name and readLines(name))
     if not lines then
         ModData.parsed.atmo = {}
         Atmo.state = { name = name, text = nil, header = {} }
@@ -262,7 +263,12 @@ function Atmo.load(modPath)
     ModData.parsed.atmo = file.objects
     Atmo.state = { name = name, header = file.header }
     Atmo.state.text = Atmo.currentText()
-    MGE.say("atmo: " .. #file.objects .. " objects from data/atmospheres/" .. name)
+    MGE.say("atmo: " .. #file.objects .. " objects from " .. (embedded and "the playable mod" or ("data/atmospheres/" .. name)))
+end
+
+---The layer counts as saved as it is now (a playable mod's Save: the atmo went into the mod file)
+function Atmo.markSaved()
+    Atmo.state.text = Atmo.currentText()
 end
 
 ---@param name string

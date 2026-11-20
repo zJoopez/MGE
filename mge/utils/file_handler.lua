@@ -56,6 +56,8 @@ end
 ---.atmo file, never in a .tbm: ParseMod leaves it empty. Ids are their order, 1 up
 ---@field ignores string[] lines before the first object (header comments, gamerule, body, joint...)
 ---@field trailer string[]? non object lines after the first object (usually player sections)
+---@field sharedPlayers integer? players that got the file's shared player parts (FileHandler.splitSharedPlayers)
+---@field playable PlayableParams? a playable atmo mod (utils/playable.lua): Save writes the playable form
 
 local indent = "   "
 
@@ -110,11 +112,27 @@ local function trimTrailingBlank(list)
     end
 end
 
+---A mod file's lines, nil when it can't be read
+---@param path string
+---@return string[]?
+function FileHandler.readLines(path)
+    local file = Files.Open(path, FILES_MODE_READONLY)
+    if not file or not file.data then return nil end -- Files.Open sets data to nil on failure
+    local lines = file:readAll()
+    file:close()
+    return lines
+end
+
 ---@param path string
 ---@return FileParserResult
 function FileHandler.ParseMod(path)
-    local file = Files.Open(path, FILES_MODE_READONLY)
+    return FileHandler.parseLines(FileHandler.readLines(path) or {})
+end
 
+---A mod's lines parsed (ParseMod without the file: a playable mod is split first, utils/playable.lua)
+---@param lines string[]
+---@return FileParserResult
+function FileHandler.parseLines(lines)
     ---@type FileParserResult
     local parser = {
         env_obj = {},
@@ -123,11 +141,6 @@ function FileHandler.ParseMod(path)
         ignores = {},
         trailer = {},
     }
-
-    if not file or not file.data then return parser end -- Files.Open sets data to nil on failure
-
-    local lines = file:readAll()
-    file:close()
 
     local seenObject = false
     local i = 1

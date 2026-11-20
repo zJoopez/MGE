@@ -39,6 +39,7 @@
 ---@field Gizmo Gizmo drag handles in the world, utils/gizmo.lua
 ---@field AtmoLayer AtmoLayer objects over the game's limit (the atmo layer), utils/atmo_layer.lua
 ---@field Atmo Atmo the atmo layer's .atmo file per mod, utils/atmo.lua
+---@field Playable Playable playable atmo mods for the Atmo Play script (World tab Convert, Save), utils/playable.lua
 ---@field Players Players players' start positions and rotations (engageplayerpos), utils/players.lua
 ---@field GizmoMath GizmoMath utils/gizmo_math.lua
 ---@field Highlight table selection highlight and generate preview, utils/highlight.lua
@@ -131,6 +132,7 @@ loadModule("utils/mod_export.lua")
 loadModule("utils/history.lua")
 loadModule("utils/atmo_layer.lua") -- objects over the game's limit, after history
 loadModule("utils/atmo.lua") -- the atmo layer's .atmo file per mod
+loadModule("utils/playable.lua") -- playable atmo mods (Atmo Play): after atmo_layer and history
 loadModule("utils/joints.lua")
 loadModule("utils/highlight.lua")
 loadModule("utils/world_select.lua")
@@ -221,10 +223,23 @@ end
 ---isn't): the working copy loaded then doesn't say which mod it is
 MGE_SOURCE = MGE_SOURCE
 
----@type { objects: fun(): FileParserEnvObj[], state: fun(): table }? the atmo layer and its file's state
+---@type { objects: fun(): FileParserEnvObj[], state: fun(): table, playable: (fun(): PlayableParams?)? }? the atmo layer and its file's state
 ---(utils/atmo.lua), kept over a script restart like MGE_SOURCE: the working copy doesn't carry the layer.
 ---Functions over the old instance's data, so they give its latest, however that instance ended
 MGE_ATMO = MGE_ATMO
+
+---The opened mod's atmo: from inside it for a playable mod (utils/playable.lua, read by
+---ModData.reloadObjects), otherwise from its MGE - <mod>.atmo; and whether it's playable
+local function loadSourceAtmo()
+    local loaded = ModData.loadedPlayable
+    ModData.parsed.playable = loaded and {
+        rule = tonumber(loaded.header.rule) or MGE.Playable.DEFAULT_RULE,
+        radius = tonumber(loaded.header.radius) or MGE.Playable.DEFAULT_RADIUS,
+    } or nil
+    MGE.savedPlayable = loaded ~= nil -- the file as it is: playable or not
+    Atmo.load(MGE.modPath, loaded and loaded.atmo)
+    if MGE.EditorRows then MGE.EditorRows.refreshBlocks({ "playable" }) end -- the World tab's Playable row
+end
 
 ---@param path string?
 ---@return boolean
@@ -287,6 +302,7 @@ end
 ---@return boolean
 function MGE.hasUnsavedChanges()
     return MGE.savedText == nil or MGE.savedText ~= FileHandler.modText(ModData.parsed) or Atmo.hasChanges()
+        or (ModData.parsed.playable ~= nil) ~= (MGE.savedPlayable == true) -- Convert / Ordinary (utils/playable.lua)
 end
 
 ---Writes the mod to path (in the save folder), which becomes the source, then applies (reload)
@@ -294,13 +310,35 @@ end
 local function writeMod(path)
     MGE.syncGamerules() -- rules changed in the game's menu
     -- models written for the file's folder, the data keeps them for data/mod (ModData.parsedFor)
-    if not FileHandler.WriteMod(ModData.parsedFor(path), MGE.modFolder .. path) then
+    local parsed = ModData.parsedFor(path)
+    local written, plan
+    if parsed.playable then
+        -- a playable atmo mod (utils/playable.lua): the mod, its pool and its atmo in one file
+        local text
+        text, plan = MGE.Playable.text(parsed, Atmo.currentText())
+        local file = Files.Open(MGE.modFolder .. path, FILES_MODE_WRITE)
+        if file and file.data then
+            file:writeLine(text)
+            file:close()
+            written = true
+        end
+    else
+        written = FileHandler.WriteMod(parsed, MGE.modFolder .. path)
+    end
+    if not written then
         MGE.say("couldn't save " .. path)
         return
     end
     MGE.setSource(path)
-    MGE.say("saved " .. path)
-    Atmo.saveFor(path) -- the atmo layer's file, when it changed (asks before deleting an emptied one)
+    MGE.savedPlayable = plan ~= nil
+    if plan then
+        MGE.say(string.format("saved %s: playable, %d atmo objects (%d solid), %d pool objects", path, plan.atmo,
+            plan.solid, #plan.objects))
+        Atmo.markSaved() -- the atmo is in the mod file
+    else
+        MGE.say("saved " .. path)
+        Atmo.saveFor(path) -- the atmo layer's file, when it changed (asks before deleting an emptied one)
+    end
     -- the saved mod is what gets shared, say so if dynamic objects won't fully work in it
     local warning = MGE.Main and MGE.Main.dynamicWarning()
     if warning then MGE.say("saved with " .. warning) end
@@ -431,7 +469,7 @@ add_hook("match_begin", MGE.hookname, function()
         -- a mod file was loaded (not our working copy): the data belongs to it now, with its atmo
         if not isSaveOutput(MGE.modPath) then
             MGE.setSource(MGE.modPath)
-            Atmo.load(MGE.modPath)
+            loadSourceAtmo()
             Atmo.applyShader() -- the new mod's atmo shader, or the player's own
         end
     end
@@ -681,7 +719,7 @@ MGE.snapshotGamerules()
 -- before the restart, compared with its text
 if MGE.modPath and not isSaveOutput(MGE.modPath) then
     MGE.setSource(MGE.modPath)
-    Atmo.load(MGE.modPath)
+    loadSourceAtmo()
 else
     if MGE_SOURCE then MGE.setSource(MGE_SOURCE.path, MGE_SOURCE.text) end
     -- the working copy: the atmo layer as the last instance had it
@@ -690,6 +728,9 @@ else
         local okState, state = pcall(MGE_ATMO.state)
         if ok and type(objects) == "table" then ModData.parsed.atmo = objects end
         if okState and type(state) == "table" then Atmo.state = state end
+        -- a playable mod's params (utils/playable.lua): the working copy doesn't say it's playable
+        local okPlayable, playable = pcall(MGE_ATMO.playable or function() end)
+        if okPlayable and type(playable) == "table" then ModData.parsed.playable = playable end
     end
 end
 -- the first undo state: after the atmo is read, or undoing back to it would empty the atmo
@@ -697,6 +738,7 @@ History.reset()
 MGE_ATMO = {
     objects = function() return ModData.parsed.atmo end,
     state = function() return Atmo.state end,
+    playable = function() return ModData.parsed.playable end,
 }
 MGE.AtmoLayer.unloadGameAtmo() -- MGE draws the atmo itself, a loaded one would show it twice
 -- the player's shader (the unload put it back), then the mod's atmo shader shown live (Atmo.applyShader)

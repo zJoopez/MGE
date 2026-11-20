@@ -411,10 +411,17 @@ end
 ---main.lua's start and match_begin)
 function ModData.reloadObjects()
     local atmo = ModData.parsed and ModData.parsed.atmo or {}
+    -- kept like the atmo layer: the working copy is an ordinary mod. Opening a mod sets it (main.lua)
+    local playable = ModData.parsed and ModData.parsed.playable
     init()
+    ModData.loadedPlayable = nil
 
     if MGE.modPath then
-        ModData.parsed = FileHandler.ParseMod(MGE.modFolder .. MGE.modPath)
+        -- a playable mod (utils/playable.lua): its pool and atmo lines aren't parsed as the mod
+        local lines = FileHandler.readLines(MGE.modFolder .. MGE.modPath) or {}
+        local split = MGE.Playable and MGE.Playable.split(lines)
+        if split and split.header then ModData.loadedPlayable = split end
+        ModData.parsed = FileHandler.parseLines(split and split.lines or lines)
         -- shared body/joint parts (fatkido.tbm) as every player's own section, written back shared while
         -- they're all the same
         local rules = get_game_rules and get_game_rules() or {} -- the offline tests have no game
@@ -426,12 +433,20 @@ function ModData.reloadObjects()
         MGE.say("Mod not found") -- the built-in classic (gamerule "classic", no .tbm) has no file: nothing to say
     end
     ModData.parsed.atmo = atmo
+    ModData.parsed.playable = playable
 
     -- free ids come from the world, also without a mod file, otherwise imports have no ids to use
     for i = 0, MAX_ENV_OBJECTS - 1 do
         if get_obj_pos(i) == nil then
             local pool = i >= MAX_NONSTATIC_OBJECTS and ModData.freeIds.static or ModData.freeIds.nonStatic
             table.insert(pool, i + 1)
+        end
+    end
+    -- a playable mod's pool objects are in the world but not in the data: their ids are free (Save makes
+    -- the pool again from the free ids)
+    if ModData.loadedPlayable then
+        for _, id in ipairs(ModData.loadedPlayable.pool) do
+            if get_obj_pos(id - 1) ~= nil then ModData.releaseId(id) end
         end
     end
     MGE.say("Mod data updated")

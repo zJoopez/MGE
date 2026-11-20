@@ -27,7 +27,8 @@ end
 ---@return FileParserResult
 local function copyParsed(parsed)
     local copy = { ignores = parsed.ignores, trailer = parsed.trailer, env_obj = {}, env_obj_joint = {}, atmo = {},
-        sharedPlayers = parsed.sharedPlayers } -- the file's way of writing player models (FileHandler.splitSharedPlayers)
+        sharedPlayers = parsed.sharedPlayers, -- the file's way of writing player models (FileHandler.splitSharedPlayers)
+        playable = parsed.playable } -- a playable atmo mod's params (utils/playable.lua), never changed in place
     for i, obj in ipairs(parsed.env_obj or {}) do copy.env_obj[i] = copyObject(obj) end
     for i, obj in ipairs(parsed.env_obj_joint or {}) do copy.env_obj_joint[i] = copyObject(obj) end
     for i, obj in ipairs(parsed.atmo or {}) do copy.atmo[i] = copyObject(obj) end
@@ -201,6 +202,10 @@ local function restore(index)
     for i, obj in ipairs(current.atmo or {}) do atmoSelected[i] = obj.selected end
     for i, obj in ipairs(ModData.parsed.atmo) do obj.selected = atmoSelected[i] end
 
+    -- undoing Convert (utils/playable.lua): the World tab's Playable row shows the other buttons
+    if current.playable ~= ModData.parsed.playable and MGE.EditorRows then
+        MGE.EditorRows.refreshBlocks({ "playable" })
+    end
     if sameObjects(current, ModData.parsed) then
         applyLive(ModData.parsed)
         -- refreshes the list and the editor's current values, typed inputs stay for the next edit
