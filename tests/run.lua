@@ -26,6 +26,11 @@ local FILES = {
     "test_joints.lua",
     "test_players.lua",
     "test_playable.lua",
+    "test_atmoplay_format.lua",
+    "test_atmoplay_colliders.lua",
+    "test_atmoplay_pool.lua",
+    "test_atmoplay_builder.lua",
+    "test_atmoplay_runtime.lua",
 }
 
 -- game libraries plain 5.1 lacks (same shims as the workspace CLAUDE.md harness header)
@@ -77,6 +82,19 @@ Files = {
         return file
     end,
 }
+
+-- Atmo Play (atmoplay/: the player script for MGE's playable atmo mods), its pure modules in their own
+-- namespace like atmoplay.lua loads them (ATMOPLAY_LOADING while one loads). The test_atmoplay_* files use
+-- them through ATMOPLAY; MGE's utils/playable.lua through MGE.AtmoPlay (main.lua loads its own, the same)
+ATMOPLAY = { scriptPath = testDir .. "../atmoplay/" }
+for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua" }) do
+    ATMOPLAY_LOADING = ATMOPLAY
+    dofile(ATMOPLAY.scriptPath .. module)
+end
+ATMOPLAY_LOADING = ATMOPLAY -- the offline builder, a developer tool (tools/atmoplay/build_playable.lua)
+dofile(testDir .. "../tools/atmoplay/builder.lua")
+ATMOPLAY_LOADING = nil
+MGE.AtmoPlay = ATMOPLAY
 
 local modules = { "utils/mat3.lua", "utils/file_handler.lua", "utils/mod_export.lua",
     "utils/history.lua", "utils/atmo_layer.lua", "utils/atmo.lua", "utils/playable.lua" }
@@ -145,6 +163,24 @@ function T.throws(fn, pattern, message)
     else
         fail((message or "throws") .. (ok and ": didn't throw" or (": wrong error: " .. tostring(err))))
     end
+end
+
+---Splits text into lines like the game's Files:readAll (LF, CR dropped, no last empty line)
+---@param text string
+---@return string[]
+function T.lines(text)
+    local out = {}
+    for line in (text .. "\n"):gmatch("([^\n]*)\n") do out[#out + 1] = (line:gsub("\r$", "")) end
+    if out[#out] == "" then out[#out] = nil end
+    return out
+end
+
+---Index of the first line equal to `line` (or matching it as a pattern when `pattern` is true)
+function T.find(lines, line, pattern)
+    for i, l in ipairs(lines) do
+        if (pattern and l:match(line)) or (not pattern and l == line) then return i end
+    end
+    return nil
 end
 
 ---A named group of checks, an error inside counts as one failure and the next test runs

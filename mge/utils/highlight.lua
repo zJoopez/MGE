@@ -197,7 +197,8 @@ end
 ---   thousands selected shows, an outlined highlight had room for 256 at most
 --- Only the ones that can show on screen (onScreen)
 ---@param full boolean
-local function drawAtmo(full)
+---@param plain boolean? with full: as the map looks when played (MGE's window hidden): no selection highlight
+local function drawAtmo(full, plain)
     local AtmoLayer = MGE.AtmoLayer
     local list = ModData.parsed.atmo or {}
     if not full then
@@ -212,7 +213,7 @@ local function drawAtmo(full)
     local live = AtmoLayer.live
     for _, atmoObj in ipairs(list) do
         local g = AtmoLayer.ghost(atmoObj)
-        local selected = atmoObj.selected
+        local selected = atmoObj.selected and not plain
         if g and live and selected then g = AtmoLayer.liveGhost(g, live) end
         if g and onScreen(g) then
             local c = colorOf(atmoObj)
@@ -386,7 +387,12 @@ add_hook("draw3d", MGE.hookname, function()
         local boxes, anchors
         if Highlight.preview then boxes, anchors = Highlight.preview() end
         if Highlight.placement then Highlight.placement() end -- map placement, on any list
-        if not Main.window.displayed then return end -- the placement view hides the window, only it draws
+        if not Main.window.displayed then
+            -- the window hidden (F1) to play: the atmo as it looks in game. The map placement view hides the
+            -- window too, there only it draws
+            if not MGE.isPlacing() then drawAtmo(true, true) end
+            return
+        end
         if Main.listTab == "players" then
             -- the atmo as on the Objects list: faint ghosts in the atmo color, no selection highlight, so
             -- what's only drawn stays apart from the mod's (solid) objects while placing players on the map

@@ -89,17 +89,23 @@ Atmo objects are only drawn: tori fall through them. A **playable atmo mod** mak
 the **Atmo Play** script, which the players need: it moves hidden objects onto the atmo objects near
 each player, in fights, and the game records those moves, so replays need nothing extra.
 
-- **World → Playable → To playable atmo:** the mod's static objects move into the atmo (like To
-  atmo; dynamic, joint-linked and model objects stay objects), and the mod becomes playable. One undo step.
-- **Save** then writes one file into `modmaker/` like any mod: the mod, the atmo inside it (as `#@` comment
-  lines the game skips) and a pool of hidden static objects on every free id. No separate `.atmo` file.
-- Opening a playable mod reads its atmo back into the Atmo list; the pool isn't shown (Save makes it again).
-- On a playable mod, **Convert** moves static objects added since, **Ordinary** makes it a normal mod again
-  (its atmo goes back to `MGE - <mod>.atmo` on the next save).
+- **Atmo list → Advanced → Playable: On / Off** (for the whole mod, whatever is selected). On makes the mod playable, one undo step:
+  - its static objects move into the atmo (like To atmo; dynamic, joint-linked and model objects stay objects),
+  - fights in the editor are solid: MGE moves the pool with the same code Atmo Play uses (hide the window
+    with F1 to play: the atmo stays drawn, as it looks in game),
+  - **Save** writes one file into `modmaker/` like any mod: the mod, the atmo inside it (as `#@` comment lines
+    the game skips) and a pool of hidden static objects on every free id. No separate `.atmo` file.
+
+  Off makes it an ordinary mod again; its atmo objects stay in the atmo, and Save writes `MGE - <mod>.atmo`.
+  Switching On again moves static objects added since.
+- Opening a playable mod reads its atmo back into the Atmo list and Playable shows On; the pool isn't shown
+  (it's made again from the free ids on every save and reload).
 - Solid are boxes, spheres and capsules with a position. Custom models and objects with `count`, random
   (`rpos`, `rsize`), animated (`move`, `rotate`, draw functions) or parented lines are only drawn.
-- While editing, MGE draws the atmo itself and the working copy has no pool: test it by loading the saved
-  mod with Atmo Play running (and MGE closed).
+- **Atmo Play** comes with MGE (`atmoplay.lua` and `atmoplay/` in MGE's folder: `/ls mge/atmoplay.lua`) and
+  as its own small release for players (`atmoplay.zip`). While MGE is open, Atmo Play leaves playable mods
+  to MGE.
+- **Hiding the window (F1)** now always draws the atmo as it looks in game (its own colors, no selection).
 
 ## Keyboard shortcuts
 

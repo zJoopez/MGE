@@ -6,7 +6,6 @@
 --            Atmos > Atmos), Save writes it
 --   Map:     Convert map (it was on the Advanced tab: adds a whole map, not about the selection)
 --   Mod:     Reset all: loads the classic mod (/lm classic), asks first with unsaved changes
---   Playable: Convert to a playable atmo mod (utils/playable.lua), or back to an ordinary one
 --   Credits: the last row
 local Rows = MGE.EditorRows
 local Widgets = MGE.Widgets
@@ -154,28 +153,6 @@ local function buildMapRow(holder)
         "CS:GO, TF2...) into static boxes, added where\nthe map puts them. Maps go in assets/maps.")
 end
 
----Playable row (utils/playable.lua): Convert makes the mod a playable atmo mod, its static objects move
----into the atmo; on a playable mod Convert moves objects added since, Ordinary makes it a normal mod again.
----A block: Convert and undo rebuild it (MGE.EditorRows.refreshBlocks({ "playable" }))
----@param holder UIElement
-local function buildPlayableRow(holder)
-    Rows.begin()
-    local Playable = MGE.Playable
-    local playable = ModData.parsed.playable
-    if not playable then
-        createToggleButtonRow("Playable", holder, {
-            { label = "To playable atmo", active = false, onClick = function() Playable.convert() end },
-        }, "Makes the map solid in game with the Atmo Play\nscript: static objects move to the atmo, Save\n" ..
-            "fills the free ids with hidden objects that\nfollow the players. Needs Atmo Play to play.")
-        return
-    end
-    createToggleButtonRow("Playable", holder, {
-        { label = "Convert", active = true, onClick = function() Playable.convert() end },
-        { label = "Ordinary", active = false, onClick = function() Playable.makeOrdinary() end },
-    }, "A playable atmo mod (Atmo Play, radius " .. tostring(playable.radius) .. "):\nSave writes the atmo and the " ..
-        "pool into the mod.\nConvert moves static objects added since.\nOrdinary: a normal mod and .atmo file again.")
-end
-
 ---Starts over from the game's classic mod (/lm classic): objects, joints, players, rules and the atmo
 ---all go back to it, like loading any mod. Asks first when there are unsaved changes
 local function resetAll()
@@ -216,6 +193,5 @@ return {
     },
     blocks = {
         { name = "miscFile", build = buildFileRows, panel = "misc", row = 0, rows = 2 },
-        { name = "playable", build = buildPlayableRow, panel = "misc", row = 4, rows = 1 },
     },
 }

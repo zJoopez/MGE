@@ -2,9 +2,11 @@
 --
 --   lua5.1 tools/strip_comments.lua in.lua out.lua
 --
--- Every line is kept (a comment's line stays, empty, a long comment keeps its newlines), so an error in
--- the release names the same line as the source. Strings and long strings are copied as they are: a "--"
--- inside one isn't a comment. Trailing spaces go, and the lines that end up empty at the end of the file.
+-- Lines that only held comments go, and so do the lines inside long comments: no gaps where the comments
+-- were. Blank lines the source had are kept, at most one in a row (the gaps between functions). So the
+-- release's line numbers aren't the source's: an error from a release names a line of the stripped file.
+-- Strings and long strings are copied as they are, their lines untouched (a "--" inside one isn't a
+-- comment, a blank line inside one is part of it). Trailing spaces go, outside strings.
 -- package.ps1 checks the result: `luac -s` (no line info) of both must give the same bytes, which only
 -- holds when nothing but comments and spacing changed.
 local inPath, outPath = arg[1], arg[2]
@@ -14,11 +16,14 @@ if not inPath or not outPath then
 end
 
 local f = assert(io.open(inPath, "rb"))
-local src = f:read("*a")
+local src = f:read("*a"):gsub("\r\n", "\n")
 f:close()
 
 local out = {}
 local i, n = 1, #src
+local line = 1 -- the source line at i
+local inString = {} -- lines whose content belongs to a string spanning lines: copied untouched
+local inComment = {} -- lines a comment took up (empty after stripping: they go)
 
 ---Level of a long bracket opening at position p ("[[" 0, "[=[" 1...), nil when there's none
 local function longOpen(p)
@@ -34,22 +39,33 @@ local function longClose(p, level)
     return e + 1
 end
 
+---Counts the newlines of src from a to b, marks the lines after the first in `marks`, moves `line` on
+local function span(a, b, marks)
+    local first = line
+    for _ in src:sub(a, b):gmatch("\n") do line = line + 1 end
+    if marks then
+        for l = first + 1, line do marks[l] = true end
+    end
+    return first
+end
+
 while i <= n do
     local c = src:sub(i, i)
     if c == "-" and src:sub(i + 1, i + 1) == "-" then
         -- a comment: long ("--[[", "--[==[") keeps only its newlines, a line comment goes up to its newline
         local level = longOpen(i + 2)
+        local after
         if level then
-            local after = longClose(i + 2 + level + 2, level)
+            after = longClose(i + 2 + level + 2, level)
             local _, newlines = src:sub(i, after - 1):gsub("\n", "")
             out[#out + 1] = string.rep("\n", newlines)
-            i = after
         else
-            local nl = src:find("\n", i, true)
-            i = nl or n + 1 -- the newline itself is copied by the next pass
+            after = src:find("\n", i, true) or n + 1 -- the newline itself is copied by the next pass
         end
+        inComment[span(i, after - 1, inComment)] = true
+        i = after
     elseif c == '"' or c == "'" then
-        -- a quoted string, escapes skipped over (\" doesn't end it)
+        -- a quoted string, escapes skipped over (\" doesn't end it, a \ before a newline continues it)
         local j = i + 1
         while j <= n do
             local d = src:sub(j, j)
@@ -64,26 +80,44 @@ while i <= n do
             end
         end
         out[#out + 1] = src:sub(i, j)
+        span(i, j, inString)
         i = j + 1
     elseif c == "[" and longOpen(i) then
         local level = longOpen(i)
         local after = longClose(i + level + 2, level)
         out[#out + 1] = src:sub(i, after - 1)
+        span(i, after - 1, inString)
         i = after
     else
         -- plain code up to the next character that could start a comment or a string
         local j = src:find("[%-\"'%[]", i + 1) or n + 1
         out[#out + 1] = src:sub(i, j - 1)
+        span(i, j - 1)
         i = j
     end
 end
 
-local text = table.concat(out)
--- trailing spaces (code lines and the leftovers of removed comments), not inside long strings: none of
--- MGE's long strings end lines with spaces, and the luac check catches it if one ever does
-text = text:gsub("[ \t]+\r?\n", "\n"):gsub("\r\n", "\n")
-text = text:gsub("%s+$", "") .. "\n"
+-- line by line: the stripped text has the source's lines (comments kept their newlines)
+local kept, blank = {}, true -- blank: the last kept line is empty (also at the start: no leading blanks)
+local number = 0
+for text in (table.concat(out) .. "\n"):gmatch("([^\n]*)\n") do
+    number = number + 1
+    if inString[number] then
+        kept[#kept + 1] = text
+        blank = false
+    else
+        text = text:gsub("[ \t]+$", "")
+        if text ~= "" then
+            kept[#kept + 1] = text
+            blank = false
+        elseif not inComment[number] and not blank then
+            kept[#kept + 1] = "" -- a blank line of the source, one in a row
+            blank = true
+        end
+    end
+end
+while kept[#kept] == "" do kept[#kept] = nil end
 
 local o = assert(io.open(outPath, "wb"))
-o:write(text)
+o:write(table.concat(kept, "\n") .. "\n")
 o:close()

@@ -1,6 +1,6 @@
 -- utils/playable.lua: Convert (static objects into the atmo, undo), the playable mod's text (pool, header,
--- "#@ " atmo) and reading it back, opening one (pool ids free). When Atmo Play's repo is next to this one
--- (data/script/atmoplayDev), its format.lua and colliders.lua read the text too: the two must agree
+-- "#@ " atmo) and reading it back, opening one (pool ids free). Atmo Play's format.lua and colliders.lua
+-- (atmoplay/) read the text too: the writer and the reader must agree
 local T = ...
 local FileHandler = MGE.FileHandler
 local ModData = MGE.ModData
@@ -74,7 +74,7 @@ T.test("convert: static objects into the atmo, the mod playable, one undo step",
     ModData.refreshJointIds()
     T.ok(not Playable.convertible(linked), "joint-linked: stays")
     T.ok(not Playable.convertible(model), "model: stays")
-    T.ok(Playable.convert(), "converted")
+    T.ok(Playable.setPlayable(true), "made playable")
     T.eq(#ModData.parsed.env_obj, 3, "three real objects left")
     T.eq(#ModData.parsed.atmo, 5, "the static object joined the four atmo objects")
     T.eq(ModData.parsed.atmo[5], static, "at the end of the atmo")
@@ -88,7 +88,7 @@ end)
 
 T.test("the playable text: pool on free static ids, header, atmo; read back", function()
     smallMod()
-    Playable.convert()
+    Playable.setPlayable(true)
     local text, plan = Playable.text(ModData.parsed, Atmo.currentText())
     local lines = splitLines(text)
     T.eq(lines[1], Playable.NOTE, "the note first")
@@ -121,20 +121,11 @@ T.test("the playable text: pool on free static ids, header, atmo; read back", fu
 end)
 
 T.test("Atmo Play reads MGE's playable mods the same way", function()
-    local dir = T.dir .. "../../atmoplayDev/atmoplay/"
-    local probe = io.open(dir .. "format.lua", "r")
-    if not probe then
-        print("  (atmoplayDev not next to mgeDev: skipped)")
-        return
-    end
-    probe:close()
     smallMod()
-    Playable.convert()
+    Playable.setPlayable(true)
     local text, plan = Playable.text(ModData.parsed, Atmo.currentText())
-    local saved = ATMOPLAY
-    ATMOPLAY = {}
     local ok, err = pcall(function()
-        for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua" }) do dofile(dir .. module) end
+        -- Atmo Play's modules as tests/run.lua loaded them (atmoplay/)
         local file = ATMOPLAY.Format.read(splitLines(text))
         T.eq(file.header and file.header.radius, 4, "Atmo Play: header")
         T.eq(#file.pool, #plan.objects, "Atmo Play: pool objects")
@@ -148,13 +139,12 @@ T.test("Atmo Play reads MGE's playable mods the same way", function()
             T.ok(groups[key], "pool group " .. key .. " has colliders in Atmo Play")
         end
     end)
-    ATMOPLAY = saved
     if not ok then error(err) end
 end)
 
 T.test("opening a playable mod: pool left out, its ids free, atmo and params from the file", function()
     smallMod()
-    Playable.convert()
+    Playable.setPlayable(true)
     local text, plan = Playable.text(ModData.parsed, Atmo.currentText())
     local saved = { modPath = MGE.modPath, modName = MGE.modName, modFolder = MGE.modFolder,
         get_obj_pos = get_obj_pos, get_game_rules = get_game_rules }
@@ -186,6 +176,50 @@ end)
 
 T.test("convert with nothing to make solid says so", function()
     setup({ object(2, { flag = "0" }) })
-    T.ok(not Playable.convert(), "not converted")
+    T.ok(not Playable.setPlayable(true), "not made playable")
     T.eq(ModData.parsed.playable, nil, "not playable")
+end)
+
+T.test("On: the working copy carries the pool, MGE moves it like Atmo Play; Off is one undo step", function()
+    smallMod()
+    local names = { "get_world_state", "get_body_info", "BODYPARTS", "set_obj_pos", "set_obj_sides", "set_obj_rot_m",
+        "set_obj_flag", "set_obj_bounce", "set_obj_vis", "set_obj_color", "get_obj_bounce" }
+    local saved = {}
+    for _, name in ipairs(names) do saved[name] = rawget(_G, name) end
+    local ok, err = pcall(function()
+        local moves = {}
+        get_world_state = function() return { match_frame = 0, replay_mode = 0, num_players = 1 } end
+        BODYPARTS = { HEAD = 0 }
+        get_body_info = function() return { pos = { x = 10, y = 0, z = 1 } } end -- next to the wall
+        set_obj_pos = function(id, x, y, z) moves[#moves + 1] = { id = id, x = x } end
+        set_obj_sides, set_obj_rot_m, set_obj_flag, set_obj_bounce = function() end, function() end, function() end, function() end
+        set_obj_vis, set_obj_color = function() end, function() end
+        get_obj_bounce = function() return 0.5 end
+        T.ok(not Playable.isOn(), "off at first")
+        T.ok(Playable.setPlayable(true), "on")
+        local text = Playable.workingText(ModData.parsed)
+        local split = Playable.split(splitLines(text))
+        T.ok(split.header ~= nil, "the working copy has the header (the reload frees the pool's ids)")
+        T.eq(#split.pool, 3, "and the pool")
+        T.eq(#split.poolObjects, 3, "with shapes for the driver")
+        T.eq(#split.atmo, 1, "but not the atmo (one empty #@ line): MGE draws it")
+        -- the reload of that working copy: the driver takes the pool the file has
+        ModData.loadedPlayable = split
+        Playable.onMatchBegin()
+        local placed = false
+        for _, m in ipairs(moves) do
+            if math.abs(m.x - 10) < 1e-9 then placed = true end
+        end
+        T.ok(placed, "the wall's pool object placed at the fight's start")
+        local steps = #MGE.History.states
+        T.ok(Playable.setPlayable(false), "off")
+        T.ok(not Playable.isOn(), "not playable")
+        T.eq(#MGE.History.states, steps + 1, "one undo step")
+        T.eq(#ModData.parsed.atmo, 5, "the atmo objects stay in the atmo")
+        MGE.History.undo()
+        T.ok(Playable.isOn(), "undo: playable again")
+        ModData.loadedPlayable = nil
+    end)
+    for _, name in ipairs(names) do rawset(_G, name, saved[name]) end
+    if not ok then error(err) end
 end)

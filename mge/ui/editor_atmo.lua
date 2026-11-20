@@ -4,6 +4,8 @@
 --   Graphics: the game's graphics levels it's drawn at, min and max (0 lowest - 2 highest)
 --   Kept:     how many other lines the selected ones keep (count, randompos, rotate, parent...): written
 --             back as they are, MGE draws such objects as their plain shape
+--   Playable: Off / On for the whole mod, not the selection: a playable atmo mod (utils/playable.lua), saved
+--             as one and solid in fights in the editor
 -- The Atmo list's Core tab is the objects' Core (ui/editor_core.lua), on the selected atmo objects, with To objects
 -- and Save atmo in its last row.
 -- Atmo objects aren't in the .tbm: changes here are an undo step, no reload.
@@ -92,8 +94,28 @@ local function buildAtmoProps(holder, selected)
     }, "Lines MGE doesn't edit (count, randompos, parent...),\nsaved as they are.")
 end
 
+---Playable row (utils/playable.lua): Off / On, about the whole mod. On makes the mod a playable atmo mod (its
+---static objects move into the atmo), saved as one and solid in fights in the editor; Off makes it ordinary
+---again. A block: the switch, undo and opening a mod rebuild it (MGE.EditorRows.refreshBlocks({ "playable" }))
+---@param holder UIElement
+local function buildPlayableRow(holder)
+    Rows.begin()
+    local Playable = MGE.Playable
+    local on = Playable.isOn()
+    Rows.createToggleButtonRow("Playable", holder, {
+        { label = "Off", active = not on, onClick = function() Playable.setPlayable(false) end },
+        { label = "On", active = on, onClick = function() Playable.setPlayable(true) end },
+    }, "On: the atmo is solid in fights (Atmo Play for\nplayers, MGE itself while editing). Static\n" ..
+        "objects move to the atmo; Save writes the atmo\nand hidden objects that follow the players into\n" ..
+        "the mod. Off: an ordinary mod and .atmo file.")
+end
+
 ---@type EditorPanelModule
 return {
-    blocks = { { name = "atmoProps", build = buildAtmoProps, panel = "atmo", row = 0, rows = 3 } },
+    blocks = {
+        { name = "atmoProps", build = buildAtmoProps, panel = "atmo", row = 0, rows = 3 },
+        -- the whole mod, right after the selection's rows
+        { name = "playable", build = buildPlayableRow, panel = "atmo", row = 3, rows = 1 },
+    },
     inputs = { rebuilt = { "atmoLevels" } },
 }

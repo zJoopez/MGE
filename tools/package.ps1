@@ -1,7 +1,10 @@
-# Builds the release zip: mge/ with the script, LICENSE, README and the sample assets.
-# Unzipped into data/script it gives data/script/mge/mge.lua, loaded with /ls mge/mge.lua.
+# Builds the release zips:
+#   mge.zip:      mge/ with the script, LICENSE, README and the sample assets. Unzipped into data/script it
+#                 gives data/script/mge/mge.lua, loaded with /ls mge/mge.lua.
+#   atmoplay.zip: Atmo Play, the small player script for playable atmo mods ($AtmoPlayModules below), next
+#                 to mge.zip. Unzipped: data/script/atmoplay/atmoplay.lua, loaded with /ls atmoplay/atmoplay.lua.
 #
-#   powershell -ExecutionPolicy Bypass -File mge/tools/package.ps1            -> data/script/mge.zip
+#   powershell -ExecutionPolicy Bypass -File mge/tools/package.ps1            -> data/script/mge.zip, atmoplay.zip
 #   powershell -ExecutionPolicy Bypass -File mge/tools/package.ps1 -Out x.zip
 #   or double-click tools/build.cmd (keeps the window open to show the result)
 #
@@ -18,9 +21,10 @@
 # below, plus $SampleAssets (assets/ is gitignored: converted maps and the user's own exports stay out).
 # An untracked .lua file under mge/ stops the build: it would be missing from the zip.
 # The tests run first when Lua 5.1 is found, a failure stops the build.
-# The .lua files go in without their comments (tools/strip_comments.lua: every line kept, so errors name
-# the source's line numbers). Each one is checked: `luac -s` of the original and the stripped file must
-# give the same bytes, any difference stops the build.
+# The .lua files go in without their comments (tools/strip_comments.lua: comment lines removed, no gaps;
+# so an error from a release names the stripped file's line, not the source's). Each one is checked:
+# `luac -s` of the original and the stripped file must give the same code (tools/same_bytecode.lua: the
+# bytes, apart from where each function starts and ends in the source), any difference stops the build.
 param(
     [string]$Out,
     [string]$Lua = "$env:LOCALAPPDATA\Programs\Lua51\lua5.1.exe",
@@ -45,6 +49,9 @@ $SampleAssets = @(
     "mge/assets/player/mma.tbm",
     "mge/assets/atmo/Tori_top.atmo" # also makes the folder Export writes atmo pieces to
 )
+# Atmo Play's release (atmoplay.zip): its entry atmoplay.lua and these modules (atmoplay/), what the player
+# script loads. mge.zip has them too (MGE writes playable mods and tests them with the same code)
+$AtmoPlayModules = @("mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "runtime.lua")
 
 Push-Location $repo
 try {
@@ -66,7 +73,8 @@ try {
             throw "commit these first, -Publish only ships committed code:`n$($shipped -join "`n")"
         }
     } elseif ($dirty) { Write-Warning "uncommitted changes go into the zip:`n$($dirty -join "`n")" }
-    $untracked = @(git ls-files --others --exclude-standard -- "mge.lua" "mge" | Where-Object { $_ -match "\.lua$" })
+    $untracked = @(git ls-files --others --exclude-standard -- "mge.lua" "mge" "atmoplay.lua" "atmoplay" |
+        Where-Object { $_ -match "\.lua$" })
     if ($untracked.Count -gt 0) {
         throw "untracked .lua files would be missing from the zip (git add them):`n$($untracked -join "`n")"
     }
@@ -82,49 +90,70 @@ try {
     $files = $files | Sort-Object -Unique
 
     Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-    $temp = "$Out.tmp"
-    if (Test-Path $temp) { Remove-Item $temp -Force }
     # stripped .lua files are written here first, checked, then zipped
     $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("mge-package-" + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $stage | Out-Null
-    $stripped, $before, $after = 0, 0, 0
-    $zip = [System.IO.Compression.ZipFile]::Open($temp, "Create")
-    try {
-        foreach ($file in $files) {
-            $source = Join-Path $repo $file
-            if ($strip -and $file -match "\.lua$") {
-                $staged = Join-Path $stage ($file -replace "[\\/]", "_")
-                & $Lua "tools/strip_comments.lua" $source $staged
-                if ($LASTEXITCODE -ne 0) { throw "stripping comments failed: $file" }
-                # only comments and spacing may differ: the same bytecode without line info
-                & $Luac -s -o "$stage\a.luac" $source
-                if ($LASTEXITCODE -ne 0) { throw "doesn't compile: $file" }
-                & $Luac -s -o "$stage\b.luac" $staged
-                if ($LASTEXITCODE -ne 0) { throw "stripped file doesn't compile: $file" }
-                $a = [System.IO.File]::ReadAllBytes("$stage\a.luac")
-                $b = [System.IO.File]::ReadAllBytes("$stage\b.luac")
-                if ([Convert]::ToBase64String($a) -ne [Convert]::ToBase64String($b)) {
-                    throw "stripping comments changed the code of $file (tools/strip_comments.lua)"
-                }
-                $before += (Get-Item $source).Length
-                $after += (Get-Item $staged).Length
-                $stripped++
-                $source = $staged
+    $script:stripped, $script:before, $script:after = 0, 0, 0
+
+    # the file that goes into a zip for a repo file: a .lua file's stripped copy (checked: the same code),
+    # anything else as it is
+    function Get-Shipped([string]$file) {
+        $source = Join-Path $repo $file
+        if (-not ($strip -and $file -match "\.lua$")) { return $source }
+        $staged = Join-Path $stage ($file -replace "[\\/]", "_")
+        & $Lua "tools/strip_comments.lua" $source $staged
+        if ($LASTEXITCODE -ne 0) { throw "stripping comments failed: $file" }
+        # only comments and spacing may differ: the same bytecode without line info
+        & $Luac -s -o "$stage\a.luac" $source
+        if ($LASTEXITCODE -ne 0) { throw "doesn't compile: $file" }
+        & $Luac -s -o "$stage\b.luac" $staged
+        if ($LASTEXITCODE -ne 0) { throw "stripped file doesn't compile: $file" }
+        # the same code apart from the functions' source lines (stripping moves those)
+        & $Lua "tools/same_bytecode.lua" "$stage\a.luac" "$stage\b.luac"
+        if ($LASTEXITCODE -ne 0) { throw "stripping comments changed the code of $file (tools/strip_comments.lua)" }
+        $script:before += (Get-Item $source).Length
+        $script:after += (Get-Item $staged).Length
+        $script:stripped++
+        return $staged
+    }
+
+    # writes a zip from @{ file = <repo path>; entry = <path in the zip> } pairs (forward slashes: the zip
+    # opens the same on every platform)
+    function Write-Zip([string]$path, $entries) {
+        $temp = "$path.tmp"
+        if (Test-Path $temp) { Remove-Item $temp -Force }
+        $zip = [System.IO.Compression.ZipFile]::Open($temp, "Create")
+        try {
+            foreach ($e in $entries) {
+                [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Get-Shipped $e.file),
+                    $e.entry, "Optimal")
             }
-            # forward slashes: the zip opens the same on every platform
-            $entry = "mge/" + ($file -replace "\\", "/")
-            [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $source, $entry, "Optimal")
+        } finally {
+            $zip.Dispose()
         }
+        Move-Item $temp $path -Force
+        $size = [math]::Round((Get-Item $path).Length / 1KB)
+        Write-Host "wrote $path ($(@($entries).Count) files, $size KB)"
+    }
+
+    try {
+        Write-Zip $Out @($files | ForEach-Object { @{ file = $_; entry = "mge/" + ($_ -replace "\\", "/") } })
+        # Atmo Play, the player script for MGE's playable atmo mods: its own small zip next to mge.zip. Unzipped
+        # into data/script: data/script/atmoplay/atmoplay.lua, loaded with /ls atmoplay/atmoplay.lua
+        $atmoPlayOut = Join-Path (Split-Path -Parent $Out) "atmoplay.zip"
+        $atmoPlay = @(@{ file = "atmoplay.lua"; entry = "atmoplay/atmoplay.lua" })
+        foreach ($module in $AtmoPlayModules) {
+            $atmoPlay += @{ file = "atmoplay/$module"; entry = "atmoplay/atmoplay/$module" }
+        }
+        $atmoPlay += @{ file = "docs/atmoplay-readme.md"; entry = "atmoplay/README.md" }
+        $atmoPlay += @{ file = "LICENSE"; entry = "atmoplay/LICENSE" }
+        Write-Zip $atmoPlayOut $atmoPlay
     } finally {
-        $zip.Dispose()
         Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Move-Item $temp $Out -Force
-    $size = [math]::Round((Get-Item $Out).Length / 1KB)
-    Write-Host "wrote $Out ($($files.Count) files, $size KB)"
     if ($strip) {
         Write-Host ("comments stripped from {0} .lua files: {1} KB -> {2} KB, code checked unchanged" -f `
-            $stripped, [math]::Round($before / 1KB), [math]::Round($after / 1KB))
+            $script:stripped, [math]::Round($script:before / 1KB), [math]::Round($script:after / 1KB))
     }
 
     if ($Publish) {

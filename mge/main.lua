@@ -40,6 +40,7 @@
 ---@field AtmoLayer AtmoLayer objects over the game's limit (the atmo layer), utils/atmo_layer.lua
 ---@field Atmo Atmo the atmo layer's .atmo file per mod, utils/atmo.lua
 ---@field Playable Playable playable atmo mods for the Atmo Play script (World tab Convert, Save), utils/playable.lua
+---@field AtmoPlay table Atmo Play's modules (../atmoplay/: Mat3, Format, Colliders, Pool), MGE's own copy of them
 ---@field Players Players players' start positions and rotations (engageplayerpos), utils/players.lua
 ---@field GizmoMath GizmoMath utils/gizmo_math.lua
 ---@field Highlight table selection highlight and generate preview, utils/highlight.lua
@@ -132,7 +133,17 @@ loadModule("utils/mod_export.lua")
 loadModule("utils/history.lua")
 loadModule("utils/atmo_layer.lua") -- objects over the game's limit, after history
 loadModule("utils/atmo.lua") -- the atmo layer's .atmo file per mod
-loadModule("utils/playable.lua") -- playable atmo mods (Atmo Play): after atmo_layer and history
+-- Atmo Play's modules (../atmoplay/, next to mge/: the player script for playable atmo mods), loaded into
+-- MGE's own namespace (ATMOPLAY_LOADING while one loads), so Atmo Play running at the same time keeps its own.
+-- MGE writes playable mods with them and the player script reads them with the same code
+MGE.AtmoPlay = { scriptPath = MGE.scriptPath .. "../atmoplay/" }
+for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua" }) do
+    ATMOPLAY_LOADING = MGE.AtmoPlay
+    local ok, err = pcall(dofile, MGE.AtmoPlay.scriptPath .. module)
+    ATMOPLAY_LOADING = nil
+    if not ok then error(err, 0) end
+end
+loadModule("utils/playable.lua") -- playable atmo mods (Atmo Play): after atmo_layer, history and MGE.AtmoPlay
 loadModule("utils/joints.lua")
 loadModule("utils/highlight.lua")
 loadModule("utils/world_select.lua")
@@ -252,7 +263,16 @@ end
 function MGE.apply()
     local outputName = MGE.modName == MGE.outputName and MGE.secondaryOutputName or MGE.outputName  --bypass for lm not loaading updates without mod swap
     MGE.syncGamerules()
-    FileHandler.WriteMod(ModData.parsed, MGE.modFolder .. outputName)
+    if MGE.Playable.isOn() then
+        -- a playable mod: the working copy carries the pool, MGE moves it in fights (utils/playable.lua)
+        local file = Files.Open(MGE.modFolder .. outputName, FILES_MODE_WRITE)
+        if file and file.data then
+            file:writeLine(MGE.Playable.workingText(ModData.parsed))
+            file:close()
+        end
+    else
+        FileHandler.WriteMod(ModData.parsed, MGE.modFolder .. outputName)
+    end
     MGE.reloadPending = true -- keeps undo history and selection over the reload caused by our own save
     MGE.keptSelection = {}
     for _, obj in ipairs(ModData.parsed.env_obj) do
@@ -497,6 +517,7 @@ add_hook("match_begin", MGE.hookname, function()
     MGE.keptSelection = nil
     MGE.focusAfterReload = nil -- only for the reload it was set for
     MGE.AtmoLayer.reapplySeeThrough() -- the reload gave the objects their file colors again (the Atmo list)
+    MGE.Playable.onMatchBegin() -- a playable mod: its pool placed for this fight
 end)
 
 -- Alt + Q / W / E: Move / Rotate / Scale gizmo on / off, same as the toolbar toggles (ui/main.lua).
@@ -741,6 +762,7 @@ MGE_ATMO = {
     playable = function() return ModData.parsed.playable end,
 }
 MGE.AtmoLayer.unloadGameAtmo() -- MGE draws the atmo itself, a loaded one would show it twice
+MGE.Playable.onMatchBegin() -- started on a playable mod: its pool (in the world now) follows the players
 -- the player's shader (the unload put it back), then the mod's atmo shader shown live (Atmo.applyShader)
 Atmo.rememberShader()
 Atmo.applyShader()
