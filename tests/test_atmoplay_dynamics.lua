@@ -32,7 +32,7 @@ local function stubEngine()
     get_obj_bounce = function() return 0.1 end
     set_obj_pos = function(id, x, y, z) obj(id).pos = { x, y, z }; calls[#calls + 1] = "pos " .. id end
     set_obj_rot_m = function(id, m) obj(id).rot = m end
-    set_obj_sides = function(id, x, y, z) obj(id).sides = { x, y, z } end
+    set_obj_sides = function(id, x, y, z) obj(id).sides = { x, y, z }; calls[#calls + 1] = "sides " .. id end
     get_obj_sides = function(id) local v = obj(id).sides or { 1, 1, 1 } return v[1], v[2], v[3] end
     get_obj_shape = function() return 1 end -- every object a box
     set_obj_color = function(id, r, g, b, a) obj(id).color = { r, g, b, a } end
@@ -40,7 +40,7 @@ local function stubEngine()
     get_body_linear_vel = function() return 0, 0, 0 end -- players stand still
     set_obj_linear_vel = function(id, x, y, z) obj(id).lin = { x, y, z } end
     set_obj_angular_vel = function(id, x, y, z) obj(id).ang = { x, y, z } end
-    set_obj_mass = function(id, m) obj(id).mass = m end
+    set_obj_mass = function(id, m) obj(id).mass = m; calls[#calls + 1] = "mass " .. id end
     set_obj_bounce = function() end
 end
 
@@ -76,7 +76,7 @@ local function setup(poolSize)
     local colliders, stats, props = Colliders.build(T.lines(ATMO))
     local objects = {}
     for i = 1, poolSize do objects[i] = { id = i, shape = "box" } end
-    local s = Dynamics.new(objects, props, { dradius = 2 })
+    local s = Dynamics.new(objects, props, { dradius = 2, fromFrame = 0 }) -- the rules, not the timing (FIRST_FRAME: own test)
     -- the pool parked, as the file puts it
     for i = 1, poolSize do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
     return s, colliders, stats, props
@@ -147,7 +147,7 @@ T.test("fight: props near a player are taken, a far one isn't", function()
     T.eq(world.objects[0].mass, 0.3, "crateA's mass")
     T.eq(world.objects[1].mass, 1, "crateB has no mass line: the object's own")
     T.near(world.objects[0].sides[1], 0.4, 1e-9, "the crate's size")
-    T.eq(world.objects[0].flag, 0, "crateA: flag 0")
+    T.eq(world.objects[0].flag, nil, "crateA: flag 0, as the pool object is written: no call")
     T.eq(world.objects[1].flag, 6, "crateB's weapon flag on its object")
     T.eq(#s.events, 2, "two takes")
     T.eq(s.events[1].frame, 0, "match_begin's moves are tagged frame 0")
@@ -170,7 +170,7 @@ T.test("fight: release only when unwanted, at rest and untouched; free from the 
     Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
     T.eq(carried(s), "-", "released")
     T.near(s.props[1].pos[1], 1.2, 1e-9, "the prop stays where it was pushed")
-    T.ok(world.objects[0].pos[3] < Dynamics.PARK_Z / 2, "object parked")
+    T.ok(math.abs(world.objects[0].pos[3] - Dynamics.PARK_Z) < Dynamics.PARKED, "object parked (above the map)")
     -- the player near crateB now: the freed object takes it on a later frame, not the release frame
     world.players[1] = { 1.5, 0, 1 }
     Dynamics.draw(s, { replay_mode = 0, match_frame = 3 })
@@ -187,6 +187,116 @@ T.test("fight: a body part near a resting crate keeps it", function()
     world.players[2] = { 1, 0, 3.6 } -- above: out of reach and not touching
     Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
     T.eq(carried(s), "-", "released once nothing is near")
+end)
+
+T.test("default timing: no takes before frame 1; replays watch, past the fight's frames too", function()
+    local s = setup(1)
+    s.fromFrame = ATMOPLAY.Driver.FIRST_FRAME -- as Dynamics.new sets it without the tests' 0
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "-", "frame 0: nothing taken (an R now replays nothing moved)")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(carried(s), "crateA", "frame 1: taken")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 5 })
+    -- R (no match_begin): every frame is watched, the unplayed ones after the fight's too (no tail)
+    world.players[1] = { 20, 0, 1 }
+    local n = #calls
+    for f = 0, 12 do Dynamics.draw(s, { replay_mode = 1, match_frame = f }) end
+    T.eq(#calls, n, "an R replay sets nothing")
+    T.eq(carried(s), "crateA", "nothing released by a rule: the object is watched")
+    -- an opened replay (match_begin in a replay): all recorded, never stepped
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    world.players[1] = { 1, 0, 1 }
+    n = #calls
+    for f = 0, 10 do Dynamics.draw(s, { replay_mode = 1, match_frame = f }) end
+    T.eq(#calls, n, "an opened replay sets nothing")
+end)
+
+---Calls of a kind ("sides", "mass", "pos") since index n, for object id
+local function callsOf(kind, id, n)
+    local count = 0
+    for i = (n or 0) + 1, #calls do
+        if calls[i] == kind .. " " .. id then count = count + 1 end
+    end
+    return count
+end
+
+T.test("a pool written at the props' size: taking and releasing resizes and re-masses nothing", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines(ATMO))
+    -- as MGE writes it: crateA's size and mass, parked at its own spot
+    local objects = { { id = 1, shape = "box", sides = "0.4 0.4 0.4", mass = "0.3", bounce = "0.1", pos = "-3 0 49999" } }
+    local s = Dynamics.new(objects, props, { dradius = 2, fromFrame = 0 })
+    world.objects[0] = { pos = { -3, 0, 49999 }, lin = { 0, 0, 0 }, ang = { 0, 0, 0 }, sides = { 0.4, 0.4, 0.4 }, mass = 0.3 }
+    local n = #calls
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crateA", "taken")
+    T.eq(callsOf("sides", 0, n), 0, "its size already: no set_obj_sides")
+    T.eq(callsOf("mass", 0, n), 0, "its mass already: no set_obj_mass")
+    world.players[1] = { 20, 0, 1 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(carried(s), "-", "released")
+    T.eq(callsOf("sides", 0, n), 0, "parked at its own size: still no resize")
+    T.near(world.objects[0].pos[1], -3, 1e-9, "on its own spot (the file's pos)")
+    -- crateB: another size and no mass line; the object's own mass (0.3) is kept
+    world.players[1] = { 1.6, 0, 1 }
+    world.objects[0].lin = { 0, 0, 0 }
+    s.props[1].pos = { 30, 0, 1 } -- crateA out of reach
+    n = #calls
+    s.props[2].sides = { 0.6, 0.6, 0.6 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
+    T.eq(carried(s), "crateB", "the other crate")
+    T.eq(callsOf("sides", 0, n), 1, "resized once for it")
+    world.players[1] = { 20, 0, 1 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 3 })
+    T.eq(callsOf("sides", 0, n), 2, "and back to its own size when parked")
+end)
+
+T.test("a pool object of another size than its prop: resized for it, and back to its own when parked", function()
+    local s = setup(1) -- pool objects without size lines: PARK_SIDE
+    local n = #calls
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(callsOf("sides", 0, n), 1, "PARK_SIDE to the crate's size")
+    world.players[1] = { 20, 0, 1 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(world.objects[0].sides[1], Dynamics.PARK_SIDE, "back to its own size")
+end)
+
+T.test("props park above the map", function()
+    T.ok(Dynamics.PARK_Z > 0, "the parking height is above the map (below z = 0 the ground pushes dynamic bodies out)")
+    local s = setup(1)
+    T.ok(s.entries[1].home.pos[3] > 0, "a spot from the formula is up there")
+end)
+
+T.test("back in a fight from a replay: a carried prop in place and moving is left alone", function()
+    local s = setup(1)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crateA", "taken")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 10 })
+    world.objects[0].lin = { 1, 0, 0 } -- pushed
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 4 }) -- watched: the prop's pose from its object
+    world.objects[0].pos = { world.objects[0].pos[1] + 0.2, 0, 1 } -- moved on since
+    local n = #calls
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 5 }) -- an edit: the fight goes on from here
+    T.eq(world.objects[0].lin[1], 1, "still moving: not stopped")
+    T.eq(callsOf("pos", 0, n), 0, "not put back")
+    T.near(s.props[1].pos[1], world.objects[0].pos[1], 1e-9, "the prop's pose follows its object")
+end)
+
+T.test("back in a fight from a replay: objects the game left at 0,0,0 are set again", function()
+    local s = setup(2)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crateA crateB", "both taken")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 10 })
+    -- R: the recorded frames, then the game puts everything a script touched at the origin
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 5 })
+    for id = 0, 1 do world.objects[id].pos, world.objects[id].sides = { 0, 0, 0 }, { 9, 9, 9 } end
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 11 }) -- an edit there: the fight goes on
+    for id = 0, 1 do
+        local p = world.objects[id].pos
+        T.ok(math.abs(p[1]) + math.abs(p[2]) + math.abs(p[3]) > 0.01, "object " .. id .. " off the origin")
+        T.ok(world.objects[id].sides[1] < 9, "object " .. id .. " at a real size again")
+    end
 end)
 
 T.test("fight: a crate that fell off the map is released", function()
@@ -209,7 +319,7 @@ T.test("fight: a full pool freezes a far moving prop for a near waiting one", fu
     Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
     T.eq(carried(s), "-", "crateA frozen though moving")
     T.near(s.props[1].pos[1], 10, 1e-9, "left where it flew")
-    T.ok(world.objects[0].pos[3] < Dynamics.PARK_Z / 2, "its object parked")
+    T.ok(math.abs(world.objects[0].pos[3] - Dynamics.PARK_Z) < Dynamics.PARKED, "its object parked (above the map)")
     T.eq(s.events[#s.events].kind, "release", "a release event: replays see the object park")
     Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
     T.eq(carried(s), "crateB", "the near one gets the object the next frame")
@@ -257,7 +367,7 @@ local function lineSetup(ys, poolSize, vy)
     local _, _, props = Colliders.build(lines)
     local objects = {}
     for i = 1, poolSize do objects[i] = { id = i, shape = "box" } end
-    local s = Dynamics.new(objects, props, { dradius = 2, follow = { 20 } })
+    local s = Dynamics.new(objects, props, { dradius = 2, follow = { 20 }, fromFrame = 0 })
     for i = 1, poolSize do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
     world.players = { { 100, 0, 1 }, { 100, 50, 1 } }
     world.objects[20] = { pos = { 0, 0, 1 }, lin = { 0, vy, 0 }, ang = { 0, 0, 0 }, sides = { 1, 1, 1 }, mass = 20 }
@@ -424,7 +534,7 @@ local function runFight(noGrid)
     local _, _, props = Colliders.build(gridField())
     local objects = {}
     for i = 1, 12 do objects[i] = { id = i, shape = i <= 3 and "sphere" or "box" } end
-    local s = Dynamics.new(objects, props, { dradius = 2, noGrid = noGrid })
+    local s = Dynamics.new(objects, props, { dradius = 2, noGrid = noGrid, fromFrame = 0 })
     for i = 1, 12 do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
     local track = {}
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
@@ -460,7 +570,7 @@ local function runWatch(noGrid, track)
     local _, _, props = Colliders.build(gridField())
     local objects = {}
     for i = 1, 12 do objects[i] = { id = i, shape = i <= 3 and "sphere" or "box" } end
-    local s = Dynamics.new(objects, props, { dradius = 2, noGrid = noGrid })
+    local s = Dynamics.new(objects, props, { dradius = 2, noGrid = noGrid, fromFrame = 0 })
     for i = 1, 12 do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
     Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
     for f = 1, 161 do
@@ -550,4 +660,13 @@ T.test("replay: an object that took a prop is painted its color, the copy hidden
     T.eq(table.concat(world.objects[0].color, " "), "0.2 0.4 0.6 1", "painted")
     T.ok(Dynamics.isCarried(s, s.props[1].index), "carried: MGE leaves it to the object")
     T.ok(not Dynamics.isCarried(s, s.props[2].index), "crateB isn't")
+    -- crateB is a weapon: watching never sets a flag (changing objects in replays crashed the game)
+    world.objects[1].pos = { 1.5, 0, 1 }
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 1 })
+    T.eq(carried(s), "crateA crateB", "object 1 took crateB")
+    T.eq(world.objects[1].flag, nil, "no set_obj_flag in a replay")
+    T.ok(world.objects[1].color ~= nil, "painted though")
+    -- back in the fight: the flag is set then
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(world.objects[1].flag, 6, "fight on: its weapon flag")
 end)

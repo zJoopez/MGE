@@ -34,6 +34,7 @@
 local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY, MGE's MGE.AtmoPlay)
 
 local Colliders = NS.Colliders
+local Driver = NS.Driver -- loaded first: Driver.FIRST_FRAME
 
 ---@class AtmoPlayProp : AtmoPlayCollider
 ---@field mass number?
@@ -52,6 +53,10 @@ local Colliders = NS.Colliders
 ---@field speed number
 ---@field vel number[]? its linear velocity, read each fight frame while carrying
 ---@field spin number
+---@field home { pos: number[], sides: number[] } its parking spot and own size, as the file has them
+---@field sides number[] its size now (fitObject sets a size only when it differs)
+---@field mass number? its mass now, nil while unknown
+---@field bounce number? its bounce now, nil while unknown
 ---@field flag integer? the flag dress last set (nil: the file's)
 ---@field seen { pos: number[], rot: table }? replays: where it was last seen carrying its prop
 
@@ -64,7 +69,12 @@ local Dynamics = {
     CHAIN = 0.3, -- a prop this close to a moving carried prop's sphere is wanted too
     MOVING = 0.2, -- a carried prop faster than this pulls in the props it touches
     MATCH = 0.5, -- replays: an object that appeared takes the free prop within this of its sphere
-    PARK_Z = -50000, -- the parking platform's center height
+    -- The parking platform's center height: ABOVE the map. Everything below z = 0 is inside the game's ground for
+    -- a dynamic body: parked 50000 below (the first version), the pool was pushed out at the first physics step
+    -- (owotail.rpl, fight frame 1: vz 833317 = depth 49999 x 16.67, the engine's push-out) and flew up through
+    -- the map near frame 10, in fights and replays. Static objects don't move, the static pool parks below
+    PARK_Z = 50000,
+    PARKED = 1000, -- an object this close to its parking spot (height) is parked
     PLATFORM_SIDES = { 120, 4, 1 },
     PARK_SIDE = 0.5, -- a parked object's sides
     FALL = 50, -- a carried prop this far below the lowest prop's start fell off the map: released
@@ -81,7 +91,7 @@ local Dynamics = {
     TIER_OBJECT = 2,
     TIER_CHAIN = 3,
     -- the pool objects' color alpha as MGE writes them, "visible 1" (hidden objects get no move predictions).
-    -- Only seen parked, far below the map: a carrying object is painted the prop's color (dress)
+    -- Only seen parked, far above the map: a carrying object is painted the prop's color (dress)
     POOL_ALPHA = 0.1,
 }
 
@@ -95,10 +105,46 @@ function Dynamics.parkPos(id)
     return id * 2 - 50, 0, Dynamics.PARK_Z + Dynamics.PLATFORM_SIDES[3] / 2 + Dynamics.PARK_SIDE / 2 + 0.01
 end
 
+---Where a dynamic pool written at its own size parks (MGE's writer: each object at its group's common prop
+---size, so taking those props resizes nothing): side by side along x, each resting on the platform at its
+---shape's height, spaced by its bounding sphere; the platform sized to hold them all. A pool object without
+---pos / sides lines parks at Dynamics.parkPos at PARK_SIDE
+---@param objects { id: integer, shape: string, sides: number[] }[] in the order they're laid out
+---@return table<integer, number[]> pos by id
+---@return { pos: number[], sides: number[] } platform
+function Dynamics.parkLayout(objects)
+    local GAP, top = 0.5, Dynamics.PARK_Z + Dynamics.PLATFORM_SIDES[3] / 2
+    local spans, total, widest = {}, 0, 0
+    for i, o in ipairs(objects) do
+        local s = o.sides
+        local radius, half
+        if o.shape == "sphere" then
+            radius, half = s[1], s[1]
+        elseif o.shape == "cylinder" then
+            radius, half = s[2] / 2 + s[1], s[2] / 2 + s[1] -- a capsule along z: stands on its end
+        else
+            radius, half = math.sqrt(s[1] ^ 2 + s[2] ^ 2 + s[3] ^ 2) / 2, s[3] / 2
+        end
+        spans[i] = { radius = radius, half = half }
+        total = total + 2 * radius + GAP
+        if radius > widest then widest = radius end
+    end
+    local pos, x = {}, -total / 2
+    for i, o in ipairs(objects) do
+        local span = spans[i]
+        pos[o.id] = { x + span.radius, 0, top + span.half + 0.01 }
+        x = x + 2 * span.radius + GAP
+    end
+    local platform = { pos = { 0, 0, Dynamics.PARK_Z }, sides = { math.max(Dynamics.PLATFORM_SIDES[1], total + 4),
+        math.max(Dynamics.PLATFORM_SIDES[2], 2 * widest + 2), Dynamics.PLATFORM_SIDES[3] } }
+    return pos, platform
+end
+
+---@param e AtmoPlayDynEntry
 ---@param z number
----@return boolean the object is parked (far below every map)
-local function isParked(z)
-    return z < Dynamics.PARK_Z / 2
+---@return boolean the object is at its parking height (far above every map)
+local function isParked(e, z)
+    return math.abs(z - e.home.pos[3]) < Dynamics.PARKED
 end
 
 ---@param frame number[][]
@@ -143,7 +189,25 @@ local function dist(a, b)
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 
+
+
 local function length(x, y, z) return math.sqrt((x or 0) ^ 2 + (y or 0) ^ 2 + (z or 0) ^ 2) end
+--A line's numbers ("1 2 3" -> { 1, 2, 3 }), {} for nil
+local function numbers(text)
+    local out = {}
+    for n in tostring(text or ""):gmatch("%S+") do out[#out + 1] = tonumber(n) or 0 end
+    return out
+end
+
+---The same value as far as the engine cares (written lines and engine floats differ in the last digits)
+local function same(a, b)
+    if a == nil or b == nil then return a == b end
+    return math.abs(a - b) <= 1e-6 * math.max(1, math.abs(a), math.abs(b))
+end
+
+local function sameSides(a, b)
+    return same(a[1], b[1]) and same(a[2], b[2]) and same(a[3], b[3])
+end
 
 local clock = os and os.clock or function() return 0 end
 
@@ -217,8 +281,9 @@ end
 
 ---@param objects AtmoPlayPoolObject[] the mod's dynamic pool (Format.read's `dynamic`)
 ---@param props AtmoPlayCollider[] Colliders.build's third result
----@param params { dradius: number?, noCopies: boolean?, noGrid: boolean?, follow: integer[]? }? the mod
----header's (noCopies: MGE's own; noGrid: tests; follow: the mod's own dynamic objects, Driver.dynamicIds)
+---@param params { dradius: number?, noCopies: boolean?, noGrid: boolean?, follow: integer[]?, fromFrame: integer? }?
+---the mod header's (noCopies: MGE's own; noGrid: tests; follow: the mod's own dynamic objects, Driver.dynamicIds;
+---fromFrame: tests, default Driver.FIRST_FRAME)
 ---@return table? state, string? error
 function Dynamics.new(objects, props, params)
     params = params or {}
@@ -231,13 +296,21 @@ function Dynamics.new(objects, props, params)
         dirty = {}, dirtyAll = true, -- drawn copies to update: props whose pose changed (or all of them)
         events = {}, lastFrame = nil, wasReplay = false, holder = nil,
         follow = params.follow, followSizes = {}, -- the mod's own dynamic objects (0-based ids) want props too
+        -- no takes or releases before this frame (Driver.FIRST_FRAME: moves before the first one crashed R)
+        fromFrame = params.fromFrame or Driver.FIRST_FRAME,
         steps = 0, stepTime = 0, worstStep = 0, -- ms, fights and replays alike (/atmoplay status)
     }
     s.cellSize = math.max(s.radius * 2, 1)
     for _, object in ipairs(objects) do
         local shape = Colliders.shapeOf(object.shape) or "box"
+        -- its own parking spot and size as the file has them (MGE writes the group's common prop size there,
+        -- so those props never resize it; without the lines: the formula's spot, PARK_SIDE)
+        local pos, sides = numbers(object.pos), numbers(object.sides)
+        if #pos < 3 then pos = { Dynamics.parkPos(object.id) } end
+        if #sides < 3 then sides = { Dynamics.PARK_SIDE, Dynamics.PARK_SIDE, Dynamics.PARK_SIDE } end
         s.entries[#s.entries + 1] = { id = object.id, group = Colliders.groupKey(shape, object.friction, object.hardness),
-            prop = nil, speed = 0, spin = 0 }
+            prop = nil, speed = 0, spin = 0, home = { pos = pos, sides = sides }, sides = sides,
+            mass = tonumber(object.mass), bounce = tonumber(object.bounce) }
     end
     table.sort(s.entries, function(a, b) return a.id < b.id end)
     for _, e in ipairs(s.entries) do
@@ -371,15 +444,20 @@ local function event(s, frame, kind, e, prop)
 end
 
 ---A carrying object made its prop: painted its color (it's what shows while the copy is hidden, drawOne; no
----color line: white, "visible 0": alpha 0) and given its flag (weapon, nogrip: a prop has no static bit;
----no flag line: 0). Fights, replays and rebuilds alike (neither may be in replays)
-local function dress(e, prop)
+---color line: white, "visible 0": alpha 0; replays don't record colors, EOBJ lines have none, so replays
+---paint too) and, in fights only, given its flag (weapon, nogrip; a prop has no static bit, no flag line: 0).
+---The flag changes the object's physics: changing objects during a replay crashed the game when the replay
+---reached its last frame (plan, section 3), and a flag set while watching did it again (R right after
+---loading a playable mod). Pool objects are written "flag 0", so only a weapon or nogrip prop needs the call
+---@param fight boolean? false while watching a replay
+local function dress(e, prop, fight)
     local id = e.id - 1
     local c = prop.color or {}
     local alpha = prop.visible == false and 0 or (c[4] or 1)
     pcall(set_obj_color, id, c[1] or 1, c[2] or 1, c[3] or 1, alpha)
+    if not fight then return end
     local flag = prop.flag or 0
-    if e.flag ~= flag then
+    if (e.flag or 0) ~= flag then
         pcall(set_obj_flag, id, flag)
         e.flag = flag
     end
@@ -388,7 +466,8 @@ end
 ---The props as they were at a frame: from the events up to it; later ones are dropped (what follows is
 ---played or watched again)
 ---@param frame integer
-function Dynamics.rebuild(s, frame)
+---@param fight boolean? rebuilt to fight on (dress sets flags only then)
+function Dynamics.rebuild(s, frame, fight)
     clear(s)
     local kept = {}
     for _, ev in ipairs(s.events) do
@@ -407,7 +486,7 @@ function Dynamics.rebuild(s, frame)
     s.events = kept
     for _, ev in ipairs(kept) do gridPlace(s, ev.prop) end
     for _, e in ipairs(s.entries) do
-        if e.prop then dress(e, e.prop) end
+        if e.prop then dress(e, e.prop, fight) end
     end
 end
 
@@ -503,41 +582,102 @@ end
 
 ---A free object takes a prop: put at its pose, its size, mass and bounce (the object's own for a prop
 ---without those lines, read before the first change), still
+---Gives an object a size, mass and bounce, each only when it differs from what the object has now: resizing
+---or re-massing a dynamic body is the heaviest change there is, and RPH (which edits replays freely) moves
+---objects without it. MGE writes each dynamic pool object at its group's common prop size, mass and bounce,
+---so a uniform map's props never need either call
+local function fitObject(e, sides, mass, bounce)
+    local id = e.id - 1
+    if not sameSides(e.sides, sides) then
+        set_obj_sides(id, sides[1], sides[2], sides[3])
+        e.sides = sides
+    end
+    if mass and not same(e.mass, mass) then
+        pcall(set_obj_mass, id, mass)
+        e.mass = mass
+    end
+    if bounce and not same(e.bounce, bounce) then
+        pcall(set_obj_bounce, id, bounce)
+        e.bounce = bounce
+    end
+end
+
+---Puts an object at a pose, still
+local function placeAt(e, pos, rot)
+    local id = e.id - 1
+    set_obj_rot_m(id, rot)
+    set_obj_pos(id, pos[1], pos[2], pos[3])
+    set_obj_linear_vel(id, 0, 0, 0)
+    set_obj_angular_vel(id, 0, 0, 0)
+end
+
+---A free object takes a prop: put at its pose, its size, mass and bounce (the object's own for a prop
+---without those lines, read before the first change), still
 local function take(s, e, prop, frame)
     local id = e.id - 1
     if e.baseMass == nil then
         local ok, mass = pcall(get_obj_mass, id)
         local okBounce, bounce = pcall(get_obj_bounce, id)
-        e.baseMass = ok and tonumber(mass) or false
-        e.baseBounce = okBounce and tonumber(bounce) or false
+        e.baseMass = e.mass or (ok and tonumber(mass)) or false
+        e.baseBounce = e.bounce or (okBounce and tonumber(bounce)) or false
+        e.mass = e.mass or (ok and tonumber(mass)) or nil
+        e.bounce = e.bounce or (okBounce and tonumber(bounce)) or nil
     end
-    set_obj_sides(id, prop.sides[1], prop.sides[2], prop.sides[3])
-    dress(e, prop)
-    set_obj_rot_m(id, prop.rot)
-    set_obj_pos(id, prop.pos[1], prop.pos[2], prop.pos[3])
-    set_obj_linear_vel(id, 0, 0, 0)
-    set_obj_angular_vel(id, 0, 0, 0)
-    local mass, bounce = prop.mass or e.baseMass, prop.bounce or e.baseBounce
-    if mass then pcall(set_obj_mass, id, mass) end
-    if bounce then pcall(set_obj_bounce, id, bounce) end
+    fitObject(e, prop.sides, prop.mass or e.baseMass or nil, prop.bounce or e.baseBounce or nil)
+    dress(e, prop, true)
+    placeAt(e, prop.pos, prop.rot)
     e.prop, prop.entry = prop, e
     e.speed, e.spin, e.vel = 0, 0, nil
     event(s, frame, "take", e, prop)
+end
+
+---An object back on its parking spot at its own size (its file's), still
+local function park(e)
+    fitObject(e, e.home.sides)
+    placeAt(e, e.home.pos, IDENTITY)
 end
 
 ---A carried prop stays where it is; its object goes back to its parking spot
 local function release(s, e, frame)
     local prop = e.prop
     event(s, frame, "release", e, prop)
-    local id = e.id - 1
-    local x, y, z = Dynamics.parkPos(e.id)
-    set_obj_sides(id, Dynamics.PARK_SIDE, Dynamics.PARK_SIDE, Dynamics.PARK_SIDE)
-    set_obj_rot_m(id, IDENTITY)
-    set_obj_pos(id, x, y, z)
-    set_obj_linear_vel(id, 0, 0, 0)
-    set_obj_angular_vel(id, 0, 0, 0)
+    park(e)
     e.prop, prop.entry = nil, nil
     gridPlace(s, prop) -- listed where it stays
+end
+
+---Every object set again as the props say, when a replay goes back to a fight (an edit, the replay view left):
+---carried ones at their prop's pose and size, the others parked. Past an R replay's recorded frames the game
+---puts every object a script touched at 0,0,0 (the probe log: all 255 pool objects; 48 dynamic ones stacked
+---there crashed the game when that replay was edited): those are put back, the rest only where they differ
+---@param fight boolean? flags too (dress)
+local function reseat(s, fight)
+    for _, e in ipairs(s.entries) do
+        -- the size it really has now (read, not assumed): resized only where it differs
+        local ok, x, y, z = pcall(get_obj_sides, e.id - 1)
+        if ok and tonumber(x) then e.sides = { tonumber(x), tonumber(y) or 0, tonumber(z) or 0 } end
+        if e.prop then
+            fitObject(e, e.prop.sides)
+            dress(e, e.prop, fight)
+            -- the object is the truth (the usual case): its prop's pose read from it, the object left alone and
+            -- still moving. Only one the game moved to 0,0,0 is put back at its prop's last pose
+            local x, y, z = get_obj_pos(e.id - 1)
+            if x and math.abs(x) + math.abs(y) + math.abs(z) >= 0.01 then
+                updatePose(e.prop, x, y, z, copyTB(get_obj_rot(e.id - 1)))
+            else
+                placeAt(e, e.prop.pos, e.prop.rot)
+            end
+        else
+            -- a parked one already on its spot and still is left alone (RPH-like: only what differs)
+            local x, y, z = get_obj_pos(e.id - 1)
+            local speed = length(get_obj_linear_vel(e.id - 1))
+            local h = e.home.pos
+            if not (x and math.abs(x - h[1]) + math.abs(y - h[2]) + math.abs(z - h[3]) < 0.01 and speed < 0.01) then
+                park(e)
+            end
+        end
+        e.speed, e.spin, e.vel = 0, 0, nil
+    end
 end
 
 ---One fight frame (see the header). Moves made now show from the next frame on, so they're tagged frame + 1
@@ -696,7 +836,7 @@ function Dynamics.observe(s, frame)
             local pos = { x, y, z }
             if e.prop then
                 local prop = e.prop
-                if isParked(z) then
+                if isParked(e, z) then
                     if e.seen then prop.pos, prop.rot = e.seen.pos, e.seen.rot end
                     event(s, frame, "release", e, prop)
                     e.prop, prop.entry, e.seen = nil, nil, nil
@@ -705,7 +845,7 @@ function Dynamics.observe(s, frame)
                     updatePose(prop, x, y, z, copyTB(get_obj_rot(id)))
                     e.seen = { pos = prop.pos, rot = prop.rot }
                 end
-            elseif not isParked(z) then
+            elseif not isParked(e, z) then
                 -- the free prop of its group nearest to where it appeared (ties: the lower atmo index)
                 local best, bestD
                 local candidates = {}
@@ -723,7 +863,7 @@ function Dynamics.observe(s, frame)
                     best.pos, best.rot = pos, copyTB(get_obj_rot(id))
                     e.seen = { pos = best.pos, rot = best.rot }
                     event(s, frame, "take", e, best)
-                    dress(e, best)
+                    dress(e, best) -- paint only: no flags while watching
                 end
             end
         end
@@ -747,7 +887,7 @@ function Dynamics.matchBegin(s, ws)
     s.wasReplay = ws.replay_mode > 0
     -- a replay's first frame is watched by the next draw; a fight's is stepped now
     s.lastFrame = not s.wasReplay and ws.match_frame or nil
-    if not s.wasReplay then Dynamics.step(s, ws.match_frame, 0) end
+    if not s.wasReplay and ws.match_frame >= (s.fromFrame or 0) then Dynamics.step(s, ws.match_frame, 0) end
     drawCopies(s)
 end
 
@@ -763,14 +903,17 @@ function Dynamics.draw(s, ws)
     if ws.replay_mode > 0 then
         if s.lastFrame and frame < s.lastFrame then Dynamics.rebuild(s, frame) end
         s.wasReplay = true
+        -- replays move nothing (driver.lua's Driver.draw: the dropped "tail"): the props are watched
         if frame ~= s.lastFrame then Dynamics.observe(s, frame) end
     else
         if s.wasReplay or (s.lastFrame and frame < s.lastFrame) then
-            -- back in a fight (replay view left, an edited replay played on): the props as they were then
-            Dynamics.rebuild(s, frame)
+            -- back in a fight (replay view left, an edited replay played on): the props as they were then, and
+            -- every object set to match (as the driver sets the static pool again)
+            Dynamics.rebuild(s, frame, true)
+            reseat(s, true)
             s.wasReplay = false
         end
-        if frame ~= s.lastFrame then Dynamics.step(s, frame) end
+        if frame ~= s.lastFrame and frame >= (s.fromFrame or 0) then Dynamics.step(s, frame) end
     end
     s.lastFrame = frame
     drawCopies(s)

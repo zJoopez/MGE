@@ -22,6 +22,10 @@ local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOP
 ---@field shape string the shape line's first word, as written
 ---@field friction string? the friction line as written, nil without one
 ---@field hardness string? the hardness line as written, nil without one
+---@field pos string? the pos line as written (the dynamic pool's parking spot)
+---@field sides string? the sides line as written (the dynamic pool's own size: no resize for props of it)
+---@field mass string? the mass line as written
+---@field bounce string? the bounce line as written
 
 ---@class AtmoPlayModFile
 ---@field header AtmoPlayHeader? nil when the mod isn't playable
@@ -104,7 +108,8 @@ function Format.read(lines)
     local function closeBlock()
         if block and block.marked then
             local object = { id = block.id, shape = block.props.shape or "box", friction = block.props.friction,
-                hardness = block.props.hardness }
+                hardness = block.props.hardness, pos = block.props.pos, sides = block.props.sides,
+                mass = block.props.mass, bounce = block.props.bounce }
             if block.marked == "pool" then
                 result.pool[#result.pool + 1] = object
             elseif block.marked == "dynamic" then

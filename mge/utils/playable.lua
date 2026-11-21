@@ -89,6 +89,44 @@ function Playable.colliders(atmo)
     return colliders, props
 end
 
+---What a playable mod's pools are split by: how many solid atmo objects and props of each group (shape,
+---friction, hardness) there are. Where they are doesn't change it: every fight reads the atmo again
+---(Playable.onMatchBegin), so moves, colors, bounce or mass need no reload
+---@param atmo FileParserEnvObj[]?
+---@return string
+function Playable.poolSplitKey(atmo)
+    -- from the objects' lines alone (Colliders.classify, as Atmo Play classifies them): building the colliders
+    -- for it took ~170 ms on a 5k atmo after every atmo edit or undo, to find out that a move changed nothing
+    local counts = {}
+    for _, obj in ipairs(atmo or {}) do
+        local reason, _, group, prop = Colliders.classify(obj.props)
+        if not reason then
+            local key = (prop and "p " or "s ") .. group
+            counts[key] = (counts[key] or 0) + 1
+        end
+    end
+    local parts = {}
+    for group, n in pairs(counts) do parts[#parts + 1] = group .. "=" .. n end
+    table.sort(parts)
+    return table.concat(parts, ";")
+end
+
+---@type string? Playable.poolSplitKey of the loaded pools: set by the working copy as it's written, or by the
+---first fight of an opened mod (its pools were planned for its atmo); nil: not known yet
+Playable.loadedKey = nil
+
+---After atmo objects changed (committed): on a playable mod whose pools no longer fit its atmo (objects added
+---or removed, a group or Static changed) the working copy is written and reloaded with new pools, so the
+---editor's fights have them (a duplicated prop got no dynamic object until Save before). Everything else
+---waits for the next fight
+---@return boolean reloaded the caller's refresh is done by the reload
+function Playable.reloadIfSplitChanged()
+    if not Playable.isOn() or Playable.loadedKey == nil then return false end
+    if Playable.poolSplitKey(ModData.parsed.atmo) == Playable.loadedKey then return false end
+    MGE.apply()
+    return true
+end
+
 ---@class PlayablePlan
 ---@field objects { id: integer, group: string }[] the pool, by id
 ---@field groups { group: string, colliders: integer, peak: integer, pool: integer }[]
@@ -178,27 +216,61 @@ end
 ---color's alpha (Dynamics.POOL_ALPHA), not "visible 0": the game shows no move predictions (ghost) for a
 ---hidden object, and a carried prop should have them like the mod's own dynamic objects. Not alpha 0: the
 ---ghost may take the object's alpha
+---Each dynamic pool group's most common prop size, mass and bounce (ties: the first in atmo order): its pool
+---objects are written that way, so taking those props resizes and re-masses nothing (Atmo Play's fitObject)
+---@param props AtmoPlayCollider[]?
+---@return table<string, { sides: number[], mass: number?, bounce: number? }> by group
+function Playable.propLooks(props)
+    local counts, looks, best = {}, {}, {}
+    for _, p in ipairs(props or {}) do
+        local key = string.format("%.6g %.6g %.6g|%s|%s", p.sides[1], p.sides[2], p.sides[3], tostring(p.mass),
+            tostring(p.bounce))
+        counts[p.group] = counts[p.group] or {}
+        local n = (counts[p.group][key] or 0) + 1
+        counts[p.group][key] = n
+        if not best[p.group] or n > best[p.group] then
+            best[p.group] = n
+            looks[p.group] = { sides = p.sides, mass = p.mass, bounce = p.bounce }
+        end
+    end
+    return looks
+end
+
 ---@param id integer 1-48
 ---@param group string Colliders.groupKey
+---@param look { sides: number[], mass: number?, bounce: number? }? the group's common prop (Playable.propLooks)
+---@param pos number[]? its parking spot (Dynamics.parkLayout), Dynamics.parkPos without one
 ---@return FileParserEnvObj
-local function dynamicObject(id, group)
+local function dynamicObject(id, group, look, pos)
     local shape = Colliders.splitGroup(group)
-    local x, y, z = Dynamics.parkPos(id)
-    local side = FileHandler.formatNumbers(Dynamics.PARK_SIDE, Dynamics.PARK_SIDE, Dynamics.PARK_SIDE)
-    return withLines({
+    pos = pos or { Dynamics.parkPos(id) }
+    local s = look and look.sides or { Dynamics.PARK_SIDE, Dynamics.PARK_SIDE, Dynamics.PARK_SIDE }
+    local obj = {
         kind = "env_obj",
         id = id,
-        props = { shape = shape, pos = FileHandler.formatNumbers(x, y, z), rot = "0 0 0", sides = side,
-            color = "1 1 1 " .. Dynamics.POOL_ALPHA, flag = "0", visible = "1" },
+        props = { shape = shape, pos = FileHandler.formatNumbers(pos[1], pos[2], pos[3]), rot = "0 0 0",
+            sides = FileHandler.formatNumbers(s[1], s[2], s[3]), color = "1 1 1 " .. Dynamics.POOL_ALPHA, flag = "0",
+            visible = "1" },
         lines = { { raw = Format.DYNAMIC_MARKER } },
-    }, POOL_KEYS, group)
+    }
+    local keys = { unpack(POOL_KEYS) }
+    if look and look.mass then
+        obj.props.mass = FileHandler.formatNumbers(look.mass)
+        keys[#keys + 1] = "mass"
+    end
+    if look and look.bounce then
+        obj.props.bounce = FileHandler.formatNumbers(look.bounce)
+        keys[#keys + 1] = "bounce"
+    end
+    return withLines(obj, keys, group)
 end
 
 ---The props' parking platform: hidden, static, far below the map
 ---@param id integer
+---@param platform { pos: number[], sides: number[] }? Dynamics.parkLayout's, the old fixed one without
 ---@return FileParserEnvObj
-local function parkObject(id)
-    local s = Dynamics.PLATFORM_SIDES
+local function parkObject(id, platform)
+    local s = platform and platform.sides or Dynamics.PLATFORM_SIDES
     local obj = {
         kind = "env_obj",
         id = id,
@@ -220,14 +292,25 @@ end
 ---@param props AtmoPlayCollider[]? its second result
 ---@return string text, PlayablePlan plan
 function Playable.text(parsed, atmoText, colliders, props)
+    if not colliders then colliders, props = Playable.colliders(parsed.atmo) end
     local plan = Playable.poolPlan(parsed, colliders, props)
     local copy = {}
     for k, v in pairs(parsed) do copy[k] = v end
     copy.env_obj = {}
     for _, obj in ipairs(parsed.env_obj or {}) do copy.env_obj[#copy.env_obj + 1] = obj end
     for _, p in ipairs(plan.objects) do copy.env_obj[#copy.env_obj + 1] = poolObject(p.id, p.group) end
-    for _, p in ipairs(plan.dynamic) do copy.env_obj[#copy.env_obj + 1] = dynamicObject(p.id, p.group) end
-    if plan.park and #plan.dynamic > 0 then copy.env_obj[#copy.env_obj + 1] = parkObject(plan.park) end
+    -- the dynamic pool at its groups' common prop look, parked side by side at that size
+    local looks, laid = Playable.propLooks(props), {}
+    for _, p in ipairs(plan.dynamic) do
+        local look = looks[p.group]
+        laid[#laid + 1] = { id = p.id, shape = (Colliders.splitGroup(p.group)),
+            sides = look and look.sides or { Dynamics.PARK_SIDE, Dynamics.PARK_SIDE, Dynamics.PARK_SIDE } }
+    end
+    local spots, platform = Dynamics.parkLayout(laid)
+    for _, p in ipairs(plan.dynamic) do
+        copy.env_obj[#copy.env_obj + 1] = dynamicObject(p.id, p.group, looks[p.group], spots[p.id])
+    end
+    if plan.park and #plan.dynamic > 0 then copy.env_obj[#copy.env_obj + 1] = parkObject(plan.park, platform) end
     table.sort(copy.env_obj, function(a, b) return a.id < b.id end)
     local out = { Format.NOTE, FileHandler.modText(copy), "", Format.headerLine(parsed.playable) }
     for line in (atmoText .. "\n"):gmatch("(.-)\n") do
@@ -241,6 +324,7 @@ end
 ---@param parsed FileParserResult
 ---@return string
 function Playable.workingText(parsed)
+    Playable.loadedKey = Playable.poolSplitKey(parsed.atmo) -- what the reload's pools are planned for
     return (Playable.text(parsed, "", Playable.colliders(parsed.atmo))) -- both results: colliders, props
 end
 
@@ -350,6 +434,8 @@ function Playable.onMatchBegin()
     end
     local loaded = ModData.loadedPlayable
     if not (loaded and loaded.poolObjects) then return end -- the world has no pool (e.g. an old working copy)
+    -- an opened mod's pools were planned for its atmo (main.lua forgets the key when another mod opens)
+    Playable.loadedKey = Playable.loadedKey or Playable.poolSplitKey(ModData.parsed.atmo)
     local colliders, props = Playable.colliders(ModData.parsed.atmo)
     local pool, err = Pool.new(loaded.poolObjects, colliders, ModData.parsed.playable)
     if not pool then
@@ -393,9 +479,9 @@ function Playable.movedGhost(index, g)
     return cached
 end
 
--- between physics steps: the pools follow the players once per new match frame (driver.lua, dynamics.lua)
-remove_hooks(PLAY_HOOKS)
-add_hook("draw2d", PLAY_HOOKS, function()
+---draw2d, between physics steps: the pools follow the players once per new match frame from Driver.FIRST_FRAME
+---on, and in a replay entered from a fight (R) on the frames after the fight's (driver.lua, dynamics.lua)
+function Playable.draw()
     if not driver then return end
     local ws = get_world_state()
     runDynamics(Dynamics.draw, ws)
@@ -404,7 +490,9 @@ add_hook("draw2d", PLAY_HOOKS, function()
         driver, dynamics = nil, nil
         MGE.say("playable: the pool stopped moving: " .. tostring(err))
     end
-end)
+end
+remove_hooks(PLAY_HOOKS)
+add_hook("draw2d", PLAY_HOOKS, function() Playable.draw() end)
 table.insert(MGE.onQuit, function()
     remove_hooks(PLAY_HOOKS)
     driver, dynamics = nil, nil

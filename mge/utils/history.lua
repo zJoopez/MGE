@@ -208,9 +208,11 @@ local function restore(index)
     end
     if sameObjects(current, ModData.parsed) then
         applyLive(ModData.parsed)
-        -- refreshes the list and the editor's current values, typed inputs stay for the next edit
+        -- a playable mod whose pools no longer fit the restored atmo reloads (Playable.reloadIfSplitChanged),
+        -- else: refreshes the list and the editor's current values, typed inputs stay for the next edit
         local Main = MGE.Main -- created after this module loads
-        if Main then Main.updateWindow() end
+        local reloaded = MGE.Playable ~= nil and MGE.Playable.reloadIfSplitChanged()
+        if Main and not reloaded then Main.updateWindow() end
     else
         MGE.apply() -- object list changed, rewrite file and reload
     end

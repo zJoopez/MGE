@@ -31,7 +31,7 @@ local function setLine(key, value)
     end
     if not changed then return end
     History.commit()
-    Rows.afterAtmoEdit(key)
+    Rows.afterAtmoEdit()
 end
 
 ---Graphics row: the typed min / max levels (0-2), an empty field keeps each object's own. The game's
@@ -54,7 +54,7 @@ local function setLevels()
     end
     if not changed then return end
     History.commit()
-    Rows.afterAtmoEdit("min_level")
+    Rows.afterAtmoEdit()
 end
 
 ---Depth, Graphics and Kept rows, rebuilt with the selection; nothing on the Objects list (Model and Ids there)

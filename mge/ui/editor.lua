@@ -239,7 +239,8 @@ local function duplicateAtmo()
         copy.id = #atmoObjs
     end
     History.commit()
-    MGE.Main.updateWindow()
+    -- a playable mod: copied props get dynamic pool objects (the reload refreshes the window)
+    if not MGE.Playable.reloadIfSplitChanged() then MGE.Main.updateWindow() end
 end
 
 local function duplicate()
@@ -279,7 +280,7 @@ local function delete()
     if MGE.Main.listTab == "atmo" then -- the atmo objects: not in the .tbm, no reload
         MGE.AtmoLayer.removeSelected()
         History.commit()
-        MGE.Main.updateWindow()
+        if not MGE.Playable.reloadIfSplitChanged() then MGE.Main.updateWindow() end -- a playable mod: fewer pools
         return
     end
     local deleted = {}

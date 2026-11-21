@@ -23,6 +23,7 @@ local Pool = NS.Pool
 ---@field onDrive (fun(changes: AtmoPlayPoolChange[], ws: table))? called before a step's moves are made (debug log)
 ---@field moreCenters (fun(): number[][])? more points to cover than the players' centers (carried props)
 ---@field follow integer[]? 0-based ids of the mod's own dynamic objects: the pool covers them too
+---@field fromFrame integer nothing is moved before this match frame (Driver.FIRST_FRAME)
 ---@field steps integer frames driven, for the status
 ---@field stepTime number ms in all
 ---@field worstStep number ms, the slowest frame
@@ -31,6 +32,11 @@ local Pool = NS.Pool
 local Driver = {
     PARK_Z = -100000,
     STATIC_FLAG = 8,
+    -- The pools aren't moved before this match frame. R before the first move replays a fight with nothing
+    -- recorded, and the game puts every object moved so far at 0,0,0 there: a mod's pools placed in
+    -- match_begin all landed at the origin, the props' dynamic objects inside the static ones, and the game
+    -- crashed (owo, 2026-11-21; RPH saw the same teleport). Frame 0 -> 1 is one physics step without them
+    FIRST_FRAME = 1,
 }
 
 local clock = os and os.clock or function() return 0 end
@@ -57,11 +63,23 @@ end
 ---@param d AtmoPlayDriver
 ---@param entry AtmoPlayPoolEntry
 ---@param c AtmoPlayCollider
+---@return boolean the same value for the engine (written lines and engine floats differ in the last digits)
+local function near(a, b)
+    a, b = tonumber(a), tonumber(b)
+    if not a or not b then return false end
+    return math.abs(a - b) <= 1e-5 * math.max(1, math.abs(a), math.abs(b))
+end
+
 local function place(d, entry, c)
     local id = entry.id - 1
     c.matrixTB = c.matrixTB or matrixTB(c.frame)
     set_obj_pos(id, c.pos[1], c.pos[2], c.pos[3])
-    set_obj_sides(id, c.sides[1], c.sides[2], c.sides[3])
+    -- only what differs, as RPH changes objects: the size read from the object (a replay restores sizes from
+    -- its EOBJ lines), flag and bounce from what was last set (replays don't record them: what's set stays)
+    local ok, x, y, z = pcall(get_obj_sides, id)
+    if not (ok and near(x, c.sides[1]) and near(y, c.sides[2]) and near(z, c.sides[3])) then
+        set_obj_sides(id, c.sides[1], c.sides[2], c.sides[3])
+    end
     set_obj_rot_m(id, c.matrixTB)
     local flag = staticFlag(c.flag or entry.baseFlag or Driver.STATIC_FLAG)
     if entry.flag ~= flag then
@@ -115,9 +133,12 @@ function Driver.new(pool)
         local okBounce, bounce = pcall(get_obj_bounce, entry.id - 1)
         entry.baseFlag = okFlag and tonumber(flag) or Driver.STATIC_FLAG
         entry.baseBounce = okBounce and tonumber(bounce) or nil
+        -- what the object has now: place sets a flag or bounce only when it differs
+        entry.flag = okFlag and tonumber(flag) or nil
+        entry.bounce = entry.baseBounce
     end
     return { pool = pool, lastFrame = nil, wasReplay = false, show = false, hold = false, steps = 0, stepTime = 0,
-        worstStep = 0 }
+        worstStep = 0, fromFrame = Driver.FIRST_FRAME }
 end
 
 ---The mod's own dynamic objects in the world now (right after /lm): every object without the static bit
@@ -144,7 +165,8 @@ end
 ---@param d AtmoPlayDriver
 function Driver.reset(d)
     Pool.reset(d.pool)
-    for _, entry in ipairs(d.pool.entries) do entry.flag, entry.bounce = nil, nil end
+    -- entry.flag / entry.bounce stay: nothing else changes them (replays don't record either), so setting
+    -- them again on every reset (back in a fight) only repeated calls the game can't undo
     d.lastFrame = nil
 end
 
@@ -153,6 +175,7 @@ end
 ---@param ws table get_world_state()
 function Driver.drive(d, ws)
     local frame = ws.match_frame
+    if frame < (d.fromFrame or 0) then return end -- not yet (lastFrame stays, the next draw tries again)
     -- the frame went back (a replay edited and played on from earlier): assign from scratch
     if d.lastFrame ~= nil and frame < d.lastFrame then Driver.reset(d) end
     d.lastFrame = frame
@@ -181,16 +204,24 @@ function Driver.drive(d, ws)
     if took > d.worstStep then d.worstStep = took end
 end
 
----match_begin (inside /lm and open_replay): a fight places the pool now, a replay has it in its FRAME 0
+---match_begin (inside /lm and open_replay): a fight places the pool from FIRST_FRAME on (drive waits), a
+---replay has its own moves. A replay started by match_begin was opened: every frame of it is recorded
 ---@param d AtmoPlayDriver
 ---@param ws table get_world_state()
 function Driver.matchBegin(d, ws)
     Driver.reset(d)
+    -- a new match (or an opened replay) loads every object from the mod again: flags and bounces are the file's
+    -- now, whatever was set before. Only here: replays leave them as they are
+    for _, entry in ipairs(d.pool.entries) do entry.flag, entry.bounce = nil, nil end
     d.wasReplay = ws.replay_mode > 0
     if not d.wasReplay then Driver.drive(d, ws) end
 end
 
----draw2d (between physics steps): in a fight, the pool follows the players once per new match frame
+---draw2d (between physics steps): in a fight, the pool follows the players once per new match frame. Replays
+---move nothing, R ones included: the game replays every recorded move by itself. (Driving the frames after an
+---R replay's recorded ones, the "tail", was tried on 2026-11-21 and dropped: nobody played those frames, so
+---there's nothing right to match, saved replays can't have it, an edit there didn't give a correct replay,
+---and it took a crash fix after a crash fix.)
 ---@param d AtmoPlayDriver
 ---@param ws table get_world_state()
 function Driver.draw(d, ws)

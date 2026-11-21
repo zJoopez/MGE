@@ -221,7 +221,7 @@ local function setVisible(visible)
     end
     if not changed then return end
     History.commit()
-    if atmo then Rows.afterAtmoEdit("visible") else refreshProperties() end
+    if atmo then Rows.afterAtmoEdit() else refreshProperties() end
 end
 
 ---Shape and visibility rows (core panel), the selection's current values are highlighted

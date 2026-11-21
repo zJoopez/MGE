@@ -28,6 +28,7 @@ local Mat3 = NS.Mat3
 ---@field bounce number?
 ---@field visible boolean false for "visible 0": solid, not drawn
 ---@field color number[]? props only: r g b a as written (dynamics.lua paints the carrying object with it)
+---@field mass number? props only: the mass line
 ---@field matrixTB table? the rotation for set_obj_rot_m, made by the runtime when first needed
 
 ---@class AtmoPlayColliders
@@ -79,7 +80,7 @@ function Colliders.frictionKey(value)
 end
 
 ---A hardness line as the group key part: "" without one or at the game's default 0 (objects moved to the atmo
----carry "hardness 0.000000", and pools written before hardness counted have no line: both still match)
+---carry "hardness 0.000000": the same group as one without the line)
 ---@param value string|number|nil
 ---@return string
 function Colliders.hardnessKey(value)
@@ -141,6 +142,23 @@ function Colliders.entities(lines)
     return entities, header
 end
 
+---What an atmo entity is to Atmo Play, from its lines alone (no geometry): skipped (and why), or solid / a prop
+---and its pool group. Colliders.build and MGE's split check (Playable.poolSplitKey) share it
+---@param p table<string, string> the entity's lines by key (sides for size)
+---@return string? reason skipped: "random", "animated", "parented", "model", "unplaced"
+---@return string? shape
+---@return string? group Colliders.groupKey
+---@return boolean? prop no static bit in its flag
+function Colliders.classify(p)
+    for key, why in pairs(SKIP_KEYS) do
+        if p[key] ~= nil then return why, nil, nil, nil end
+    end
+    local shape = Colliders.shapeOf(p.shape)
+    if not shape then return "model", nil, nil, nil end
+    if not p.pos then return "unplaced", nil, nil, nil end
+    return nil, shape, Colliders.groupKey(shape, p.friction, p.hardness), Colliders.isDynamicFlag(p.flag)
+end
+
 ---Collision shapes of an atmo
 ---@param lines string[] the atmo's lines
 ---@return AtmoPlayCollider[] colliders static ones
@@ -153,16 +171,7 @@ function Colliders.build(lines)
     local frames = {}
     for index, entity in ipairs(entities) do
         local p = entity.props
-        local reason
-        for key, why in pairs(SKIP_KEYS) do
-            if p[key] ~= nil then
-                reason = why
-                break
-            end
-        end
-        local shape = Colliders.shapeOf(p.shape)
-        if not reason and not shape then reason = "model" end
-        if not reason and not p.pos then reason = "unplaced" end
+        local reason, shape = Colliders.classify(p)
         if reason then
             skipped[reason] = (skipped[reason] or 0) + 1
         else

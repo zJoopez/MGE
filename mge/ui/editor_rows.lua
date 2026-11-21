@@ -24,20 +24,12 @@ local function refreshProperties() Rows.refreshProperties() end
 ---@return boolean the Atmo list shows: the panels edit the selected atmo objects' lines (ModData.getEditSelection)
 function Rows.atmoShown() return MGE.Main ~= nil and MGE.Main.listTab == "atmo" end
 
--- atmo lines Atmo Play reads (its colliders and the pool's groups): the game's own atmo ignores them
-local ATMO_PHYSICS = { shape = true, friction = true, bounce = true, hardness = true, mass = true, flag = true,
-    visible = true }
-
 ---After atmo objects' lines changed (committed): atmo objects aren't in the .tbm, the rows just show the new
----values. On a playable mod a line Atmo Play reads reloads the working copy instead (MGE.apply): its pool
----(split by shape, friction, hardness and static or not) and MGE's own fights follow the change
----@param key string? the line that changed, nil for several
-function Rows.afterAtmoEdit(key)
-    if MGE.Playable and MGE.Playable.isOn() and (key == nil or ATMO_PHYSICS[key]) then
-        MGE.apply()
-    else
-        Rows.refreshProperties()
-    end
+---values. On a playable mod whose pools no longer fit (a shape, friction, hardness or Static changed) the
+---working copy reloads with new ones instead (Playable.reloadIfSplitChanged); other lines (bounce, mass...)
+---act from the next fight
+function Rows.afterAtmoEdit()
+    if not (MGE.Playable and MGE.Playable.reloadIfSplitChanged()) then Rows.refreshProperties() end
 end
 
 local totalHeight = 0
@@ -464,7 +456,7 @@ local function setProperty(key, input)
     end
     History.commit()
     if atmo then
-        Rows.afterAtmoEdit(key)
+        Rows.afterAtmoEdit()
     elseif property.setter then
         refreshProperties()
     else
@@ -517,7 +509,7 @@ local function setSelectedProp(key, value)
     end
     if not changed then return end
     History.commit()
-    if Rows.atmoShown() then Rows.afterAtmoEdit(key) else MGE.apply() end
+    if Rows.atmoShown() then Rows.afterAtmoEdit() else MGE.apply() end
 end
 
 

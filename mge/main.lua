@@ -486,6 +486,7 @@ add_hook("match_begin", MGE.hookname, function()
     local switchedMod = path ~= MGE.modPath and not (isSaveOutput(path) and isSaveOutput(MGE.modPath))
     if switchedMod then
         set_camera_mode(0)
+        MGE.Playable.loadedKey = nil -- its pools are its own (Playable.onMatchBegin reads them)
         -- a mod file was loaded (not our working copy): the data belongs to it now, with its atmo
         if not isSaveOutput(MGE.modPath) then
             MGE.setSource(MGE.modPath)

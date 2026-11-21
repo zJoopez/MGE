@@ -456,8 +456,14 @@ local function addAtmo(objects, inView)
         obj.id = #layer
     end
     History.commit()
-    Main.updateWindow()
-    MGE.Camera.followSelection()
+    -- a playable mod: the new solid objects and props get pool objects (the reload refreshes the window,
+    -- the camera follows after it)
+    if MGE.Playable.reloadIfSplitChanged() then
+        MGE.focusAfterReload = true
+    else
+        Main.updateWindow()
+        MGE.Camera.followSelection()
+    end
     return true
 end
 assetsView.addAtmo = addAtmo -- Generate on the Atmo list (ui/editor_generate.lua)

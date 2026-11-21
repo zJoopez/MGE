@@ -150,6 +150,8 @@ fight with no pool replays exact cached and uncached (0.0002), so the cache is e
 least once per match frame in those fights (at most 1 frame between two calls).
 
 Decisions:
+- (2026-11-21: placed from match frame 1 instead, and R replays drive their unrecorded tail: "Replay
+  probe" below.)
 - **Fights:** place the pool in `match_begin` (recorded under `FRAME 0`), then move it from `draw2d`
   whenever the match frame has changed. Never in `enter_frame`.
 - **Replays:** move nothing, only draw the atmo. They replay exactly, cached or not, so seeking works, the
@@ -415,6 +417,91 @@ Seventh run (no patching; three fights each, both players moving; most body drif
   none keeps the old key, so mods written before still match). Props get their flag (weapon, nogrip) with
   their color (dress). Kept lines (count, randompos, rotate, move, parent...) could get a tab of their own
   later.
+- Crash (2026-11-21, user): MGE, open modmaker/owo (playable, props on all 48 dynamic ids), R before any
+  move: the game crashed. dress then set the flag while watching the replay too; as in section 3, changing
+  objects in a replay crashes when it reaches its last frame. Flags are now set in fights only (and only
+  when not 0, the pool objects' written flag); replays only paint (EOBJ lines carry no color, so replays
+  must paint, and painting while watching was used in replays before without a crash). Not yet retested.
+- Open: R mid-fight replays the fight, then the game simulates the frames after it with nothing driving the
+  pools (players fall through). Driving there is what crashed before (section 3).
+- Still crashes without moves after the flag fix (user). RPH (user): moving dynamic objects and pressing R
+  without a move doesn't crash it, and it registers dynamic moves mid-replay well; but in that no-moves
+  replay the moved objects were teleported to 0,0,0. Guess: owo's taken props (dynamic, prop-sized) all land
+  at the origin with the static pool objects there too, and the physics blows up.
+
+#### Decision (2026-11-21, user): the tail is dropped, replays move nothing again (R ones included)
+The tail drove frames nobody played: there's nothing right to match there, saved replays can't have it (the
+game doesn't say which file is open, and a file doesn't say where its fight ended), an edit in it didn't give
+a correct replay, and it cost a series of crash fixes and a clump of stopped crates. Everything found on the
+way stays: nothing moves before frame 1, the props park above the map, only what differs is set (sizes read,
+flag and bounce cached until match_begin, parked props on their spot left alone), props painted (not
+flagged) while watching, and going back to a fight from a replay puts back the objects the game left at
+0,0,0 (the props' reseat) while the static pool is set again as before. The probe switches went with it;
+`/atmoplay log` stays. The notes below are the history of the tail.
+
+#### Replay probe (2026-11-21): both now the default, Atmo Play and MGE
+- Probed with Atmo Play's `/atmoplay wait` and `/atmoplay tail` (user, owo): both worked, no crash, and the
+  user asked for them as the default. The switches are gone; `/atmoplay log` keeps the trace (every
+  `set_obj_*` call, the globals wrapped while it's on, originals in `ATMOPLAY_TRACED`; per frame how many pool
+  objects sit at 0,0,0 and every dynamic one off its platform).
+- **Nothing moves before match frame 1** (`Driver.FIRST_FRAME`, also the props' `fromFrame`): R before the
+  first move replays nothing moved, so nothing lands at 0,0,0. Frame 0 -> 1 is one physics step without the
+  pools.
+- **R mid-fight: the replay's frames after the fight's are driven** like a fight (`Driver.trackTail`, shared
+  with dynamics.lua). R fires `leave_game` only (the probe's log), an opened replay fires `match_begin`
+  first: a replay drawn right after a fight drives frames after that fight's last one; `match_begin` clears
+  it (also an opened replay while an R replay plays). The user's run: R at frame 50, the replay to 2101 and
+  looped, no crash. Saved replays of unfinished fights still have no tail driven (their end isn't known).
+- **No tail before the first turn** (user, same day: R without moves, the replay crashed when it looped).
+  The 16:53 probe log (wait off, R without moves) shows why such a replay is unsafe: no script call between
+  replay frames 5 and 6, yet all 48 parked dynamic pool objects jumped by the same offset and flew on
+  (z 1.9 million by frame 389). The game has no recorded state for script-changed dynamic objects in a
+  replay without a turn. A tail is driven only when the fight frame is above 0 (a turn recorded: every
+  dynamic object has EOBJ lines then). R before the first move: nothing is moved at all.
+- Editing an R replay in its tail crashed (user, log on; RPH edits replays fine). The log: in the recorded
+  frames of the R replay the parked dynamic pool jumped erratically with no script call (frame 6 again);
+  at the end of the recorded frames the game put all 255 pool objects at 0,0,0; the tail set the static
+  pool again but left the 48 dynamic ones stacked at the origin; the edit (back to a fight) then crashed.
+  Changes (user: try them, but keep the features):
+  - The props are set again (`reseat`) when an R tail starts and when a replay goes back to a fight, as the
+    driver already did for the static pool.
+  - Gentler prop updates: size, mass and bounce are set only when they differ (`fitObject`); a released
+    object parks at its own file size and spot. MGE writes each dynamic pool object at its group's most
+    common prop size, mass and bounce (`Playable.propLooks`), parked side by side on a platform sized to
+    fit (`Dynamics.parkLayout`): a uniform map's props never resize anything. Older mods resize as before.
+  - Probe `/atmoplay tailprops`: an R tail drives the static pool only (props watched), to tell the two
+    apart if editing still crashes.
+  - Open: the parked props' jumps in the recorded frames are the game's own; if they keep causing trouble,
+    parking them without a platform (free fall far below) is the next idea.
+- **Found (owotail.rpl, user's saved replay; the user's hint: the game limits placing below ground):** the
+  props' parking was 50000 BELOW the ground, and for a dynamic body everything below z = 0 is inside the
+  ground. The fight's own EOBJ lines: frame 0 parked and still; frame 1 every parked prop at z -44999 with
+  vz 833317 (= the depth 49999 x 16.67: the engine pushing it out); set back still at frames 3 and 4 (edits),
+  launched again with the same numbers. They flew up through the map near frame 10, in fights and replays:
+  the "jumps" and very likely a share of the crashes. The static pool (parked at -100000) doesn't move.
+  - The props now park ABOVE the map (`Dynamics.PARK_Z = 50000`, the platform up there); "parked" is near the
+    object's own spot (`PARKED`). (A first version also moved older files' underground spots up and seated
+    every parked prop on each fight's first frame; removed the same day: Atmo Play isn't deployed yet, so
+    there are no older playable mods to support. Mods made before this must be saved again from MGE.)
+  - test2 crash (user's repro: one turn, R, the replay loops, then R or the next loop: the 2nd restart after
+    a tail crashes). Probes: no tail (`notail`): no crash over 8 playbacks; any tail crashed, also the
+    minimal one (`tailprops`: one props reseat + test2's 2 static strips) and with everything parked on
+    leave. The tail re-set flag, bounce and size of the static pool on every reset although replays record
+    neither flag nor bounce (and nothing else changes them). Now only what differs is set (RPH-like):
+    sizes read from the object, flag and bounce cached (dropped only at match_begin, when the mod's
+    objects load again), parked props already on their spot left alone. Not yet tested in game.
+  - No crash since (user). Then a clump of crates under the trailing cube from the tail start, R replays only
+    (not the saved replay, which has no tail): at the tail's first frame the re-seat compared each carried
+    object with its prop's pose, but that pose is a frame old there (the frame is stepped, not watched), so
+    all 30 pushed crates were put back a frame and stopped (frame 50 y 13.18, object at 13.37, put at 13.185).
+    Now the object is the truth: its prop's pose is read from it, and only an object at 0,0,0 (the game's
+    end-of-recording move) is put back. Not yet retested in game.
+  - Saved (opened) replays get no tail: the game doesn't tell a script which file is open (no getter;
+    wrapping open_replay would miss /lr), and a file's last FRAME isn't where the fight ended (test2.rpl:
+    0, 1, 2, 42 of a 50-frame fight). A wrong guess drives the pools over recorded frames (what crashed).
+  - The tail after an edit (user: "sometimes didn't activate"): the log had no missed tail; each replay
+    without one was left before it passed the fight's last frame (330 -> watched to 232, 623 -> edited at
+    442, 598 -> watched to 399). 17 restarts (R in a replay) with no crash and no objects at 0,0,0.
 - Not in it: the offline builder, patched replays. Unknown until tried: whether set_obj_mass and set_obj_sides on dynamic objects are recorded in
   replays and change their physics; how cached replays look (objects misplaced, the drawn props follow).
 

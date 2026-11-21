@@ -157,21 +157,21 @@ run("start: options untouched, normal mod left alone, playable mod drawn", funct
     T.eq(Runtime.state.loaded.missing, 0, "all pool objects exist")
 end)
 
-run("a fight places the pool in match_begin and moves it from draw2d only", function(game)
+run("a fight places the pool from frame 1 and moves it from draw2d only", function(game)
     startRuntime()
     local before = #game.log
     game.lm("arena.tbm")
-    local atStart = game.since(before)
-    T.ok(T.find(atStart, "^pos ", true) ~= nil, "pool placed inside match_begin (recorded under FRAME 0)")
-    T.ok(T.find(atStart, "^rot %d+ m$", true) ~= nil, "rotations set")
-    T.ok(T.find(atStart, "^bounce %d+ 0.500$", true) ~= nil, "the floor's bounce given to its pool object")
-    -- frame 0 was driven in match_begin: draw2d at frame 0 adds nothing; enter_frame never moves anything
+    T.eq(#game.since(before), 0, "match_begin moves nothing (Driver.FIRST_FRAME: R before a move crashed)")
     game.fire("enter_frame")
     game.fire("draw2d")
-    T.eq(#game.log, before + #atStart, "nothing more at frame 0")
+    T.eq(#game.since(before), 0, "nor frame 0's draw2d")
+    local atStart = game.play(1, false, 1)
+    T.ok(T.find(atStart, "^pos ", true) ~= nil, "pool placed at frame 1")
+    T.ok(T.find(atStart, "^rot %d+ m$", true) ~= nil, "rotations set")
+    T.ok(T.find(atStart, "^bounce %d+ 0.500$", true) ~= nil, "the floor's bounce given to its pool object")
     -- tori walks to x 46: the far box (x 50) comes into reach and takes the parked pool object (uke stays
     -- near the start, so the near ones stay wanted)
-    local fight = game.play(480, false, 1)
+    local fight = game.play(479, false, 2)
     T.ok(T.find(fight, "^pos 51 50.000 0.000 0.000$", true) ~= nil, "the pool follows tori to the far box")
     local enterOnly = #game.log
     game.frame = 481
@@ -179,18 +179,18 @@ run("a fight places the pool in match_begin and moves it from draw2d only", func
     T.eq(#game.log, enterOnly, "enter_frame moves nothing")
 end)
 
-run("replays move nothing; back in the fight everything is set again", function(game)
+run("opened replays move nothing; back in the fight everything is set again", function(game)
     startRuntime()
     game.lm("arena.tbm")
     game.play(20, false, 1)
-    -- 'r': leave_game, then the replay of the fight
+    -- a replay opened (its match_begin, measured): all of it is recorded
     game.fire("leave_game")
     game.replay, game.frame = 1, 0
     local before = #game.log
     game.fire("match_begin")
-    T.eq(#game.log, before, "replay start: no calls (the replay has the pool's FRAME 0)")
-    local replay = game.play(20, true)
-    T.eq(#replay, 0, "no object calls during a replay")
+    T.eq(#game.log, before, "replay start: no calls (the replay has the pool's moves)")
+    local replay = game.play(40, true)
+    T.eq(#replay, 0, "no object calls during an opened replay, also past the last fight's frames")
     -- back to the fight (the replay view left at frame 20)
     game.frame, game.replay = 20, 0
     before = #game.log
@@ -281,4 +281,68 @@ run("unload (the menu, the save overlay, other scripts) doesn't stop it", functi
     local loads = #game.loads
     game.fire("match_begin")
     T.eq(game.loads[loads + 1], "Atmo Play.atmo", "the replay's atmo is drawn")
+end)
+
+---------------------------------------------------------------------------------------------------- replays entered from a fight
+
+run("R mid-fight: the replay moves nothing, also past the fight's frames (no tail)", function(game)
+    startRuntime()
+    game.lm("arena.tbm")
+    game.play(20, false, 1) -- the fight reaches frame 20
+    -- R: leave_game only, no match_begin (measured in game), then the replay draws
+    game.fire("leave_game")
+    T.eq(#game.play(40, true), 0, "the recorded frames and the unplayed ones after them: nothing moved")
+    T.eq(#game.play(40, true), 0, "looped: nothing again")
+end)
+
+run("back in a fight after a replay: positions set again, no flag again, a bounce only where it differs", function(game)
+    startRuntime()
+    game.lm("arena.tbm")
+    local fight = game.play(20, false, 1)
+    T.ok(T.find(fight, "^bounce ", true) ~= nil, "the fight gives the floor's bounce to its pool object")
+    game.fire("leave_game")
+    game.play(21, true)
+    game.frame, game.replay = 20, 0 -- the replay view left (or an edit) at frame 20
+    local before = #game.log
+    game.fire("draw2d")
+    local back = game.since(before)
+    T.ok(T.find(back, "^pos ", true) ~= nil, "every pool object set again")
+    local beforeNextMatch = #game.log
+    T.eq(T.find(back, "^flag ", true), nil, "no flag set again (replays don't record flags: what's set stays)")
+    local last = {}
+    for i = 1, beforeNextMatch do -- the fight, its replay and the way back (the next match sets them again)
+        local id, value = game.log[i]:match("^bounce (%d+) (%S+)")
+        if id then
+            T.ok(last[id] ~= value, "bounce " .. value .. " on " .. id .. " is a change")
+            last[id] = value
+        end
+    end
+    game.lm("arena.tbm") -- a new match loads the objects from the mod: flags and bounces are the file's again
+    T.ok(T.find(game.play(1, false, 1), "^bounce ", true) ~= nil, "a new fight sets them")
+end)
+
+run("R before any move: nothing moved, in the fight or the replay", function(game)
+    startRuntime()
+    game.lm("arena.tbm")
+    game.fire("draw2d") -- frame 0, waiting for the first move
+    T.eq(#game.log, 0, "nothing moved yet (no pool for that replay to put at 0,0,0)")
+    game.fire("leave_game")
+    T.eq(#game.play(40, true), 0, "the replay moves nothing")
+end)
+
+run("debug log: every object call and a summary per frame, the setters back after", function(game)
+    startRuntime()
+    local original = set_obj_pos
+    game.fire("command", "atmoplay log")
+    T.ok(set_obj_pos ~= original, "traced while logging")
+    game.lm("arena.tbm")
+    game.play(2, false, 1)
+    local text = game.files["atmoplay_debug.log"] or ""
+    T.ok(text:find("  set_obj_pos ", 1, true) ~= nil, "object calls logged")
+    T.ok(text:find("objects: frame 1 replay 0", 1, true) ~= nil, "a summary per frame")
+    T.ok(text:find("pool objects at 0,0,0", 1, true) ~= nil, "with the objects at the origin")
+    T.ok(#game.log > 0, "the calls still reach the game")
+    game.fire("command", "atmoplay log")
+    T.eq(set_obj_pos, original, "the engine's setter back")
+    T.eq(ATMOPLAY_TRACED, nil, "nothing kept")
 end)

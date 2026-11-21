@@ -48,6 +48,7 @@ local state = {
     log = false, -- debug: hooks and object calls to Runtime.LOG_PATH (/atmoplay log)
     hold = false, -- debug: the pool isn't moved at all (/atmoplay hold), kept for the next mod
     cacheBefore = nil, ---@type number? the player's replaycache, while a mod with props has it off
+    loggedFrame = nil, ---@type string? the last frame summarized in the log
 }
 Runtime.state = state
 
@@ -203,6 +204,80 @@ local function logFrame(changes, ws)
     debugLog(lines)
 end
 
+---------------------------------------------------------------------------------------------------- debug trace
+
+-- The engine's object setters, traced while /atmoplay log is on: each call is a log line, written at the end
+-- of the hook that made it (or every 500 lines), so after a crash the log ends at the last hook that ran.
+-- The originals are kept in a global, so a restart never wraps a wrapper
+local TRACED = { "set_obj_pos", "set_obj_sides", "set_obj_rot", "set_obj_rot_m", "set_obj_linear_vel",
+    "set_obj_angular_vel", "set_obj_mass", "set_obj_bounce", "set_obj_flag", "set_obj_color", "set_obj_vis",
+    "set_obj_force" }
+local trace = {} ---@type string[] lines not written yet
+
+local function flushTrace()
+    if #trace == 0 then return end
+    debugLog(trace)
+    trace = {}
+end
+
+local function traceArg(v)
+    if type(v) ~= "number" then return tostring(v) end
+    if v == math.floor(v) and math.abs(v) < 1e9 then return string.format("%d", v) end
+    return string.format("%.3f", v)
+end
+
+---@param on boolean
+local function setTrace(on)
+    -- originals by name, and our wrappers: a global that isn't one of ours is the engine's (a restart that
+    -- didn't turn the log off left wrappers that a new trace must not take for originals)
+    ATMOPLAY_TRACED = ATMOPLAY_TRACED or { originals = {}, wrappers = {} }
+    local traced = ATMOPLAY_TRACED
+    for _, name in ipairs(TRACED) do
+        local current = rawget(_G, name)
+        if current and not traced.wrappers[current] then traced.originals[name] = current end
+        local original = traced.originals[name]
+        if original then
+            if on then
+                local wrapper = function(...)
+                    local parts = { name }
+                    for i = 1, select("#", ...) do parts[#parts + 1] = traceArg((select(i, ...))) end
+                    trace[#trace + 1] = "  " .. table.concat(parts, " ")
+                    if #trace >= 500 then flushTrace() end
+                    return original(...)
+                end
+                traced.wrappers[wrapper] = true
+                _G[name] = wrapper
+            else
+                _G[name] = original
+            end
+        end
+    end
+    if not on then ATMOPLAY_TRACED = nil end
+end
+
+---Once per new frame while logging: where the pool objects are. How many sit at 0,0,0 (RPH saw objects moved
+---before the first move teleported there in that replay) and every dynamic pool object off its platform
+---@param ws table
+local function logObjects(ws)
+    local loaded = state.loaded
+    local key = tostring(ws.replay_mode) .. ":" .. tostring(ws.match_frame)
+    if not (state.log and loaded) or key == state.loggedFrame then return end
+    state.loggedFrame = key
+    local atOrigin, off = 0, {}
+    local function check(object, dynamic)
+        local x, y, z = get_obj_pos(object.id - 1)
+        if not x then return end
+        if math.abs(x) + math.abs(y) + math.abs(z) < 0.01 then atOrigin = atOrigin + 1 end
+        if dynamic and math.abs(z - Dynamics.PARK_Z) > Dynamics.PARKED then -- not at the parking height
+            off[#off + 1] = string.format("%d@%.2f,%.2f,%.2f", object.id - 1, x, y, z)
+        end
+    end
+    for _, object in ipairs(loaded.file.pool) do check(object, false) end
+    for _, object in ipairs(loaded.file.dynamic) do check(object, true) end
+    trace[#trace + 1] = string.format("%.3f objects: %s; %d pool objects at 0,0,0; %d dynamic off the platform: %s",
+        clock(), worldLine(ws), atOrigin, #off, table.concat(off, " "))
+end
+
 ---------------------------------------------------------------------------------------------------- mods
 
 ---Reads a playable mod and draws its atmo. nil when the mod isn't playable (or can't be read)
@@ -346,6 +421,7 @@ local function onMatchBegin()
             say("this replay opened cached: props may not move in it. Open it again (the cache is off now)")
         end
     end
+    flushTrace()
 end
 
 ---Between physics steps: in a fight, the pools follow the players once per new frame (driver.lua,
@@ -353,14 +429,17 @@ end
 local function onDraw2d()
     if state.loaded then
         local ws = get_world_state()
+        logObjects(ws)
         runDynamics(Dynamics.draw, ws)
         Driver.draw(state.loaded.driver, ws)
+        flushTrace()
     end
 end
 
 local function onLeaveGame()
     logEvent("leave_game")
     resetPool()
+    flushTrace()
 end
 
 ---------------------------------------------------------------------------------------------------- commands
@@ -402,13 +481,16 @@ local function onCommand(text)
         resetPool()
     elseif rest == "log" then
         state.log = not state.log
+        state.loggedFrame = nil
+        setTrace(state.log) -- every object call goes in too
         if state.log then
             local file = Files.Open(Runtime.LOG_PATH, FILES_MODE_WRITE)
             if file.data then
                 file:writeLine("Atmo Play debug log; " .. tostring(state.loaded and state.loaded.name or "no playable mod"))
                 file:close()
             end
-            say("logging every frame to data/script/" .. Runtime.LOG_PATH .. " (slow; /atmoplay log again stops it)")
+            say("logging every frame and object call to data/script/" .. Runtime.LOG_PATH ..
+                " (slow; /atmoplay log again stops it)")
         else
             say("log stopped")
         end
@@ -452,6 +534,10 @@ end
 
 function Runtime.quit()
     remove_hooks(Runtime.HOOKS)
+    if state.log then
+        flushTrace()
+        setTrace(false) -- the engine's own setters back
+    end
     if state.loaded then
         leavePlayable() -- pool objects stay where they are until the next /lm; the atmo goes back
     end

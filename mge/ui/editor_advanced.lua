@@ -68,7 +68,7 @@ local function setFlagBits(bits, on)
     end
     if not changed then return end
     History.commit()
-    if atmo then Rows.afterAtmoEdit("flag") else refreshProperties() end
+    if atmo then Rows.afterAtmoEdit() else refreshProperties() end
 end
 
 ---Makes selected objects static or dynamic. Ids don't change: dynamic objects above id 48 are
@@ -89,7 +89,7 @@ local function setStatic(static)
     end
     if not changed then return end
     History.commit()
-    if atmo then Rows.afterAtmoEdit("flag") else MGE.apply() end
+    if atmo then Rows.afterAtmoEdit() else MGE.apply() end
 end
 
 ---Flags row (advanced panel)

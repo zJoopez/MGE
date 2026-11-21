@@ -167,6 +167,58 @@ T.test("hardness: its own pool group, written on the pool objects, read back by 
     T.ok(pool and pool.targets["sphere||2"] and #pool.targets["sphere||2"] == 1, "Atmo Play: the ball has its pool object")
 end)
 
+T.test("the split check classifies objects as Atmo Play does (without building colliders)", function()
+    smallMod()
+    Playable.setPlayable(true)
+    local atmo = ModData.parsed.atmo
+    -- a few more kinds: a prop, a hardness, a skipped (random) one
+    atmo[#atmo + 1] = { kind = "atmo", id = #atmo + 1, props = { shape = "box", pos = "1 2 3", flag = "0" } }
+    atmo[#atmo + 1] = { kind = "atmo", id = #atmo + 1, props = { shape = "sphere", pos = "1 2 3", hardness = "2" } }
+    atmo[#atmo + 1] = { kind = "atmo", id = #atmo + 1, props = { shape = "box", pos = "1 2 3", rpos = "1 1 1" } }
+    local colliders, props = Playable.colliders(atmo) -- the full way: the atmo's text, Colliders.build
+    local counts = {}
+    for _, c in ipairs(colliders) do counts["s " .. c.group] = (counts["s " .. c.group] or 0) + 1 end
+    for _, p in ipairs(props) do counts["p " .. p.group] = (counts["p " .. p.group] or 0) + 1 end
+    local parts = {}
+    for group, n in pairs(counts) do parts[#parts + 1] = group .. "=" .. n end
+    table.sort(parts)
+    T.eq(Playable.poolSplitKey(atmo), table.concat(parts, ";"), "the same groups and counts")
+end)
+
+T.test("atmo edits reload a playable mod only when its pools no longer fit", function()
+    smallMod()
+    local applied, savedApply = 0, MGE.apply
+    MGE.apply = function()
+        applied = applied + 1
+        -- what the real apply writes for a playable mod (and records its split with)
+        if Playable.isOn() then Playable.workingText(ModData.parsed) end
+    end
+    local ok, err = pcall(function()
+        Playable.setPlayable(true) -- writes the working copy: its pools' key
+        applied = 0
+        T.ok(Playable.loadedKey ~= nil, "the working copy recorded its split")
+        T.eq(Playable.reloadIfSplitChanged(), false, "nothing changed")
+        local atmo = ModData.parsed.atmo
+        atmo[1].props.pos = "9 9 9"
+        atmo[1].props.bounce = "0.5"
+        T.eq(Playable.reloadIfSplitChanged(), false, "moved, bouncier: the next fight reads it")
+        -- a duplicate (as the Atmo list's Duplicate makes it): one more of its group
+        atmo[#atmo + 1] = { kind = "atmo", id = #atmo + 1, props = ModData.copy(atmo[1].props), lines = atmo[1].lines }
+        T.eq(Playable.reloadIfSplitChanged(), true, "a copy: new pools")
+        T.eq(applied, 1, "reloaded once")
+        T.eq(Playable.reloadIfSplitChanged(), false, "the reload recorded the new split")
+        atmo[1].props.friction = "123"
+        T.eq(Playable.reloadIfSplitChanged(), true, "another friction: another group")
+        Playable.setPlayable(false)
+        applied = 0
+        atmo[#atmo + 1] = { kind = "atmo", id = #atmo + 1, props = ModData.copy(atmo[1].props), lines = atmo[1].lines }
+        T.eq(Playable.reloadIfSplitChanged(), false, "not playable: no pools to fit")
+        T.eq(applied, 0, "no reload")
+    end)
+    MGE.apply = savedApply
+    if not ok then error(err) end
+end)
+
 T.test("opening a playable mod: pool left out, its ids free, atmo and params from the file", function()
     smallMod()
     Playable.setPlayable(true)
@@ -231,11 +283,14 @@ T.test("On: the working copy carries the pool, MGE moves it like Atmo Play; Off 
         -- the reload of that working copy: the driver takes the pool the file has
         ModData.loadedPlayable = split
         Playable.onMatchBegin()
+        T.eq(#moves, 0, "nothing moved at match_begin (frame 0: Driver.FIRST_FRAME)")
+        get_world_state = function() return { match_frame = 1, replay_mode = 0, num_players = 1 } end
+        Playable.draw()
         local placed = false
         for _, m in ipairs(moves) do
             if math.abs(m.x - 10) < 1e-9 then placed = true end
         end
-        T.ok(placed, "the wall's pool object placed at the fight's start")
+        T.ok(placed, "the wall's pool object placed on the fight's first frame")
         local steps = #MGE.History.states
         T.ok(Playable.setPlayable(false), "off")
         T.ok(not Playable.isOn(), "not playable")
@@ -282,4 +337,43 @@ T.test("props (dynamic atmo objects): a dynamic pool on free ids 1-48 and a park
     local alpha = MGE.AtmoPlay.Dynamics.POOL_ALPHA
     T.ok(alpha > 0 and alpha < 1, "faint, not see-through")
     T.ok(block and block:find("color 1 1 1 " .. alpha, 1, true) and not block:match("visible 0"), "faint, not hidden")
+    -- written at the prop's own size and mass, parked on the platform at that size: taking it resizes nothing
+    local object, prop = file.dynamic[1], props[1]
+    local s = {}
+    for n in object.sides:gmatch("%S+") do s[#s + 1] = tonumber(n) end
+    T.near(s[1], prop.sides[1], 1e-6, "the prop's size")
+    T.eq(tonumber(object.mass), prop.mass, "the prop's mass line, as the prop has one or not")
+    local spot = {}
+    for n in object.pos:gmatch("%S+") do spot[#spot + 1] = tonumber(n) end
+    local top = MGE.AtmoPlay.Dynamics.PARK_Z + MGE.AtmoPlay.Dynamics.PLATFORM_SIDES[3] / 2
+    T.near(spot[3], top + prop.sides[3] / 2 + 0.01, 1e-6, "resting on the platform at its height")
+    local dyn = MGE.AtmoPlay.Dynamics.new(file.dynamic, props, {})
+    T.near(dyn.entries[1].home.pos[3], spot[3], 1e-6, "Atmo Play parks it there")
+    T.near(dyn.entries[1].sides[1], prop.sides[1], 1e-6, "and knows its size")
+end)
+
+T.test("dynamic pool looks: each group's most common prop; the parking layout fits them", function()
+    local Dynamics = MGE.AtmoPlay.Dynamics
+    local props = {
+        { group = "box|", sides = { 1, 1, 1 }, mass = 2 },
+        { group = "box|", sides = { 1, 1, 1 }, mass = 2 },
+        { group = "box|", sides = { 3, 1, 1 } },
+        { group = "sphere|", sides = { 0.5, 0, 0 }, bounce = 0.4 },
+    }
+    local looks = Playable.propLooks(props)
+    T.eq(looks["box|"].sides[1], 1, "the common box size")
+    T.eq(looks["box|"].mass, 2, "with its mass")
+    T.eq(looks["sphere|"].bounce, 0.4, "the sphere's bounce")
+    local spots, platform = Dynamics.parkLayout({
+        { id = 1, shape = "box", sides = { 1, 1, 1 } },
+        { id = 2, shape = "box", sides = { 6, 6, 6 } },
+        { id = 3, shape = "sphere", sides = { 0.5, 0, 0 } },
+    })
+    local r2 = math.sqrt(108) / 2
+    T.ok(spots[2][1] - spots[1][1] >= math.sqrt(3) / 2 + r2, "neighbours apart by their sizes")
+    T.ok(spots[3][1] - spots[2][1] >= r2 + 0.5, "the sphere after the big box")
+    T.ok(platform.sides[1] / 2 >= spots[3][1] + 0.5 and -platform.sides[1] / 2 <= spots[1][1] - 0.5, "all on the platform")
+    T.ok(platform.sides[2] >= 2 * r2, "wide enough for the big box")
+    local top = Dynamics.PARK_Z + Dynamics.PLATFORM_SIDES[3] / 2
+    T.near(spots[3][3], top + 0.5 + 0.01, 1e-9, "the sphere rests on it")
 end)
