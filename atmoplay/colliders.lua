@@ -88,23 +88,49 @@ function Colliders.hardnessKey(value)
     return (n and n ~= 0) and tostring(n) or ""
 end
 
----A pool group: what a pool object can't change once loaded (the game has no setter for these), so each
----kind gets pool objects of its own. "shape|friction", "|hardness" added only when it isn't the default
----@param shape string
----@param friction string|number|nil
----@param hardness string|number|nil
+---A bounce line as the group key part: the number written back the same way every time ("" without one)
+---@param value string|number|nil
 ---@return string
-function Colliders.groupKey(shape, friction, hardness)
-    local h = Colliders.hardnessKey(hardness)
-    return shape .. "|" .. Colliders.frictionKey(friction) .. (h ~= "" and "|" .. h or "")
+function Colliders.bounceKey(value)
+    local n = tonumber(value)
+    return n and tostring(n) or ""
 end
 
----A group key's parts (Colliders.groupKey), "" for a missing friction or hardness
+---A flag line's bits other than static (weapon, nogrip...) as the group key part: "" for none
+---@param value string|number|nil
+---@return string
+function Colliders.flagKey(value)
+    local n = tonumber(value)
+    if not n then return "" end
+    if not Colliders.isDynamicFlag(n) then n = n - Colliders.STATIC_FLAG end
+    return n ~= 0 and tostring(n) or ""
+end
+
+---A pool group: what a pool object can't change once loaded, so each kind gets pool objects of its own, written
+---with these lines in the mod. The game has no setter for friction or hardness, and bounce and flag set live
+---(set_obj_bounce, set_obj_flag) aren't recorded in replays (EOBJ lines have neither): a replay would use the
+---file's, unlike the fight. Written in the mod they hold in both (bounce probe: docs/atmo-play-plan.md, R2). A prop's mass too (it moves:
+---set_obj_mass isn't recorded either), a static object's isn't (it doesn't move). Parts: shape|friction|hardness|
+---bounce|flag bits|mass, each "" at its default; empty parts at the end are left out ("box|10000", "sphere||2")
+---@param shape string
+---@param lines { friction: string|number|nil, hardness: string|number|nil, bounce: string|number|nil, flag: string|number|nil, mass: string|number|nil }?
+---@param prop boolean? a prop (the dynamic pool): its mass counts
+---@return string
+function Colliders.groupKey(shape, lines, prop)
+    lines = lines or {}
+    local parts = { shape, Colliders.frictionKey(lines.friction), Colliders.hardnessKey(lines.hardness),
+        Colliders.bounceKey(lines.bounce), Colliders.flagKey(lines.flag), prop and Colliders.bounceKey(lines.mass) or "" }
+    while #parts > 2 and parts[#parts] == "" do parts[#parts] = nil end
+    return table.concat(parts, "|")
+end
+
+---A group key's parts (Colliders.groupKey), "" for each one at its default
 ---@param group string
----@return string shape, string friction, string hardness
+---@return string shape, string friction, string hardness, string bounce, string flag bits, string mass
 function Colliders.splitGroup(group)
-    local shape, friction, hardness = group:match("^([^|]*)|([^|]*)|?(.*)$")
-    return shape or group, friction or "", hardness or ""
+    local parts = {}
+    for part in (group .. "|"):gmatch("([^|]*)|") do parts[#parts + 1] = part end
+    return parts[1] or group, parts[2] or "", parts[3] or "", parts[4] or "", parts[5] or "", parts[6] or ""
 end
 
 ---A rot line (degrees) as the rotation the game gives the object: rotX(-x) rotY(-y) rotZ(-z), measured in
@@ -156,7 +182,8 @@ function Colliders.classify(p)
     local shape = Colliders.shapeOf(p.shape)
     if not shape then return "model", nil, nil, nil end
     if not p.pos then return "unplaced", nil, nil, nil end
-    return nil, shape, Colliders.groupKey(shape, p.friction, p.hardness), Colliders.isDynamicFlag(p.flag)
+    local prop = Colliders.isDynamicFlag(p.flag)
+    return nil, shape, Colliders.groupKey(shape, p, prop), prop
 end
 
 ---Collision shapes of an atmo
@@ -203,7 +230,7 @@ function Colliders.build(lines)
                 sides = sides,
                 frame = frame,
                 radius = radius,
-                group = Colliders.groupKey(shape --[[@as string]], p.friction, p.hardness),
+                group = Colliders.groupKey(shape --[[@as string]], p, Colliders.isDynamicFlag(p.flag)),
                 friction = tonumber(p.friction),
                 flag = tonumber(p.flag),
                 bounce = tonumber(p.bounce),

@@ -51,18 +51,6 @@ local function matrixTB(frame)
     }
 end
 
----@param flag integer
----@return integer the flag with the static bit on (a pool object must stay static)
-local function staticFlag(flag)
-    if math.floor(flag / Driver.STATIC_FLAG) % 2 == 1 then return flag end
-    return flag + Driver.STATIC_FLAG
-end
-
----Puts a pool object on a collider: position, size, rotation, and the collider's flag and bounce (the pool
----object's own when the collider has none)
----@param d AtmoPlayDriver
----@param entry AtmoPlayPoolEntry
----@param c AtmoPlayCollider
 ---@return boolean the same value for the engine (written lines and engine floats differ in the last digits)
 local function near(a, b)
     a, b = tonumber(a), tonumber(b)
@@ -70,26 +58,37 @@ local function near(a, b)
     return math.abs(a - b) <= 1e-5 * math.max(1, math.abs(a), math.abs(b))
 end
 
+---@return boolean the object's rotation (get_obj_rot: a MatrixTB or a list of 12) is this MatrixTB
+local function sameRot(id, tb)
+    local ok, m = pcall(get_obj_rot, id)
+    if not ok or type(m) ~= "table" then return false end
+    for k = 0, 10 do
+        local value = m["r" .. k]
+        if value == nil then value = m[k + 1] end
+        if k ~= 3 and k ~= 7 and not near(value, tb["r" .. k]) then return false end
+    end
+    return true
+end
+
+---Puts a pool object on a collider: position, size and rotation (its bounce and flag are its group's, in the
+---mod: Colliders.groupKey). Only what differs, as RPH changes objects: going back to a fight from a replay sets
+---every pool object again, and most are already right where the replay left them
+---@param d AtmoPlayDriver
+---@param entry AtmoPlayPoolEntry
+---@param c AtmoPlayCollider
 local function place(d, entry, c)
     local id = entry.id - 1
     c.matrixTB = c.matrixTB or matrixTB(c.frame)
-    set_obj_pos(id, c.pos[1], c.pos[2], c.pos[3])
-    -- only what differs, as RPH changes objects: the size read from the object (a replay restores sizes from
-    -- its EOBJ lines), flag and bounce from what was last set (replays don't record them: what's set stays)
+    local px, py, pz = get_obj_pos(id)
+    if not (near(px, c.pos[1]) and near(py, c.pos[2]) and near(pz, c.pos[3]) and sameRot(id, c.matrixTB)) then
+        set_obj_pos(id, c.pos[1], c.pos[2], c.pos[3])
+        set_obj_rot_m(id, c.matrixTB)
+    end
+    -- the size read from the object too (a replay restores sizes from its EOBJ lines). Bounce and flag aren't set
+    -- at all: replays don't record them, so each pool object has its group's in the mod (Colliders.groupKey)
     local ok, x, y, z = pcall(get_obj_sides, id)
     if not (ok and near(x, c.sides[1]) and near(y, c.sides[2]) and near(z, c.sides[3])) then
         set_obj_sides(id, c.sides[1], c.sides[2], c.sides[3])
-    end
-    set_obj_rot_m(id, c.matrixTB)
-    local flag = staticFlag(c.flag or entry.baseFlag or Driver.STATIC_FLAG)
-    if entry.flag ~= flag then
-        pcall(set_obj_flag, id, flag)
-        entry.flag = flag
-    end
-    local bounce = c.bounce or entry.baseBounce
-    if bounce and entry.bounce ~= bounce then
-        pcall(set_obj_bounce, id, bounce)
-        entry.bounce = bounce
     end
     if d.show then
         set_obj_color(id, 0.3, 1, 0.4, 0.6)
@@ -123,20 +122,10 @@ local function playerCenters()
     return centers
 end
 
----A driver for a pool whose objects are in the world now (right after /lm): each one's own flag and bounce
----are read there (what it gets for colliders without those lines)
+---A driver for a pool whose objects are in the world now (right after /lm)
 ---@param pool AtmoPlayPoolState
 ---@return AtmoPlayDriver
 function Driver.new(pool)
-    for _, entry in ipairs(pool.entries) do
-        local okFlag, flag = pcall(get_obj_flag, entry.id - 1)
-        local okBounce, bounce = pcall(get_obj_bounce, entry.id - 1)
-        entry.baseFlag = okFlag and tonumber(flag) or Driver.STATIC_FLAG
-        entry.baseBounce = okBounce and tonumber(bounce) or nil
-        -- what the object has now: place sets a flag or bounce only when it differs
-        entry.flag = okFlag and tonumber(flag) or nil
-        entry.bounce = entry.baseBounce
-    end
     return { pool = pool, lastFrame = nil, wasReplay = false, show = false, hold = false, steps = 0, stepTime = 0,
         worstStep = 0, fromFrame = Driver.FIRST_FRAME }
 end
@@ -161,12 +150,10 @@ function Driver.dynamicIds(skip)
     return ids
 end
 
----Start over: the next move assigns from scratch and sets every pool object, flag and bounce included
+---Start over: the next move assigns from scratch and sets every pool object again
 ---@param d AtmoPlayDriver
 function Driver.reset(d)
     Pool.reset(d.pool)
-    -- entry.flag / entry.bounce stay: nothing else changes them (replays don't record either), so setting
-    -- them again on every reset (back in a fight) only repeated calls the game can't undo
     d.lastFrame = nil
 end
 
@@ -210,9 +197,6 @@ end
 ---@param ws table get_world_state()
 function Driver.matchBegin(d, ws)
     Driver.reset(d)
-    -- a new match (or an opened replay) loads every object from the mod again: flags and bounces are the file's
-    -- now, whatever was set before. Only here: replays leave them as they are
-    for _, entry in ipairs(d.pool.entries) do entry.flag, entry.bounce = nil, nil end
     d.wasReplay = ws.replay_mode > 0
     if not d.wasReplay then Driver.drive(d, ws) end
 end

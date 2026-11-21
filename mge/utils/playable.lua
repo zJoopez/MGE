@@ -174,15 +174,18 @@ end
 ---@param group string
 ---@return FileParserEnvObj obj
 local function withLines(obj, keys, group)
-    local _, friction, hardness = Colliders.splitGroup(group)
+    -- bounce and flag bits too: set live, replays don't record them (docs/atmo-play-plan.md, R2), so the
+    -- group's values are written; the flag bits join the object's own flag (static or not)
+    local _, friction, hardness, bounce, flagBits, mass = Colliders.splitGroup(group)
+    if flagBits ~= "" then obj.props.flag = tostring((tonumber(obj.props.flag) or 0) + tonumber(flagBits)) end
     for _, key in ipairs(keys) do obj.lines[#obj.lines + 1] = { key = key } end
-    if friction ~= "" then
-        obj.props.friction = friction
-        obj.lines[#obj.lines + 1] = { key = "friction" }
-    end
-    if hardness ~= "" then
-        obj.props.hardness = hardness
-        obj.lines[#obj.lines + 1] = { key = "hardness" }
+    for _, line in ipairs({ { "friction", friction }, { "hardness", hardness }, { "bounce", bounce }, { "mass", mass } }) do
+        local key, value = line[1], line[2]
+        if value ~= "" then
+            local listed = obj.props[key] ~= nil -- the dynamic pool's look may have written it already
+            obj.props[key] = value
+            if not listed then obj.lines[#obj.lines + 1] = { key = key } end
+        end
     end
     obj.lines[#obj.lines + 1] = { key = "visible" }
     return obj

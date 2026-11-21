@@ -56,12 +56,11 @@ env_obj crateA
    sides 0.4 0.4 0.4
    color 0.2 0.4 0.6 1
    flag 0
-   mass 0.3
 env_obj crateB
    shape box
    pos 1.5 0 1
    sides 0.4 0.4 0.4
-   flag 6
+   flag 0
 env_obj far
    shape box
    pos 30 30 1
@@ -96,8 +95,7 @@ T.test("props: a flag without the static bit, apart from the static colliders", 
     T.eq(#props, 3, "three props")
     T.eq(stats.props, 3, "counted")
     T.eq(props[1].name, "crateA", "atmo order")
-    T.eq(props[1].mass, 0.3, "mass line")
-    T.eq(props[2].mass, nil, "no mass line")
+    T.eq(props[1].mass, nil, "no mass line (a prop's mass makes its own group: see the mass test)")
     T.ok(Colliders.isDynamicFlag("0") and Colliders.isDynamicFlag("4"), "flags without 8")
     T.ok(not Colliders.isDynamicFlag("8") and not Colliders.isDynamicFlag("12") and not Colliders.isDynamicFlag(nil),
         "static flags and no flag")
@@ -144,11 +142,10 @@ T.test("fight: props near a player are taken, a far one isn't", function()
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
     T.eq(carried(s), "crateA crateB -", "nearest first; the far crate stays")
     T.near(world.objects[0].pos[1], 1, 1e-9, "object 0 at crateA")
-    T.eq(world.objects[0].mass, 0.3, "crateA's mass")
-    T.eq(world.objects[1].mass, 1, "crateB has no mass line: the object's own")
+    T.eq(world.objects[0].mass, 1, "no mass line: the object's own")
     T.near(world.objects[0].sides[1], 0.4, 1e-9, "the crate's size")
     T.eq(world.objects[0].flag, nil, "crateA: flag 0, as the pool object is written: no call")
-    T.eq(world.objects[1].flag, 6, "crateB's weapon flag on its object")
+    T.eq(world.objects[1].flag, nil, "crateB: flag 0 as well")
     T.eq(#s.events, 2, "two takes")
     T.eq(s.events[1].frame, 0, "match_begin's moves are tagged frame 0")
     local centers = Dynamics.centers(s)
@@ -221,24 +218,51 @@ local function callsOf(kind, id, n)
     return count
 end
 
+T.test("a prop's mass: its own group, carried by a pool object written with that mass (no mass call)", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj light
+   shape box
+   pos 1 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+env_obj heavy
+   shape box
+   pos 1.5 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   mass 30]]))
+    T.eq(props[1].group, "box|", "no mass line")
+    T.eq(props[2].group, "box|||||30", "its mass in its group (replays don't record set_obj_mass)")
+    local objects = { { id = 1, shape = "box" }, { id = 2, shape = "box", mass = "30" } }
+    local s = Dynamics.new(objects, props, { dradius = 2, fromFrame = 0 })
+    for i = 1, 2 do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
+    world.objects[1].mass = 30
+    local n = #calls
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "light heavy", "each by its own group's object")
+    T.eq(callsOf("mass", 1, n), 0, "the heavy one's object has the mass from the mod: no set_obj_mass")
+    T.eq(Colliders.groupKey("box", { mass = "30" }), "box|", "a static object's mass doesn't count (it doesn't move)")
+end)
+
 T.test("a pool written at the props' size: taking and releasing resizes and re-masses nothing", function()
     stubEngine()
     local _, _, props = Colliders.build(T.lines(ATMO))
-    -- as MGE writes it: crateA's size and mass, parked at its own spot
-    local objects = { { id = 1, shape = "box", sides = "0.4 0.4 0.4", mass = "0.3", bounce = "0.1", pos = "-3 0 49999" } }
+    -- as MGE writes it: crateA's size, parked at its own spot
+    local objects = { { id = 1, shape = "box", sides = "0.4 0.4 0.4", pos = "-3 0 49999" } }
     local s = Dynamics.new(objects, props, { dradius = 2, fromFrame = 0 })
     world.objects[0] = { pos = { -3, 0, 49999 }, lin = { 0, 0, 0 }, ang = { 0, 0, 0 }, sides = { 0.4, 0.4, 0.4 }, mass = 0.3 }
     local n = #calls
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
     T.eq(carried(s), "crateA", "taken")
     T.eq(callsOf("sides", 0, n), 0, "its size already: no set_obj_sides")
-    T.eq(callsOf("mass", 0, n), 0, "its mass already: no set_obj_mass")
+    T.eq(callsOf("mass", 0, n), 0, "no set_obj_mass")
     world.players[1] = { 20, 0, 1 }
     Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
     T.eq(carried(s), "-", "released")
     T.eq(callsOf("sides", 0, n), 0, "parked at its own size: still no resize")
     T.near(world.objects[0].pos[1], -3, 1e-9, "on its own spot (the file's pos)")
-    -- crateB: another size and no mass line; the object's own mass (0.3) is kept
+    -- crateB: another size
     world.players[1] = { 1.6, 0, 1 }
     world.objects[0].lin = { 0, 0, 0 }
     s.props[1].pos = { 30, 0, 1 } -- crateA out of reach
@@ -660,13 +684,33 @@ T.test("replay: an object that took a prop is painted its color, the copy hidden
     T.eq(table.concat(world.objects[0].color, " "), "0.2 0.4 0.6 1", "painted")
     T.ok(Dynamics.isCarried(s, s.props[1].index), "carried: MGE leaves it to the object")
     T.ok(not Dynamics.isCarried(s, s.props[2].index), "crateB isn't")
-    -- crateB is a weapon: watching never sets a flag (changing objects in replays crashed the game)
     world.objects[1].pos = { 1.5, 0, 1 }
     Dynamics.draw(s, { replay_mode = 1, match_frame = 1 })
     T.eq(carried(s), "crateA crateB", "object 1 took crateB")
     T.eq(world.objects[1].flag, nil, "no set_obj_flag in a replay")
     T.ok(world.objects[1].color ~= nil, "painted though")
-    -- back in the fight: the flag is set then
-    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
-    T.eq(world.objects[1].flag, 6, "fight on: its weapon flag")
+end)
+
+T.test("a weapon prop: its own group, carried by a pool object written with that flag (no flag call)", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj crate
+   shape box
+   pos 1 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+env_obj blade
+   shape box
+   pos 1.5 0 1
+   sides 0.4 0.4 0.4
+   flag 6]]))
+    T.eq(props[1].group, "box|", "a plain crate")
+    T.eq(props[2].group, "box||||6", "the weapon's own group (its flag bits)")
+    -- as MGE writes them: one pool object per group, the weapon's with flag 6
+    local objects = { { id = 1, shape = "box", flag = "0" }, { id = 2, shape = "box", flag = "6" } }
+    local s = Dynamics.new(objects, props, { dradius = 2, fromFrame = 0 })
+    for i = 1, 2 do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crate blade", "each taken by its own group's object")
+    T.eq(world.objects[1].flag, nil, "the weapon object has the flag from the mod: no set_obj_flag")
 end)

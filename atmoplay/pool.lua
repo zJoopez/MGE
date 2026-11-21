@@ -85,7 +85,7 @@ function Pool.new(objects, colliders, params, options)
         local shape = Colliders.shapeOf(object.shape) or "box"
         state.entries[#state.entries + 1] = {
             id = object.id,
-            group = Colliders.groupKey(shape, object.friction, object.hardness),
+            group = Colliders.groupKey(shape, object),
             target = nil,
             dirty = true,
         }

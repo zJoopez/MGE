@@ -135,11 +135,36 @@ T.test("Atmo Play reads MGE's playable mods the same way", function()
         local groups = {}
         for _, c in ipairs(colliders) do groups[c.group] = true end
         for _, p in ipairs(file.pool) do
-            local key = ATMOPLAY.Colliders.groupKey(p.shape or "box", p.friction, p.hardness)
+            local key = ATMOPLAY.Colliders.groupKey(ATMOPLAY.Colliders.shapeOf(p.shape) or "box", p)
             T.ok(groups[key], "pool group " .. key .. " has colliders in Atmo Play")
         end
     end)
     if not ok then error(err) end
+end)
+
+T.test("bounce and flag bits: their own pool group, written on the pool objects (set live, replays don't keep them)", function()
+    smallMod()
+    Playable.setPlayable(true)
+    for _, obj in ipairs(ModData.parsed.atmo) do
+        if obj.props.shape == "sphere" then obj.props.bounce, obj.props.flag = "10", "24" end -- bouncy, nogrip
+    end
+    local text, plan = Playable.text(ModData.parsed, Atmo.currentText())
+    local groups = {}
+    for _, p in ipairs(plan.objects) do groups[p.group] = true end
+    T.ok(groups["sphere|||10|16"], "the bouncy nogrip ball: its own group")
+    local file = ATMOPLAY.Format.read(splitLines(text))
+    local found = false
+    for _, p in ipairs(file.pool) do
+        if p.bounce == "10" then
+            found = true
+            T.eq(p.flag, "24", "static + nogrip on its pool object")
+        end
+    end
+    T.ok(found, "a pool object written with bounce 10")
+    local colliders = ATMOPLAY.Colliders.build(file.atmo)
+    local pool = ATMOPLAY.Pool.new(file.pool, colliders, file.header)
+    T.ok(pool and pool.targets["sphere|||10|16"] and #pool.targets["sphere|||10|16"] == 1,
+        "Atmo Play: the ball has its pool object")
 end)
 
 T.test("hardness: its own pool group, written on the pool objects, read back by Atmo Play", function()
@@ -200,8 +225,8 @@ T.test("atmo edits reload a playable mod only when its pools no longer fit", fun
         T.eq(Playable.reloadIfSplitChanged(), false, "nothing changed")
         local atmo = ModData.parsed.atmo
         atmo[1].props.pos = "9 9 9"
-        atmo[1].props.bounce = "0.5"
-        T.eq(Playable.reloadIfSplitChanged(), false, "moved, bouncier: the next fight reads it")
+        atmo[1].props.mass = "5"
+        T.eq(Playable.reloadIfSplitChanged(), false, "moved, heavier: the next fight reads it")
         -- a duplicate (as the Atmo list's Duplicate makes it): one more of its group
         atmo[#atmo + 1] = { kind = "atmo", id = #atmo + 1, props = ModData.copy(atmo[1].props), lines = atmo[1].lines }
         T.eq(Playable.reloadIfSplitChanged(), true, "a copy: new pools")
@@ -209,6 +234,8 @@ T.test("atmo edits reload a playable mod only when its pools no longer fit", fun
         T.eq(Playable.reloadIfSplitChanged(), false, "the reload recorded the new split")
         atmo[1].props.friction = "123"
         T.eq(Playable.reloadIfSplitChanged(), true, "another friction: another group")
+        atmo[1].props.bounce = "5"
+        T.eq(Playable.reloadIfSplitChanged(), true, "another bounce: another group (written in the mod)")
         Playable.setPlayable(false)
         applied = 0
         atmo[#atmo + 1] = { kind = "atmo", id = #atmo + 1, props = ModData.copy(atmo[1].props), lines = atmo[1].lines }

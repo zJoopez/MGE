@@ -74,7 +74,7 @@ env_obj leveled
     local box, ball, pill, hidden, leveled = colliders[1], colliders[2], colliders[3], colliders[4], colliders[5]
     T.eq(box.index, 1, "index is the entity's place")
     T.eq(box.sides[3], 6, "sides are made positive")
-    T.eq(box.group, "box|10000", "friction written as a number")
+    T.eq(box.group, "box|10000||0.1", "friction and bounce written as numbers, the static bit left out")
     T.eq(box.flag, 8, "flag")
     T.near(box.bounce, 0.1, 1e-9, "bounce")
     T.eq(ball.shape, "sphere", "sphere")
@@ -87,15 +87,20 @@ env_obj leveled
     T.eq(Colliders.build({ "env_obj x", "   pos 0 0 0" })[1].shape, "box", "no shape line: a box")
 end)
 
-T.test("pool groups: shape, friction, and hardness when it isn't the default", function()
-    T.eq(Colliders.groupKey("box", "10000", nil), "box|10000", "no hardness: the old key")
-    T.eq(Colliders.groupKey("box", "10000", "0.000000"), "box|10000", "hardness 0 is the default")
-    T.eq(Colliders.groupKey("sphere", nil, "2"), "sphere||2", "hardness only")
-    T.eq(Colliders.groupKey("box", "5", "0.5"), "box|5|0.5", "both")
-    local shape, friction, hardness = Colliders.splitGroup("box|5|0.5")
-    T.eq(shape .. "/" .. friction .. "/" .. hardness, "box/5/0.5", "split back")
-    shape, friction, hardness = Colliders.splitGroup("box|10000")
-    T.eq(shape .. "/" .. friction .. "/" .. hardness, "box/10000/", "an old key splits too")
+T.test("pool groups: shape, friction, hardness, bounce and flag bits, each left out at its default", function()
+    T.eq(Colliders.groupKey("box", { friction = "10000" }), "box|10000", "friction only")
+    T.eq(Colliders.groupKey("box", { friction = "10000", hardness = "0.000000" }), "box|10000", "hardness 0 is the default")
+    T.eq(Colliders.groupKey("sphere", { hardness = "2" }), "sphere||2", "hardness only")
+    T.eq(Colliders.groupKey("box", { friction = "5", hardness = "0.5" }), "box|5|0.5", "both")
+    T.eq(Colliders.groupKey("box", { bounce = "10" }), "box|||10", "bounce: set live, replays wouldn't have it")
+    T.eq(Colliders.groupKey("box", { flag = "8" }), "box|", "the static bit alone: no flag part")
+    T.eq(Colliders.groupKey("box", { flag = "24" }), "box||||16", "static + nogrip: the nogrip bit")
+    T.eq(Colliders.groupKey("box", { flag = "6" }), "box||||6", "a prop's weapon flag")
+    T.eq(Colliders.groupKey("box"), "box|", "no lines")
+    local shape, friction, hardness, bounce, flag = Colliders.splitGroup("box|5|0.5|10|16")
+    T.eq(table.concat({ shape, friction, hardness, bounce, flag }, "/"), "box/5/0.5/10/16", "split back")
+    shape, friction, hardness, bounce, flag = Colliders.splitGroup("box|10000")
+    T.eq(table.concat({ shape, friction, hardness, bounce, flag }, "/"), "box/10000///", "a short key splits too")
     local colliders = Colliders.build(T.lines([[
 env_obj soft
    pos 0 0 0

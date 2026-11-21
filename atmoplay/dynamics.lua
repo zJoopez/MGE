@@ -81,8 +81,9 @@ local Dynamics = {
     -- a full pool frees a carried prop for a waiting one only when that is nearer by more than this: two
     -- props about as near don't take the object from each other every frame
     EVICT_MARGIN = 0.5,
-    -- props are ranked by the gap left after this many seconds at the closing speed (velocities are per second,
-    -- a match frame about 0.01 s): ahead of a fast object first, behind it last. MAX_LEAD caps the shift
+    -- props are ranked by the gap left after this many seconds at the closing speed: ahead of a fast object first,
+    -- behind it last. MAX_LEAD caps the shift. Velocities are per second and a match frame is about 0.006 s
+    -- (test2.rpl: the cube moved 0.1798 between two recorded frames at 29.98), so 0.1 s is ~17 frames ahead
     LOOKAHEAD = 0.1,
     MAX_LEAD = 3,
     -- who a prop is wanted for, best first: a full pool serves the players' collisions before the mod's
@@ -308,9 +309,9 @@ function Dynamics.new(objects, props, params)
         local pos, sides = numbers(object.pos), numbers(object.sides)
         if #pos < 3 then pos = { Dynamics.parkPos(object.id) } end
         if #sides < 3 then sides = { Dynamics.PARK_SIDE, Dynamics.PARK_SIDE, Dynamics.PARK_SIDE } end
-        s.entries[#s.entries + 1] = { id = object.id, group = Colliders.groupKey(shape, object.friction, object.hardness),
+        s.entries[#s.entries + 1] = { id = object.id, group = Colliders.groupKey(shape, object, true),
             prop = nil, speed = 0, spin = 0, home = { pos = pos, sides = sides }, sides = sides,
-            mass = tonumber(object.mass), bounce = tonumber(object.bounce) }
+            mass = tonumber(object.mass), bounce = tonumber(object.bounce), flag = tonumber(object.flag) }
     end
     table.sort(s.entries, function(a, b) return a.id < b.id end)
     for _, e in ipairs(s.entries) do

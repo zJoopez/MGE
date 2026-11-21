@@ -168,11 +168,13 @@ run("a fight places the pool from frame 1 and moves it from draw2d only", functi
     local atStart = game.play(1, false, 1)
     T.ok(T.find(atStart, "^pos ", true) ~= nil, "pool placed at frame 1")
     T.ok(T.find(atStart, "^rot %d+ m$", true) ~= nil, "rotations set")
-    T.ok(T.find(atStart, "^bounce %d+ 0.500$", true) ~= nil, "the floor's bounce given to its pool object")
+    T.eq(T.find(atStart, "^bounce ", true), nil, "no bounce set live (replays don't record it)")
+    T.ok(game.files["../data/mod/arena.tbm"]:find("\n%s*bounce 0.5", 1) ~= nil,
+        "the floor's bounce written on its group's pool object")
     -- tori walks to x 46: the far box (x 50) comes into reach and takes the parked pool object (uke stays
     -- near the start, so the near ones stay wanted)
     local fight = game.play(479, false, 2)
-    T.ok(T.find(fight, "^pos 51 50.000 0.000 0.000$", true) ~= nil, "the pool follows tori to the far box")
+    T.ok(T.find(fight, "^pos %d+ 50.000 0.000 0.000$", true) ~= nil, "the pool follows tori to the far box")
     local enterOnly = #game.log
     game.frame = 481
     game.fire("enter_frame")
@@ -295,11 +297,11 @@ run("R mid-fight: the replay moves nothing, also past the fight's frames (no tai
     T.eq(#game.play(40, true), 0, "looped: nothing again")
 end)
 
-run("back in a fight after a replay: positions set again, no flag again, a bounce only where it differs", function(game)
+run("back in a fight after a replay: positions set again, no flag or bounce set live", function(game)
     startRuntime()
     game.lm("arena.tbm")
     local fight = game.play(20, false, 1)
-    T.ok(T.find(fight, "^bounce ", true) ~= nil, "the fight gives the floor's bounce to its pool object")
+    T.eq(T.find(fight, "^bounce ", true), nil, "no bounce set live (the mod has each group's)")
     game.fire("leave_game")
     game.play(21, true)
     game.frame, game.replay = 20, 0 -- the replay view left (or an edit) at frame 20
@@ -318,7 +320,7 @@ run("back in a fight after a replay: positions set again, no flag again, a bounc
         end
     end
     game.lm("arena.tbm") -- a new match loads the objects from the mod: flags and bounces are the file's again
-    T.ok(T.find(game.play(1, false, 1), "^bounce ", true) ~= nil, "a new fight sets them")
+    T.eq(T.find(game.play(1, false, 1), "^bounce ", true), nil, "nor in a new fight")
 end)
 
 run("R before any move: nothing moved, in the fight or the replay", function(game)

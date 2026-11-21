@@ -508,7 +508,24 @@ flagged) while watching, and going back to a fight from a replay puts back the o
 ## Still open (checked during Phases 1-2, in game)
 
 - **R2:** do `set_obj_flag` / `set_obj_bounce` take effect on a static object, and can static objects use
-  ids 1-48?
+  ids 1-48? **Bounce answered (2026-11-21, `tools/atmoplay/atmoplay_bounce_probe.lua`, user's run):** no.
+  Bouncy tiles (bounce 10) with the pool's bounce set live: the very same fight as with default tiles (max
+  0.0000); written in the mod: differed by 13.3 units from frame 14. Every replay matched its fight.
+  The user's own test then saw `set_obj_bounce` change both static and dynamic objects live, so the
+  probe's "no effect" isn't the rule. What holds either way: replays don't record bounce or flag (EOBJ has
+  neither), so a value set live isn't there when a replay is watched. The static pool is now grouped by
+  bounce and by flag bits too (`Colliders.groupKey`: shape|friction|hardness|bounce|flag bits, written on
+  each pool object), and the driver sets neither live. Typical maps have one bounce (dust2-5k: all 0.1),
+  so no extra split there. A prop's mass is in the dynamic pool's key too (2026-11-21, user: fix it), so
+  props of another weight get pool objects written with it and nothing is set live any more; a static
+  object's mass doesn't count (it doesn't move).
+- **Online play: not supported** (user, 2026-11-21). Atmo Play is for single player and replays.
+- **Frame time measured:** a match frame is ~0.006 s (test2.rpl: the cube moved 0.1798 between two
+  recorded frames at a recorded 29.98 per second), so `LOOKAHEAD = 0.1` s is ~17 frames ahead as meant.
+- **Cleanup (2026-11-21):** the probe scripts (native, timing, replay, size, dynamic, replay patch, bounce)
+  were removed from `tools/atmoplay` with their logs, mods and replays; git history keeps the scripts, and
+  this doc keeps what they measured. The builder and `build_playable.lua` stay. The driver now places a
+  static pool object only where it isn't already (position, rotation and size read from the object).
 - **R5, cost:** offline on the dust2 mod (5,501 colliders, 208 pool objects, 2 players walking through the
   middle), the pool step takes **0.15 ms per frame** with the grid (1.33 ms looking at every collider),
   building the grid 9 ms, reading the colliders ~120 ms (once per mod switch). In game: `/atmoplay`.

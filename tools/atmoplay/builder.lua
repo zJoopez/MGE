@@ -124,10 +124,10 @@ end
 
 ---A pool object's lines
 ---@param id integer
----@param group string Colliders.groupKey: "shape|friction" or "shape|friction|hardness"
+---@param group string Colliders.groupKey: shape|friction|hardness|bounce|flag bits, empty ones at the end left out
 ---@return string[]
 local function poolBlock(id, group)
-    local shape, friction, hardness = Colliders.splitGroup(group)
+    local shape, friction, hardness, bounce, flagBits = Colliders.splitGroup(group)
     local lines = {
         "env_obj " .. id,
         Builder.INDENT .. Format.POOL_MARKER,
@@ -136,10 +136,11 @@ local function poolBlock(id, group)
         Builder.INDENT .. "rot 0 0 0",
         Builder.INDENT .. "sides 1 1 1",
         Builder.INDENT .. "color 1 1 1 1",
-        Builder.INDENT .. "flag " .. Builder.STATIC_FLAG,
+        Builder.INDENT .. "flag " .. (Builder.STATIC_FLAG + (tonumber(flagBits) or 0)),
     }
     if friction ~= "" then lines[#lines + 1] = Builder.INDENT .. "friction " .. friction end
     if hardness ~= "" then lines[#lines + 1] = Builder.INDENT .. "hardness " .. hardness end
+    if bounce ~= "" then lines[#lines + 1] = Builder.INDENT .. "bounce " .. bounce end
     lines[#lines + 1] = Builder.INDENT .. "visible 0"
     return lines
 end
