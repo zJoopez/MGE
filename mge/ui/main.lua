@@ -473,6 +473,10 @@ function Main.applyTab()
     for id, btn in pairs(tabButtons[Main.listTab] or {}) do
         styleTab(btn, id == active, LIST_BG, Widgets.TAB_PANEL_SOLID) -- active: the editor panel's dark
     end
+    -- window hidden (F1): show() above draws a child even under a hidden parent, and rebuilt blocks are
+    -- created shown (a new mod's /lm rebuilt the editor and left its tab row and panel on screen). Hidden
+    -- again, hide() without noreload keeps the flags set above, so F1 shows the right row and panel
+    if Main.window and not Main.window.destroyed and not Main.window.displayed then Main.window:hide() end
 end
 
 ---Makes a tab its list's active one (shown when that list is), e.g. "core" or "player". A panel on several
