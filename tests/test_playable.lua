@@ -250,7 +250,11 @@ T.test("props (dynamic atmo objects): a dynamic pool on free ids 1-48 and a park
     local ids = {}
     for _, obj in ipairs(parsed.env_obj) do ids[#ids + 1] = obj.id end
     T.eq(table.concat(ids, ","), "61,62", "MGE's data: the real objects only")
-    -- the dynamic pool object's lines: hidden, dynamic, on the platform
+    -- the dynamic pool object's lines: dynamic, on the platform, faint by its alpha but "visible 1" (the game
+    -- shows move predictions only for visible objects)
     local block = text:match("env_obj 1\n(.-)\n\n") or text:match("env_obj 1\n(.-)env_obj")
-    T.ok(block and block:match("flag 0") and block:match("visible 0"), "dynamic and hidden")
+    T.ok(block and block:match("flag 0"), "dynamic")
+    local alpha = MGE.AtmoPlay.Dynamics.POOL_ALPHA
+    T.ok(alpha > 0 and alpha < 1, "faint, not see-through")
+    T.ok(block and block:find("color 1 1 1 " .. alpha, 1, true) and not block:match("visible 0"), "faint, not hidden")
 end)

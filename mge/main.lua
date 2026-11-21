@@ -723,12 +723,15 @@ add_hook("key_up", MGE.hookname, function(key)
     if key ~= 282 then return end --F1
     if MGE.isPlacing() then return end -- the placement view shows it again when it ends
     local Main = MGE.Main
+    -- hidden is the play view: the mod's objects in their own colors, not see-through as the Atmo list has them
     if Main.window.displayed then
         Main.window:hide(false)
         MGE.hideGameHud(false)
+        MGE.AtmoLayer.setObjectsSeeThrough(false)
     else
         Main.window:show(false)
         MGE.hideGameHud(true)
+        MGE.AtmoLayer.setObjectsSeeThrough(Main.listTab == "atmo")
         Main.updateWindow()
     end
 end)

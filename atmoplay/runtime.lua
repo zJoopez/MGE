@@ -245,7 +245,8 @@ local function loadPlayable(path)
     -- props (proof of concept): their own pool, and the static pool covers the carried ones
     local dynamics
     if #file.dynamic > 0 and #props > 0 then
-        dynamics = Dynamics.new(file.dynamic, props, file.header)
+        -- follow: the mod's own dynamic objects push props too
+        dynamics = Dynamics.new(file.dynamic, props, { dradius = file.header.dradius, follow = driver.follow })
         driver.moreCenters = function() return Dynamics.centers(dynamics) end
     elseif #props > 0 then
         say(name .. ": " .. #props .. " props (dynamic atmo objects) but no dynamic pool: they aren't solid")

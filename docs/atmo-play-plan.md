@@ -386,6 +386,26 @@ Seventh run (no patching; three fights each, both players moving; most body drif
   prop keeps its pose tables, so it isn't redrawn. `/atmoplay status` shows the props' ms per frame.
 - A prop is still until something wants it (a player's center within `dradius`, or a pushed prop
   touching it): one placed in mid-air hangs there until a player comes near.
+- Priority over a full pool (2026-11-21, user's idea): the mod's own dynamic objects want props as players do
+  (`follow`, their bounding sphere from get_obj_sides), and a prop near a player or one of those that has no
+  object left FREEZES the least wanted carried prop of its group, even a moving one (released where it is,
+  speed lost; it can hang in the air until wanted again). Only when that prop is farther by more than
+  `EVICT_MARGIN` (0.5) and no body part touches it; chain-wanted props don't freeze anything. In game
+  (user, modmaker/test2.tbm: a thrust cube through a line of 360 props, pool ids 3-48): holds up with one
+  cube; a second cube trailing it runs out of objects.
+- Lookahead ranking (2026-11-21): props are ranked by the gap less what the closing speed covers in
+  `LOOKAHEAD` (0.1 s, at most `MAX_LEAD` 3 either way); players' velocity is their body parts' mean, the
+  mod's objects' size comes from get_obj_shape. Ahead of a fast cube first, the debris it leaves behind last
+  (frozen first when the pool is full). Chain props rank by the pushed prop's heading too. Offline tests
+  only; LOOKAHEAD assumes velocities per second (not measured).
+- Tiers (2026-11-21, user): props near a player rank before props near the mod's dynamic objects, and those
+  before chain ones; distance only within a tier. A full pool lets a waiting player prop freeze any carried
+  prop of a lower tier however near (EVICT_MARGIN applies within a tier). Offline tests only.
+- Move predictions (2026-11-21, user, in game): "visible 0" objects get no ghost; MGE now writes the dynamic
+  pool `visible 1` with color alpha `POOL_ALPHA`, and ghosts show. The object and the drawn copy at one pose
+  flickered (worst in replays, the copy a frame behind), so a carried prop's copy is hidden and its object
+  painted the prop's color (set_obj_color, fights and replays); MGE skips drawing carried props. Copies
+  with textures or models would show as plain colored objects while carried.
 - Not in it: the offline builder, patched replays. Unknown until tried: whether set_obj_mass and set_obj_sides on dynamic objects are recorded in
   replays and change their physics; how cached replays look (objects misplaced, the drawn props follow).
 

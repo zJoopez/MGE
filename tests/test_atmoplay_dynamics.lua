@@ -33,6 +33,10 @@ local function stubEngine()
     set_obj_pos = function(id, x, y, z) obj(id).pos = { x, y, z }; calls[#calls + 1] = "pos " .. id end
     set_obj_rot_m = function(id, m) obj(id).rot = m end
     set_obj_sides = function(id, x, y, z) obj(id).sides = { x, y, z } end
+    get_obj_sides = function(id) local v = obj(id).sides or { 1, 1, 1 } return v[1], v[2], v[3] end
+    get_obj_shape = function() return 1 end -- every object a box
+    set_obj_color = function(id, r, g, b, a) obj(id).color = { r, g, b, a } end
+    get_body_linear_vel = function() return 0, 0, 0 end -- players stand still
     set_obj_linear_vel = function(id, x, y, z) obj(id).lin = { x, y, z } end
     set_obj_angular_vel = function(id, x, y, z) obj(id).ang = { x, y, z } end
     set_obj_mass = function(id, m) obj(id).mass = m end
@@ -49,6 +53,7 @@ env_obj crateA
    shape box
    pos 1 0 1
    sides 0.4 0.4 0.4
+   color 0.2 0.4 0.6 1
    flag 0
    mass 0.3
 env_obj crateB
@@ -140,6 +145,7 @@ T.test("fight: props near a player are taken, a far one isn't", function()
     T.near(world.objects[0].pos[1], 1, 1e-9, "object 0 at crateA")
     T.eq(world.objects[0].mass, 0.3, "crateA's mass")
     T.eq(world.objects[1].mass, 1, "crateB has no mass line: the object's own")
+    T.near(world.objects[0].sides[1], 0.4, 1e-9, "the crate's size")
     T.eq(#s.events, 2, "two takes")
     T.eq(s.events[1].frame, 0, "match_begin's moves are tagged frame 0")
     local centers = Dynamics.centers(s)
@@ -188,6 +194,113 @@ T.test("fight: a crate that fell off the map is released", function()
     world.players[1] = { 1, 0, -100 }
     Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
     T.eq(carried(s), "-", "released though moving and touched")
+end)
+
+T.test("fight: a full pool freezes a far moving prop for a near waiting one", function()
+    local s = setup(1)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crateA", "taken")
+    -- crateA kicked away, still flying; crateB next to the player has no object
+    world.objects[0].pos = { 10, 0, 1 }
+    world.objects[0].lin = { 5, 0, 0 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(carried(s), "-", "crateA frozen though moving")
+    T.near(s.props[1].pos[1], 10, 1e-9, "left where it flew")
+    T.ok(world.objects[0].pos[3] < Dynamics.PARK_Z / 2, "its object parked")
+    T.eq(s.events[#s.events].kind, "release", "a release event: replays see the object park")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
+    T.eq(carried(s), "crateB", "the near one gets the object the next frame")
+end)
+
+T.test("fight: a full pool keeps a moving prop about as near as the waiting one", function()
+    local s = setup(1)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    -- crateA rolling just behind crateB: farther from the player, but by less than EVICT_MARGIN
+    world.players[1] = { 3.6, 0, 1 }
+    world.objects[0].pos = { 1.4, 0, 1 }
+    world.objects[0].lin = { 1, 0, 0 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(carried(s), "crateA", "kept: no swapping back and forth")
+    -- it rolls the other way, out of reach: frozen now
+    world.objects[0].pos = { -5, 0, 1 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
+    T.eq(carried(s), "-", "frozen")
+end)
+
+T.test("fight: the mod's own dynamic objects want props too", function()
+    local s = setup(1)
+    world.players[1] = { 20, 0, 1 }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "-", "no player near anything")
+    -- a ball of the mod (id 10) rolling up to the far crate
+    s.follow = { 10 }
+    world.objects[10] = { pos = { 30, 28, 1 }, lin = { 0, 0, 0 }, ang = { 0, 0, 0 }, sides = { 1, 1, 1 }, mass = 1 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(carried(s), "far", "taken for the ball")
+end)
+
+---Crates on the y axis (atmo order as given), a pool of `poolSize`, the players far away and a cube of the
+---mod (id 20, sides 1) at the origin moving at `vy`, as modmaker/test2.tbm's thrust cubes
+local function lineSetup(ys, poolSize, vy)
+    stubEngine()
+    local lines = {}
+    for i, y in ipairs(ys) do
+        lines[#lines + 1] = "env_obj c" .. i
+        lines[#lines + 1] = "   shape box"
+        lines[#lines + 1] = "   pos 0 " .. y .. " 1"
+        lines[#lines + 1] = "   sides 0.4 0.4 0.4"
+        lines[#lines + 1] = "   flag 0"
+    end
+    local _, _, props = Colliders.build(lines)
+    local objects = {}
+    for i = 1, poolSize do objects[i] = { id = i, shape = "box" } end
+    local s = Dynamics.new(objects, props, { dradius = 2, follow = { 20 } })
+    for i = 1, poolSize do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
+    world.players = { { 100, 0, 1 }, { 100, 50, 1 } }
+    world.objects[20] = { pos = { 0, 0, 1 }, lin = { 0, vy, 0 }, ang = { 0, 0, 0 }, sides = { 1, 1, 1 }, mass = 20 }
+    return s
+end
+
+T.test("lookahead: the crate ahead of a fast cube before the one as near behind it", function()
+    local s = lineSetup({ -1.5, 1.5 }, 1, 0)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "c1", "a still cube: as near, the lower atmo index")
+    s = lineSetup({ -1.5, 1.5 }, 1, 20)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "c2", "moving +y: the one ahead")
+end)
+
+T.test("lookahead: a full pool freezes the crate the cube left behind for the one ahead", function()
+    local s = lineSetup({ -2, 3 }, 1, 0)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "c1", "the cube standing: the nearer one, behind")
+    -- the cube flies +y, the crate behind follows slower: nearer by distance, but falling back
+    world.objects[20].lin = { 0, 20, 0 }
+    world.objects[0].lin = { 0, 5, 0 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(carried(s), "-", "the crate behind frozen though moving")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
+    T.eq(carried(s), "c2", "the crate ahead gets the object")
+end)
+
+T.test("tiers: a crate near a player before one the cube is about to hit", function()
+    local s = lineSetup({ -1.5, 1.5 }, 1, 20)
+    world.players[1] = { 0, -2.6, 1 } -- near c1 (not touching it), far from c2
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "c1", "the player's crate, though the cube's is nearer")
+end)
+
+T.test("tiers: a full pool freezes the cube's crate for a player's, however near", function()
+    local s = lineSetup({ -1.5, 1.5 }, 1, 20)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "c2", "players far: the cube's crate")
+    -- c2 pushed along with the cube (nearer to it than c1 will be to the player), the player walks up to c1
+    world.objects[0].lin = { 0, 20, 0 }
+    world.players[1] = { 0, -2.6, 1 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(carried(s), "-", "the cube's crate frozen")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
+    T.eq(carried(s), "c1", "the player's crate gets the object")
 end)
 
 ---------------------------------------------------------------------------------------------------- replays
@@ -370,16 +483,19 @@ T.test("the grid finds the same props as looking at every one (fights and replay
     T.eq(table.concat(watchGrid, "\n"), table.concat(watchFull, "\n"), "the same in the replay")
 end)
 
-T.test("drawn copies: only the carried and the just released are redrawn; a new atmo redraws the moved", function()
+T.test("drawn copies: hidden while carried (the object shows), back where they stay when released", function()
     local s = setup(2)
-    local moves = {}
+    local moves, items = {}, {}
     local function holder()
         local h = { child = {} }
         for _, prop in ipairs(s.props) do
             local p = prop.home.pos
-            local item = { shift = { x = p[1], y = p[2], z = p[3] }, name = prop.name }
+            local item = { shift = { x = p[1], y = p[2], z = p[3] }, name = prop.name, displayed = true }
             function item:moveTo(x, y, z) moves[#moves + 1] = self.name; self.shift = { x = x, y = y, z = z } end
+            function item:hide() self.displayed = false end
+            function item:show() self.displayed = true end
             h.child[#h.child + 1] = item
+            items[prop.name] = item
         end
         return h
     end
@@ -389,18 +505,21 @@ T.test("drawn copies: only the carried and the just released are redrawn; a new 
         MatrixToMatrixTB = function() return {} end }
     local ok, err = pcall(function()
         Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
-        T.eq(#moves, 0, "taken, not moved: nothing redrawn")
+        T.eq(carried(s), "crateA crateB", "both taken")
+        T.ok(not items.crateA.displayed and not items.crateB.displayed, "their copies hidden")
+        T.ok(items.far.displayed, "the far one's copy shows")
+        T.eq(table.concat(world.objects[0].color, " "), "0.2 0.4 0.6 1", "crateA's object in crateA's color")
+        T.eq(table.concat(world.objects[1].color, " "), "1 1 1 1", "no color line: white")
         world.objects[0].pos = { 1.1, 0, 1 }
         Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
-        T.eq(table.concat(moves, ","), "crateA", "the moved carried one")
-        moves = {}
-        Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
-        T.eq(#moves, 0, "a still frame: nothing")
+        T.eq(#moves, 0, "a carried copy isn't moved: hidden")
         world.players[1] = { 20, 0, 1 }
         world.objects[1].pos = { 1.6, 0, 1 }
         Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
-        -- both released; crateA's copy already shows where it stays, crateB moved this frame
-        T.eq(table.concat(moves, ","), "crateB", "only the one whose pose changed")
+        T.eq(carried(s), "- -", "both released")
+        table.sort(moves)
+        T.eq(table.concat(moves, ","), "crateA,crateB", "drawn where they stay")
+        T.ok(items.crateA.displayed and items.crateB.displayed, "and shown")
         moves = {}
         Dynamics.draw(s, { replay_mode = 0, match_frame = 3 })
         T.eq(#moves, 0, "released ones aren't redrawn again")
@@ -408,7 +527,24 @@ T.test("drawn copies: only the carried and the just released are redrawn; a new 
         Dynamics.draw(s, { replay_mode = 0, match_frame = 4 })
         table.sort(moves)
         T.eq(table.concat(moves, ","), "crateA,crateB", "the moved ones drawn again on the new atmo")
+        -- taken again, then Atmo Play leaves the mod: every copy shown at the atmo's pose
+        world.players[1] = { 1.1, 0, 1 }
+        Dynamics.draw(s, { replay_mode = 0, match_frame = 5 })
+        T.ok(not items.crateA.displayed, "carried again: hidden")
+        Dynamics.restoreCopies(s)
+        T.ok(items.crateA.displayed, "restored: shown")
     end)
     Atmospheres, Utils3D = savedAtmo, savedUtils
     if not ok then error(err) end
+end)
+
+T.test("replay: an object that took a prop is painted its color, the copy hidden", function()
+    local s = setup(2)
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    world.objects[0].pos = { 1, 0, 1 } -- object 0 appears at crateA
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 0 })
+    T.eq(carried(s), "crateA -", "watched")
+    T.eq(table.concat(world.objects[0].color, " "), "0.2 0.4 0.6 1", "painted")
+    T.ok(Dynamics.isCarried(s, s.props[1].index), "carried: MGE leaves it to the object")
+    T.ok(not Dynamics.isCarried(s, s.props[2].index), "crateB isn't")
 end)

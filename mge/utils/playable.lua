@@ -158,7 +158,10 @@ local function poolObject(id, group)
     return obj
 end
 
----A prop pool object (Atmo Play's dynamics.lua): hidden, dynamic, resting on the parking platform
+---A prop pool object (Atmo Play's dynamics.lua): dynamic, resting on the parking platform. Faint by its
+---color's alpha (Dynamics.POOL_ALPHA), not "visible 0": the game shows no move predictions (ghost) for a
+---hidden object, and a carried prop should have them like the mod's own dynamic objects. Not alpha 0: the
+---ghost may take the object's alpha
 ---@param id integer 1-48
 ---@param group string "shape|friction"
 ---@return FileParserEnvObj
@@ -170,7 +173,7 @@ local function dynamicObject(id, group)
         kind = "env_obj",
         id = id,
         props = { shape = shape, pos = FileHandler.formatNumbers(x, y, z), rot = "0 0 0", sides = side,
-            color = "1 1 1 1", flag = "0", visible = "0" },
+            color = "1 1 1 " .. Dynamics.POOL_ALPHA, flag = "0", visible = "1" },
         lines = { { raw = Format.DYNAMIC_MARKER } },
     }
     for _, key in ipairs({ "shape", "pos", "rot", "sides", "color", "flag" }) do obj.lines[#obj.lines + 1] = { key = key } end
@@ -349,7 +352,8 @@ function Playable.onMatchBegin()
     for _, object in ipairs(loaded.dynamicObjects or {}) do skip[object.id] = true end
     driver.follow = Driver.dynamicIds(skip)
     if loaded.dynamicObjects and #loaded.dynamicObjects > 0 and #props > 0 then
-        local params = { dradius = ModData.parsed.playable.dradius, noCopies = true }
+        -- follow: the mod's own dynamic objects push props too
+        local params = { dradius = ModData.parsed.playable.dradius, noCopies = true, follow = driver.follow }
         dynamics = Dynamics.new(loaded.dynamicObjects, props, params)
         local d = dynamics
         driver.moreCenters = function() return Dynamics.centers(d) end
@@ -360,12 +364,14 @@ function Playable.onMatchBegin()
     Driver.matchBegin(driver, ws)
 end
 
----A prop's ghost where the prop is now (fights in the editor), else the ghost as it is
+---A prop's ghost where the prop is now (fights in the editor), else the ghost as it is. nil for a carried
+---prop: its pool object shows it (painted its color), two drawn at one pose flickered
 ---@param index integer the atmo object's place in the Atmo list
 ---@param g AtmoGhost
----@return AtmoGhost
+---@return AtmoGhost?
 function Playable.movedGhost(index, g)
     if not dynamics then return g end
+    if Dynamics.isCarried(dynamics, index) then return nil end
     local moved = Dynamics.movedProp(dynamics, index)
     if not moved then return g end
     local cached = moved.ghost
