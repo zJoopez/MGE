@@ -8,7 +8,7 @@
 --   2. Every free static id (above MAX_NONSTATIC, the range static objects need) gets a pool object: a
 --      hidden static object with the pool marker, parked far below the map. No more pool objects than
 --      collidable atmo objects.
---   3. The pool is split by group (shape and friction: the game can't change an object's friction), in
+--   3. The pool is split by group (shape, friction and hardness: the game can't change those on an object), in
 --      proportion to how many of each group a player can have in reach at once (sampled over the map),
 --      at least one per group while ids last.
 --   4. The header and the atmo (the given atmo's lines, then the converted objects), every line behind
@@ -124,10 +124,10 @@ end
 
 ---A pool object's lines
 ---@param id integer
----@param group string "shape|friction"
+---@param group string Colliders.groupKey: "shape|friction" or "shape|friction|hardness"
 ---@return string[]
 local function poolBlock(id, group)
-    local shape, friction = group:match("^([^|]*)|(.*)$")
+    local shape, friction, hardness = Colliders.splitGroup(group)
     local lines = {
         "env_obj " .. id,
         Builder.INDENT .. Format.POOL_MARKER,
@@ -139,6 +139,7 @@ local function poolBlock(id, group)
         Builder.INDENT .. "flag " .. Builder.STATIC_FLAG,
     }
     if friction ~= "" then lines[#lines + 1] = Builder.INDENT .. "friction " .. friction end
+    if hardness ~= "" then lines[#lines + 1] = Builder.INDENT .. "hardness " .. hardness end
     lines[#lines + 1] = Builder.INDENT .. "visible 0"
     return lines
 end

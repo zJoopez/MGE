@@ -7,7 +7,7 @@
 -- In fights (draw2d, once per new match frame, like the static pool):
 --   * wanted: props within `radius` of a player's center or of one of the mod's own dynamic objects
 --     (`follow`: a rolling ball pushes a crate as a player does; distance between bounding spheres), and
---     props touching a moving carried prop (chain reactions); nearest first, per group (shape and friction).
+--     props touching a moving carried prop (chain reactions); nearest first, per group (shape, friction and hardness).
 --     "Nearest" looks LOOKAHEAD seconds ahead: the gap less what the closing speed covers, so props ahead
 --     of a fast object come first and those it leaves behind last (and drop out of reach sooner). Ranked
 --     by tier first: props near a player, then near a dynamic object, then chain ones
@@ -52,6 +52,7 @@ local Colliders = NS.Colliders
 ---@field speed number
 ---@field vel number[]? its linear velocity, read each fight frame while carrying
 ---@field spin number
+---@field flag integer? the flag dress last set (nil: the file's)
 ---@field seen { pos: number[], rot: table }? replays: where it was last seen carrying its prop
 
 ---@class AtmoPlayDynamics
@@ -235,7 +236,7 @@ function Dynamics.new(objects, props, params)
     s.cellSize = math.max(s.radius * 2, 1)
     for _, object in ipairs(objects) do
         local shape = Colliders.shapeOf(object.shape) or "box"
-        s.entries[#s.entries + 1] = { id = object.id, group = shape .. "|" .. Colliders.frictionKey(object.friction),
+        s.entries[#s.entries + 1] = { id = object.id, group = Colliders.groupKey(shape, object.friction, object.hardness),
             prop = nil, speed = 0, spin = 0 }
     end
     table.sort(s.entries, function(a, b) return a.id < b.id end)
@@ -369,13 +370,19 @@ local function event(s, frame, kind, e, prop)
     s.dirty[#s.dirty + 1] = prop
 end
 
----A carrying object painted as its prop: it's what shows while the copy is hidden (drawOne). A prop without
----a color line is white; a "visible 0" one stays unseen (alpha 0). Fights, replays and rebuilds alike (the
----color may not be in replays)
+---A carrying object made its prop: painted its color (it's what shows while the copy is hidden, drawOne; no
+---color line: white, "visible 0": alpha 0) and given its flag (weapon, nogrip: a prop has no static bit;
+---no flag line: 0). Fights, replays and rebuilds alike (neither may be in replays)
 local function dress(e, prop)
+    local id = e.id - 1
     local c = prop.color or {}
     local alpha = prop.visible == false and 0 or (c[4] or 1)
-    pcall(set_obj_color, e.id - 1, c[1] or 1, c[2] or 1, c[3] or 1, alpha)
+    pcall(set_obj_color, id, c[1] or 1, c[2] or 1, c[3] or 1, alpha)
+    local flag = prop.flag or 0
+    if e.flag ~= flag then
+        pcall(set_obj_flag, id, flag)
+        e.flag = flag
+    end
 end
 
 ---The props as they were at a frame: from the events up to it; later ones are dropped (what follows is

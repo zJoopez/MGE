@@ -1,16 +1,14 @@
 -- Core tab: Pos, Rot, Scale (math in utils/transforms.lua), Color, Mass, Shape, Visible, and
 -- Atmo: To atmo (Objects list) / To objects and Save atmo (Atmo list).
 -- Also the Atmo list's Core tab: the same rows on the selected atmo objects (ModData.getEditSelection),
--- through their lines only (an atmo object's id isn't an object's). Mass and Visible aren't there: the
--- game's atmos have neither
+-- through their lines only (an atmo object's id isn't an object's). Mass (props) and Visible ("visible 0":
+-- solid, not drawn) act in Atmo Play; the game's own atmo ignores both lines
 local Rows = MGE.EditorRows
 local ModData = MGE.ModData
 local History = MGE.History
 local SHAPE = MGE.SHAPE
 local getSelected = ModData.getEditSelection
-
----@return boolean the Atmo list shows: its Core tab
-local function atmoShown() return MGE.Main ~= nil and MGE.Main.listTab == "atmo" end
+local atmoShown = Rows.atmoShown
 local inwuts = Rows.inputs
 local readInputs = Rows.readInputs
 local sharedChoice = Rows.sharedChoice
@@ -176,8 +174,7 @@ local function buildCoreProps(holder, selected)
         "RGBA 0-255 (up to 500: brighter), empty fields\nkeep each object's own. Click the name: color picker.",
         pickColor)
     Rows.setHighlighted(colorLabel, MGE.WorldSelect.picking ~= nil) -- rebuilt while picking
-    -- atmo objects have no mass
-    inwuts.coreProps = atmoShown() and {} or Rows.buildPropertyRows(holder, selected, { { "Mass", "mass" } })
+    inwuts.coreProps = Rows.buildPropertyRows(holder, selected, { { "Mass", "mass" } })
 end
 
 -- Shape, flags and visibility. Shape and the static flag are read when the mod loads, so they're
@@ -208,21 +205,23 @@ local function isVisible(obj)
     return vis ~= 0
 end
 
----Shows or hides selected objects, applied live (set_obj_vis) and saved with the next save
+---Shows or hides selected objects, applied live (set_obj_vis) and saved with the next save. Atmo objects:
+---the line only (Rows.afterAtmoEdit)
 ---@param visible boolean
 local function setVisible(visible)
     local value = visible and "1" or "0"
+    local atmo = atmoShown()
     local changed = false
     for _, v in ipairs(getSelected()) do
         if v.props.visible ~= value then
             v.props.visible = value
-            set_obj_vis(v.id - 1, visible and 1 or 0)
+            if not atmo then set_obj_vis(v.id - 1, visible and 1 or 0) end
             changed = true
         end
     end
     if not changed then return end
     History.commit()
-    refreshProperties()
+    if atmo then Rows.afterAtmoEdit("visible") else refreshProperties() end
 end
 
 ---Shape and visibility rows (core panel), the selection's current values are highlighted
@@ -235,12 +234,12 @@ local function buildLooks(holder, selected)
         { label = "Pill", value = "cylinder" }, -- "cylinder" in mod files, round ends in game
     }, sharedChoice(selected, getShape), function(shape) Rows.setSelectedProp("shape", shape) end,
         "Sides are kept, so the size may look different.")
-    if atmoShown() then return end -- atmos have no visibility line (the Atmo tab has Graphics levels)
     createChoiceRow("Visible", holder, {
         { label = "Shown", value = true },
         { label = "Hidden", value = false },
     }, sharedChoice(selected, isVisible), setVisible,
-        "Hidden objects still collide.")
+        atmoShown() and "Hidden: solid in Atmo Play but not drawn\n(invisible walls). The game's atmo ignores it."
+            or "Hidden objects still collide.")
 end
 
 
@@ -262,8 +261,7 @@ local function buildLayerRow(holder)
     end
 end
 
----Color, Mass, Shape, Visible and the Atmo row as one block: rows stack, so the ones atmos don't have
----(Mass, Visible) leave no gap on the Atmo list
+---Color, Mass, Shape, Visible and the Atmo row as one block, on both lists
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[]
 local function buildCoreRest(holder, selected)

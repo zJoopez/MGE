@@ -21,6 +21,7 @@ local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOP
 ---@field id integer the env_obj id as the file writes it (1-based; the game's object id is id - 1)
 ---@field shape string the shape line's first word, as written
 ---@field friction string? the friction line as written, nil without one
+---@field hardness string? the hardness line as written, nil without one
 
 ---@class AtmoPlayModFile
 ---@field header AtmoPlayHeader? nil when the mod isn't playable
@@ -102,7 +103,8 @@ function Format.read(lines)
     local block = nil -- the env_obj block being read: { id, props, marked = marker kind }
     local function closeBlock()
         if block and block.marked then
-            local object = { id = block.id, shape = block.props.shape or "box", friction = block.props.friction }
+            local object = { id = block.id, shape = block.props.shape or "box", friction = block.props.friction,
+                hardness = block.props.hardness }
             if block.marked == "pool" then
                 result.pool[#result.pool + 1] = object
             elseif block.marked == "dynamic" then

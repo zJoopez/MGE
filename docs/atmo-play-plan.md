@@ -406,6 +406,15 @@ Seventh run (no patching; three fights each, both players moving; most body drif
   flickered (worst in replays, the copy a frame behind), so a carried prop's copy is hidden and its object
   painted the prop's color (set_obj_color, fights and replays); MGE skips drawing carried props. Copies
   with textures or models would show as plain colored objects while carried.
+- Atmo objects edited like objects (2026-11-21, user): the Atmo list uses the objects' Core and Advanced
+  panels (Mass, Visible, Friction, Bounce, Hardness, Flags on the atmo lines; the game's atmo parser skips
+  lines it doesn't know, atmospheres_manager.lua), Depth / Graphics / Kept below Flags, no Model, Ids or
+  Thrust (no setters; atmo models are `shape custom`, not solid). Playable moved to the World tab. On a
+  playable mod those lines reload the working copy so the pools follow (Rows.afterAtmoEdit).
+  Hardness is a pool group like friction (`Colliders.groupKey`: "shape|friction|hardness", hardness 0 or
+  none keeps the old key, so mods written before still match). Props get their flag (weapon, nogrip) with
+  their color (dress). Kept lines (count, randompos, rotate, move, parent...) could get a tab of their own
+  later.
 - Not in it: the offline builder, patched replays. Unknown until tried: whether set_obj_mass and set_obj_sides on dynamic objects are recorded in
   replays and change their physics; how cached replays look (objects misplaced, the drawn props follow).
 

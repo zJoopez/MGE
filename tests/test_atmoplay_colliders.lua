@@ -87,6 +87,26 @@ env_obj leveled
     T.eq(Colliders.build({ "env_obj x", "   pos 0 0 0" })[1].shape, "box", "no shape line: a box")
 end)
 
+T.test("pool groups: shape, friction, and hardness when it isn't the default", function()
+    T.eq(Colliders.groupKey("box", "10000", nil), "box|10000", "no hardness: the old key")
+    T.eq(Colliders.groupKey("box", "10000", "0.000000"), "box|10000", "hardness 0 is the default")
+    T.eq(Colliders.groupKey("sphere", nil, "2"), "sphere||2", "hardness only")
+    T.eq(Colliders.groupKey("box", "5", "0.5"), "box|5|0.5", "both")
+    local shape, friction, hardness = Colliders.splitGroup("box|5|0.5")
+    T.eq(shape .. "/" .. friction .. "/" .. hardness, "box/5/0.5", "split back")
+    shape, friction, hardness = Colliders.splitGroup("box|10000")
+    T.eq(shape .. "/" .. friction .. "/" .. hardness, "box/10000/", "an old key splits too")
+    local colliders = Colliders.build(T.lines([[
+env_obj soft
+   pos 0 0 0
+   hardness 0.000000
+env_obj hard
+   pos 1 0 0
+   hardness 3]]))
+    T.eq(colliders[1].group, "box|", "hardness 0: the plain box group")
+    T.eq(colliders[2].group, "box||3", "hardness 3: its own")
+end)
+
 T.test("distance to boxes, spheres and cylinders", function()
     local colliders = Colliders.build({
         "env_obj box", "   shape box", "   pos 0 0 0", "   sides 2 2 2",

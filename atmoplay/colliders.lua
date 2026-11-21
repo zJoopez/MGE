@@ -22,7 +22,7 @@ local Mat3 = NS.Mat3
 ---@field sides number[] box: full sides; sphere: radius first; cylinder: radius, length (along local z)
 ---@field frame number[][] rotation, local to world
 ---@field radius number bounding sphere around pos
----@field group string pool group: shape and friction ("box|10000", "sphere|")
+---@field group string pool group: shape, friction and hardness ("box|10000", "sphere|", "box||5"), Colliders.groupKey
 ---@field friction number?
 ---@field flag integer?
 ---@field bounce number?
@@ -76,6 +76,34 @@ end
 function Colliders.frictionKey(value)
     local n = tonumber(value)
     return n and tostring(n) or ""
+end
+
+---A hardness line as the group key part: "" without one or at the game's default 0 (objects moved to the atmo
+---carry "hardness 0.000000", and pools written before hardness counted have no line: both still match)
+---@param value string|number|nil
+---@return string
+function Colliders.hardnessKey(value)
+    local n = tonumber(value)
+    return (n and n ~= 0) and tostring(n) or ""
+end
+
+---A pool group: what a pool object can't change once loaded (the game has no setter for these), so each
+---kind gets pool objects of its own. "shape|friction", "|hardness" added only when it isn't the default
+---@param shape string
+---@param friction string|number|nil
+---@param hardness string|number|nil
+---@return string
+function Colliders.groupKey(shape, friction, hardness)
+    local h = Colliders.hardnessKey(hardness)
+    return shape .. "|" .. Colliders.frictionKey(friction) .. (h ~= "" and "|" .. h or "")
+end
+
+---A group key's parts (Colliders.groupKey), "" for a missing friction or hardness
+---@param group string
+---@return string shape, string friction, string hardness
+function Colliders.splitGroup(group)
+    local shape, friction, hardness = group:match("^([^|]*)|([^|]*)|?(.*)$")
+    return shape or group, friction or "", hardness or ""
 end
 
 ---A rot line (degrees) as the rotation the game gives the object: rotX(-x) rotY(-y) rotZ(-z), measured in
@@ -166,7 +194,7 @@ function Colliders.build(lines)
                 sides = sides,
                 frame = frame,
                 radius = radius,
-                group = shape .. "|" .. Colliders.frictionKey(p.friction),
+                group = Colliders.groupKey(shape --[[@as string]], p.friction, p.hardness),
                 friction = tonumber(p.friction),
                 flag = tonumber(p.flag),
                 bounce = tonumber(p.bounce),

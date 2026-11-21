@@ -129,13 +129,36 @@ function Playable.poolPlan(parsed, colliders, props)
         atmo = #(parsed.atmo or {}), props = #props, dynamic = dynamic, park = park }
 end
 
+---A pool object's lines in the writer's order: the given keys, then the group's friction and hardness (the
+---game can't change those once loaded: Colliders.groupKey), then visible
+---@param obj FileParserEnvObj
+---@param keys string[]
+---@param group string
+---@return FileParserEnvObj obj
+local function withLines(obj, keys, group)
+    local _, friction, hardness = Colliders.splitGroup(group)
+    for _, key in ipairs(keys) do obj.lines[#obj.lines + 1] = { key = key } end
+    if friction ~= "" then
+        obj.props.friction = friction
+        obj.lines[#obj.lines + 1] = { key = "friction" }
+    end
+    if hardness ~= "" then
+        obj.props.hardness = hardness
+        obj.lines[#obj.lines + 1] = { key = "hardness" }
+    end
+    obj.lines[#obj.lines + 1] = { key = "visible" }
+    return obj
+end
+
+local POOL_KEYS = { "shape", "pos", "rot", "sides", "color", "flag" }
+
 ---A pool object as MGE's file writer writes objects: hidden, static, parked far below the map
 ---@param id integer
----@param group string "shape|friction"
+---@param group string Colliders.groupKey
 ---@return FileParserEnvObj
 local function poolObject(id, group)
-    local shape, friction = group:match("^([^|]*)|(.*)$")
-    local obj = {
+    local shape = Colliders.splitGroup(group)
+    return withLines({
         kind = "env_obj",
         id = id,
         props = {
@@ -148,14 +171,7 @@ local function poolObject(id, group)
             visible = "0",
         },
         lines = { { raw = Format.POOL_MARKER } },
-    }
-    for _, key in ipairs({ "shape", "pos", "rot", "sides", "color", "flag" }) do obj.lines[#obj.lines + 1] = { key = key } end
-    if friction ~= "" then
-        obj.props.friction = friction
-        obj.lines[#obj.lines + 1] = { key = "friction" }
-    end
-    obj.lines[#obj.lines + 1] = { key = "visible" }
-    return obj
+    }, POOL_KEYS, group)
 end
 
 ---A prop pool object (Atmo Play's dynamics.lua): dynamic, resting on the parking platform. Faint by its
@@ -163,26 +179,19 @@ end
 ---hidden object, and a carried prop should have them like the mod's own dynamic objects. Not alpha 0: the
 ---ghost may take the object's alpha
 ---@param id integer 1-48
----@param group string "shape|friction"
+---@param group string Colliders.groupKey
 ---@return FileParserEnvObj
 local function dynamicObject(id, group)
-    local shape, friction = group:match("^([^|]*)|(.*)$")
+    local shape = Colliders.splitGroup(group)
     local x, y, z = Dynamics.parkPos(id)
     local side = FileHandler.formatNumbers(Dynamics.PARK_SIDE, Dynamics.PARK_SIDE, Dynamics.PARK_SIDE)
-    local obj = {
+    return withLines({
         kind = "env_obj",
         id = id,
         props = { shape = shape, pos = FileHandler.formatNumbers(x, y, z), rot = "0 0 0", sides = side,
             color = "1 1 1 " .. Dynamics.POOL_ALPHA, flag = "0", visible = "1" },
         lines = { { raw = Format.DYNAMIC_MARKER } },
-    }
-    for _, key in ipairs({ "shape", "pos", "rot", "sides", "color", "flag" }) do obj.lines[#obj.lines + 1] = { key = key } end
-    if friction ~= "" then
-        obj.props.friction = friction
-        obj.lines[#obj.lines + 1] = { key = "friction" }
-    end
-    obj.lines[#obj.lines + 1] = { key = "visible" }
-    return obj
+    }, POOL_KEYS, group)
 end
 
 ---The props' parking platform: hidden, static, far below the map

@@ -7,8 +7,9 @@
 --   player:   ui/editor_player.lua    Pos, Rot, Scale, parts of the selected players (the Players list's Core tab)
 --   jointLink: ui/editor_link.lua     the 2 linked objects (grid), Create / Update, Reset (the Joints list's Link tab)
 --   joint:    ui/editor_joint.lua     Pos, Axis, Range, Strength, Velocity, Type (the Joints list's Properties tab)
---   atmo:     ui/editor_atmo.lua      Depth, Graphics levels, kept lines, To objects, Save atmo (the Atmo list's
---                                     Atmo tab; its Core tab is core, on the selected atmo objects)
+--   (advanced) ui/editor_atmo.lua     Depth, Graphics levels, kept lines: the Atmo list's own rows on its
+--                                     Advanced tab. Its Core, Advanced and Generate tabs are the objects' panels,
+--                                     on the selected atmo objects (ModData.getEditSelection)
 -- Shared row widgets are in ui/editor_rows.lua, the transform math in utils/transforms.lua.
 -- Every block of rows has its own holder. Fixed blocks are built once (typed values stay), the
 -- others are rebuilt when the selection or the objects change, so their placeholders / highlights
@@ -50,7 +51,7 @@ local MODULES = {
     dofile(MGE.scriptPath .. "ui/editor_player.lua"), -- the Players list's Core tab
     dofile(MGE.scriptPath .. "ui/editor_link.lua"), -- the Joints list's Link tab
     dofile(MGE.scriptPath .. "ui/editor_joint.lua"), -- the Joints list's Properties tab
-    dofile(MGE.scriptPath .. "ui/editor_atmo.lua"), -- the Atmo list's Atmo tab
+    dofile(MGE.scriptPath .. "ui/editor_atmo.lua"), -- the Atmo list's own rows on the Advanced tab
     dofile(MGE.scriptPath .. "ui/editor_misc.lua"), -- the World list's panel
 }
 
@@ -66,7 +67,6 @@ local PANELS = {
     player = { height = PANEL_H }, -- the Players list's Core tab (TAB_SETS in ui/main.lua)
     jointLink = { height = PANEL_H }, -- the Joints list's Link tab
     joint = { height = PANEL_H }, -- the Joints list's Properties tab
-    atmo = { height = PANEL_H }, -- the Atmo list's Atmo tab
     misc = { height = PANEL_H }, -- the World list's panel
 }
 

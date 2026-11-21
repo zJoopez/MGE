@@ -270,12 +270,12 @@ local TAB_SETS = {
         { id = "thrust", label = "Thrust" },
         { id = "generate", label = "Generate" },
     },
-    -- the same Core panel as objects (its rows work on the atmo objects there, utils/transforms.lua),
-    -- the atmo objects' own lines and To objects (ui/editor_atmo.lua), and the same Generate panel (its
-    -- pieces go to the atmo, without joints: ui/editor_generate.lua)
+    -- the same Core, Advanced and Generate panels as objects, their rows on the atmo objects' lines there
+    -- (Advanced with the atmo's own rows instead of Model and Ids: ui/editor_atmo.lua; Generate's pieces go
+    -- to the atmo, without joints: ui/editor_generate.lua)
     atmo = {
         { id = "core", label = "Core" },
-        { id = "atmo", label = "Advanced" }, -- the atmo lines (ui/editor_atmo.lua, panel id "atmo")
+        { id = "advanced", label = "Advanced" },
         { id = "generate", label = "Generate" },
     },
     players = { { id = "player", label = "Core" } },

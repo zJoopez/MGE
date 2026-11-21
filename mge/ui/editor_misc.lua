@@ -6,6 +6,8 @@
 --            Atmos > Atmos), Save writes it
 --   Map:     Convert map (it was on the Advanced tab: adds a whole map, not about the selection)
 --   Mod:     Reset all: loads the classic mod (/lm classic), asks first with unsaved changes
+--   Playable: Off / On, a playable atmo mod (utils/playable.lua; it was on the Atmo list's Advanced tab, the
+--            only row there that wasn't about the selection)
 --   Credits: the last row
 local Rows = MGE.EditorRows
 local Widgets = MGE.Widgets
@@ -184,6 +186,22 @@ local function buildCredits(holder)
     line:addAdaptedText("Project Mod Group Editor by joopez", nil, nil, Widgets.FONT, CENTERMID, Widgets.TEXT_SCALE_SMALL)
 end
 
+---Playable row (utils/playable.lua): Off / On, about the whole mod. On makes the mod a playable atmo mod (its
+---static objects move into the atmo), saved as one and solid in fights in the editor; Off makes it ordinary
+---again. A block: the switch, undo and opening a mod rebuild it (MGE.EditorRows.refreshBlocks({ "playable" }))
+---@param holder UIElement
+local function buildPlayableRow(holder)
+    Rows.begin()
+    local Playable = MGE.Playable
+    local on = Playable.isOn()
+    Rows.createToggleButtonRow("Playable", holder, {
+        { label = "Off", active = not on, onClick = function() Playable.setPlayable(false) end },
+        { label = "On", active = on, onClick = function() Playable.setPlayable(true) end },
+    }, "On: the atmo is solid in fights (Atmo Play for\nplayers, MGE itself while editing), with the\n" ..
+        "atmo objects' Advanced lines. Static objects move\nto the atmo; Save writes the atmo and the objects\n" ..
+        "that follow the players into the mod.\nOff: an ordinary mod and .atmo file.")
+end
+
 ---@type EditorPanelModule
 return {
     fixed = {
@@ -193,5 +211,6 @@ return {
     },
     blocks = {
         { name = "miscFile", build = buildFileRows, panel = "misc", row = 0, rows = 2 },
+        { name = "playable", build = buildPlayableRow, panel = "misc", row = 4, rows = 1 },
     },
 }

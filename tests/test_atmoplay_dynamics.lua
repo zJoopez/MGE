@@ -36,6 +36,7 @@ local function stubEngine()
     get_obj_sides = function(id) local v = obj(id).sides or { 1, 1, 1 } return v[1], v[2], v[3] end
     get_obj_shape = function() return 1 end -- every object a box
     set_obj_color = function(id, r, g, b, a) obj(id).color = { r, g, b, a } end
+    set_obj_flag = function(id, flag) obj(id).flag = flag end
     get_body_linear_vel = function() return 0, 0, 0 end -- players stand still
     set_obj_linear_vel = function(id, x, y, z) obj(id).lin = { x, y, z } end
     set_obj_angular_vel = function(id, x, y, z) obj(id).ang = { x, y, z } end
@@ -60,7 +61,7 @@ env_obj crateB
    shape box
    pos 1.5 0 1
    sides 0.4 0.4 0.4
-   flag 0
+   flag 6
 env_obj far
    shape box
    pos 30 30 1
@@ -146,6 +147,8 @@ T.test("fight: props near a player are taken, a far one isn't", function()
     T.eq(world.objects[0].mass, 0.3, "crateA's mass")
     T.eq(world.objects[1].mass, 1, "crateB has no mass line: the object's own")
     T.near(world.objects[0].sides[1], 0.4, 1e-9, "the crate's size")
+    T.eq(world.objects[0].flag, 0, "crateA: flag 0")
+    T.eq(world.objects[1].flag, 6, "crateB's weapon flag on its object")
     T.eq(#s.events, 2, "two takes")
     T.eq(s.events[1].frame, 0, "match_begin's moves are tagged frame 0")
     local centers = Dynamics.centers(s)

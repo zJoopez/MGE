@@ -21,11 +21,11 @@ The window has five lists, each with its own tabs.
 
 | List | Tabs |
 |---|---|
-| **Objects** | **Core**: position, rotation, scale, color, mass, shape, visibility, To atmo. **Advanced**: friction, bounce, flags, model, reindexing ids. **Thrust**: frames, direction, axes. **Generate**: rows, rings and grids of new objects, each piece turned with Rot or the Rotate gizmo. |
-| **Atmo** | **Core**: position, rotation, scale, color, shape, To objects, Save atmo. **Advanced**: depth, graphics levels, kept lines. **Generate**: as on Objects. |
+| **Objects** | **Core**: position, rotation, scale, color, mass, shape, visibility, To atmo. **Advanced**: friction, bounce, hardness, flags, model, reindexing ids. **Thrust**: frames, direction, axes. **Generate**: rows, rings and grids of new objects, each piece turned with Rot or the Rotate gizmo. |
+| **Atmo** | **Core**: as on Objects, with To objects and Save atmo. **Advanced**: friction, bounce, hardness, flags (as on Objects, for Atmo Play), depth, graphics levels, kept lines. **Generate**: as on Objects. |
 | **Joints** | **Link**: the two objects a joint connects, picked in the list or, with Pick from world on, in the world. **Properties**: position, axis, range, strength, velocity, type. |
 | **Players** | Start position, rotation, scale and body parts of each player. |
-| **World** | The mod's message, the atmo's shader, map import, Reset all (loads the classic mod). |
+| **World** | The mod's message, the atmo's shader, map import, Reset all (loads the classic mod), Playable (a playable atmo mod). |
 
 - Number fields apply what you type when you leave them (click elsewhere) or press Enter, then show the
   new value as their placeholder. Esc while typing drops it. The Generate tab's fields keep their text:
@@ -59,10 +59,12 @@ the mod.
   - **Import** reads an `.atmo` from `assets/atmo` or `data/atmospheres` (the game's atmos and your own)
     and adds its objects where the file has them. **Export** writes the selected ones to `assets/atmo`.
   - On this list the atmo objects are drawn in their own color and the mod's objects turn see-through.
-- **Editing:** the **Core** tab is the objects' Core tab (Pos, Rot, Scale, Color, Shape), on the selected
-  atmo objects. The gizmo, clicks and Shift + drag work the same. Its last row has **To objects** and **Save atmo**.
-  The **Advanced** tab has what only atmos have: **Depth** (drawn on top), **Graphics** (the graphics levels
-  it shows at) and the lines MGE keeps without editing them. The **Generate** tab works as on Objects, and its pieces
+- **Editing:** the **Core** and **Advanced** tabs are the objects' tabs, on the selected atmo objects. The
+  gizmo, clicks and Shift + drag work the same. Core's last row has **To objects** and **Save atmo**.
+  Mass, Visible, Friction, Bounce, Hardness and Flags only act in a playable atmo mod (Atmo Play, below): the
+  game's own atmo ignores those lines. Static off makes a prop, pushable in Atmo Play. Model and Ids aren't on
+  the Atmo list. Below Flags are what only atmos have: **Depth** (drawn on top), **Graphics** (the graphics
+  levels it shows at) and, when there are any, the lines MGE keeps without editing them. The **Generate** tab works as on Objects, and its pieces
   go to the atmo (no joints field there: atmos have none).
 - **To atmo** (Objects → Core) moves the selected objects into the atmo and frees their ids. **To
   objects** moves atmo objects back while there are free ids. Objects joined by a joint stay.
@@ -89,7 +91,7 @@ Atmo objects are only drawn: tori fall through them. A **playable atmo mod** mak
 the **Atmo Play** script, which the players need: it moves hidden objects onto the atmo objects near
 each player, in fights, and the game records those moves, so replays need nothing extra.
 
-- **Atmo list → Advanced → Playable: On / Off** (for the whole mod, whatever is selected). On makes the mod playable, one undo step:
+- **World → Playable: On / Off** (for the whole mod, whatever is selected). On makes the mod playable, one undo step:
   - its static objects move into the atmo (like To atmo; dynamic, joint-linked and model objects stay objects),
   - fights in the editor are solid: MGE moves the pool with the same code Atmo Play uses (hide the window
     with F1 to play: the atmo stays drawn, as it looks in game),

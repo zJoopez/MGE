@@ -135,11 +135,36 @@ T.test("Atmo Play reads MGE's playable mods the same way", function()
         local groups = {}
         for _, c in ipairs(colliders) do groups[c.group] = true end
         for _, p in ipairs(file.pool) do
-            local key = (p.shape or "box") .. "|" .. ATMOPLAY.Colliders.frictionKey(p.friction)
+            local key = ATMOPLAY.Colliders.groupKey(p.shape or "box", p.friction, p.hardness)
             T.ok(groups[key], "pool group " .. key .. " has colliders in Atmo Play")
         end
     end)
     if not ok then error(err) end
+end)
+
+T.test("hardness: its own pool group, written on the pool objects, read back by Atmo Play", function()
+    smallMod()
+    Playable.setPlayable(true)
+    for _, obj in ipairs(ModData.parsed.atmo) do
+        if obj.props.shape == "sphere" then obj.props.hardness = "2" else obj.props.hardness = "0.000000" end
+    end
+    local text, plan = Playable.text(ModData.parsed, Atmo.currentText())
+    local groups = {}
+    for _, p in ipairs(plan.objects) do groups[p.group] = (groups[p.group] or 0) + 1 end
+    T.eq(groups["sphere||2"], 1, "the ball's hardness is its own group")
+    T.eq(groups["box|10000"], 2, "hardness 0 (the default) changes nothing")
+    local file = ATMOPLAY.Format.read(splitLines(text))
+    local hard = 0
+    for _, p in ipairs(file.pool) do
+        if p.hardness then
+            hard = hard + 1
+            T.eq(p.hardness, "2", "the hardness line on the pool object")
+        end
+    end
+    T.eq(hard, 1, "one pool object with a hardness line")
+    local colliders = ATMOPLAY.Colliders.build(file.atmo)
+    local pool = ATMOPLAY.Pool.new(file.pool, colliders, file.header)
+    T.ok(pool and pool.targets["sphere||2"] and #pool.targets["sphere||2"] == 1, "Atmo Play: the ball has its pool object")
 end)
 
 T.test("opening a playable mod: pool left out, its ids free, atmo and params from the file", function()

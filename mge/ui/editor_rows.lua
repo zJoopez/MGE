@@ -9,7 +9,6 @@ MGE.EditorRows = Rows
 local Widgets = MGE.Widgets
 local History = MGE.History
 local ModData = MGE.ModData
-local getSelected = ModData.getSelected
 
 ---@type table<string, UIElement[]> input fields by list name (pos, color, thrust...), filled by the builders
 Rows.inputs = {}
@@ -21,6 +20,25 @@ Rows.refreshMeasured = function() end
 ---@type fun(names: string[]) rebuilds the named blocks (EditorBlock.name)
 Rows.refreshBlocks = function() end
 local function refreshProperties() Rows.refreshProperties() end
+
+---@return boolean the Atmo list shows: the panels edit the selected atmo objects' lines (ModData.getEditSelection)
+function Rows.atmoShown() return MGE.Main ~= nil and MGE.Main.listTab == "atmo" end
+
+-- atmo lines Atmo Play reads (its colliders and the pool's groups): the game's own atmo ignores them
+local ATMO_PHYSICS = { shape = true, friction = true, bounce = true, hardness = true, mass = true, flag = true,
+    visible = true }
+
+---After atmo objects' lines changed (committed): atmo objects aren't in the .tbm, the rows just show the new
+---values. On a playable mod a line Atmo Play reads reloads the working copy instead (MGE.apply): its pool
+---(split by shape, friction, hardness and static or not) and MGE's own fights follow the change
+---@param key string? the line that changed, nil for several
+function Rows.afterAtmoEdit(key)
+    if MGE.Playable and MGE.Playable.isOn() and (key == nil or ATMO_PHYSICS[key]) then
+        MGE.apply()
+    else
+        Rows.refreshProperties()
+    end
+end
 
 local totalHeight = 0
 
@@ -427,23 +445,27 @@ local function formatProperty(property, value)
     return string.format("%." .. property.decimals .. "f", value)
 end
 
----Sets a property on all selected objects from an input field, empty input does nothing
+---Sets a property on all selected objects (on the Atmo list the atmo objects: their lines only, an atmo
+---object's id isn't an object's) from an input field, empty input does nothing
 ---@param key "mass"|"friction"|"bounce"|"hardness"
 ---@param input UIElement
 local function setProperty(key, input)
     local value = tonumber(input.textfieldstr[1])
     if not value then return end
-    local selectedObjects = getSelected()
+    local atmo = Rows.atmoShown()
+    local selectedObjects = ModData.getEditSelection()
     if #selectedObjects == 0 then return end
 
     local property = PROPERTIES[key]
     if property.min then value = math.max(value, property.min) end
     for _, v in ipairs(selectedObjects) do
         v.props[key] = formatProperty(property, value)
-        if property.setter then property.setter(v.id - 1, value) end
+        if property.setter and not atmo then property.setter(v.id - 1, value) end
     end
     History.commit()
-    if property.setter then
+    if atmo then
+        Rows.afterAtmoEdit(key)
+    elseif property.setter then
         refreshProperties()
     else
         MGE.apply() -- reload rebuilds the editor with the new value
@@ -470,7 +492,8 @@ local function buildPropertyRows(holder, selected, entries)
         -- value shared by the selection ("mixed" when they differ): the file's line (what MGE writes,
         -- undoes and saves), else the live value, else the game default
         local hint = sharedChoice(selected, function(obj)
-            local value = tonumber(obj.props[key]) or (property.getter and property.getter(obj.id - 1))
+            local value = tonumber(obj.props[key])
+                or (property.getter and obj.kind ~= "atmo" and property.getter(obj.id - 1)) -- atmo: no live value
             return formatProperty(property, value or property.default)
         end) or formatProperty(property, property.default)
         local row = createInputRow(label, holder, function(rowInputs) setProperty(key, rowInputs[1]) end,
@@ -481,12 +504,11 @@ local function buildPropertyRows(holder, selected, entries)
 end
 
 ---Writes a prop on all selected objects (on the Atmo list the atmo objects) and saves if any of them
----changed. Atmo objects aren't in the .tbm: no reload, the rows show the new value
+---changed. Atmo objects: Rows.afterAtmoEdit
 ---@param key string
----@param value string
+---@param value string?
 local function setSelectedProp(key, value)
     local changed = false
-    local atmo = MGE.Main and MGE.Main.listTab == "atmo"
     for _, v in ipairs(ModData.getEditSelection()) do
         if v.props[key] ~= value then
             v.props[key] = value
@@ -495,7 +517,7 @@ local function setSelectedProp(key, value)
     end
     if not changed then return end
     History.commit()
-    if atmo then refreshProperties() else MGE.apply() end
+    if Rows.atmoShown() then Rows.afterAtmoEdit(key) else MGE.apply() end
 end
 
 

@@ -213,7 +213,7 @@ function AtmoLayer.toAtmo()
     if #ModData.parsed.atmo > before and MGE.Main then MGE.Main.setListTab("atmo") end
 end
 
----To objects (the Atmo list's Atmo tab): moveOut, then the Objects list shows them, still selected
+---To objects (the Atmo list's Core tab): moveOut, then the Objects list shows them, still selected
 function AtmoLayer.toObjects()
     local before = #ModData.parsed.atmo
     AtmoLayer.moveOut()
