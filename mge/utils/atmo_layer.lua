@@ -1,11 +1,11 @@
--- The atmo layer: atmo objects, kept in ModData.parsed.atmo and in the mod's own atmosphere file,
--- data/atmospheres/MGE - <mod>.atmo (utils/atmo.lua: read with the mod, written by Save when it
--- changed). The game draws atmo objects without collisions and past its object limit
--- (MGE.MAX_ENV_OBJECTS); each player loads the atmo themselves (main menu's Shaders & Atmos > Atmos).
+-- The atmo layer: atmo objects, kept in ModData.parsed.atmo and saved inside the mod (utils/atmo.lua: read with
+-- the mod, written by Save). The game draws atmo objects without collisions and past its object limit
+-- (MGE.MAX_ENV_OBJECTS); Atmo Play draws a mod's atmo, or a player loads its exported .atmo file
+-- (World > Export) through the main menu's Shaders & Atmos > Atmos.
 -- MGE draws them itself (utils/highlight.lua with AtmoLayer.ghost); the Atmo list shows them (A1, A2...).
 --   To atmo (Objects > Advanced):  the selected objects become atmo objects, their ids are free for others
 --   To objects (the Atmo tab):     selected atmo objects come back as objects, as many as there are free ids
---   Save atmo:                     writes the atmo file now, without saving the mod
+--   Export atmo (World > Export):  writes the atmo as a separate .atmo file (AtmoLayer.exportAtmo)
 -- Atmo objects aren't in the world, but they're edited like objects (utils/transforms.lua reads and
 -- writes their lines). AtmoLayer.moveBy / rotateBy / scaleBy only draw a gizmo drag's preview.
 -- Only so many are drawn (the nearest): the game draws only so many shapes a frame, and the Generate
@@ -471,22 +471,24 @@ end
 
 table.insert(MGE.onQuit, function() AtmoLayer.setObjectsSeeThrough(false) end)
 
----Export atmo: writes the atmo layer to the mod's file now, data/atmospheres/MGE - <mod>.atmo, as Save
----does (utils/atmo.lua). Loading it is up to the player (main menu > Shaders & Atmos > Atmos)
+---Export atmo (World > Export): writes the atmo as it is now to its own file, data/atmospheres/MGE - <mod>.atmo,
+---for players without Atmo Play (main menu > Shaders & Atmos > Atmos). Save keeps the atmo inside the mod
 function AtmoLayer.exportAtmo()
     if not MGE.sourcePath then
         MGE.say("save the mod first: its atmo is named after it")
         return
     end
-    if #ModData.parsed.atmo == 0 then
-        MGE.say("the atmo is empty: To atmo (Objects > Advanced) or New add to it")
+    if MGE.Atmo.contentCount() == 0 then
+        MGE.say("the atmo is empty: To atmo (Objects > Core) or New add to it")
         return
     end
-    if not MGE.Atmo.hasChanges() then
-        MGE.say("data/atmospheres/" .. tostring(MGE.Atmo.fileName(MGE.sourcePath)) .. " is up to date")
-        return
+    local name = MGE.Atmo.export(MGE.sourcePath)
+    if name then
+        MGE.say("exported data/atmospheres/" .. name .. " (" .. #ModData.parsed.atmo .. " atmo objects; load it in" ..
+            " Shaders & Atmos > Atmos)")
+    else
+        MGE.say("couldn't write data/atmospheres/" .. tostring(MGE.Atmo.fileName(MGE.sourcePath)))
     end
-    MGE.Atmo.saveFor(MGE.sourcePath)
 end
 
 return AtmoLayer

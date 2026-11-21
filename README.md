@@ -22,10 +22,10 @@ The window has five lists, each with its own tabs.
 | List | Tabs |
 |---|---|
 | **Objects** | **Core**: position, rotation, scale, color, mass, shape, visibility, To atmo. **Advanced**: friction, bounce, hardness, flags, model, reindexing ids. **Thrust**: frames, direction, axes. **Generate**: rows, rings and grids of new objects, each piece turned with Rot or the Rotate gizmo. |
-| **Atmo** | **Core**: as on Objects, with To objects and Save atmo. **Advanced**: friction, bounce, hardness, flags (as on Objects, for Atmo Play), depth, graphics levels, kept lines. **Generate**: as on Objects. |
+| **Atmo** | **Core**: as on Objects, with To objects. **Advanced**: friction, bounce, hardness, flags (as on Objects, for Atmo Play), depth, graphics levels, kept lines. **Generate**: as on Objects. |
 | **Joints** | **Link**: the two objects a joint connects, picked in the list or, with Pick from world on, in the world. **Properties**: position, axis, range, strength, velocity, type. |
 | **Players** | Start position, rotation, scale and body parts of each player. |
-| **World** | The mod's message, the atmo's shader, map import, Reset all (loads the classic mod), Atmo: Playable / Default (a playable atmo mod, or the atmo only drawn). |
+| **World** | The mod's message, the atmo's shader, map import, Reset all (loads the classic mod), Atmo: Playable / Default (a playable atmo mod, or the atmo only drawn), Export (Atmo, Mod). |
 
 - Number fields apply what you type when you leave them (click elsewhere) or press Enter, then show the
   new value as their placeholder. Esc while typing drops it. The Generate tab's fields keep their text:
@@ -60,7 +60,7 @@ the mod.
     and adds its objects where the file has them. **Export** writes the selected ones to `assets/atmo`.
   - On this list the atmo objects are drawn in their own color and the mod's objects turn see-through.
 - **Editing:** the **Core** and **Advanced** tabs are the objects' tabs, on the selected atmo objects. The
-  gizmo, clicks and Shift + drag work the same. Core's last row has **To objects** and **Save atmo**.
+  gizmo, clicks and Shift + drag work the same. Core's last row has **To objects**.
   Mass, Visible, Friction, Bounce, Hardness and Flags only act in a playable atmo mod (Atmo Play, below): the
   game's own atmo ignores those lines. Static off makes a prop, pushable in Atmo Play. Model and Ids aren't on
   the Atmo list. Below Flags are what only atmos have: **Depth** (drawn on top), **Graphics** (the graphics
@@ -68,10 +68,12 @@ the mod.
   go to the atmo (no joints field there: atmos have none).
 - **To atmo** (Objects → Core) moves the selected objects into the atmo and frees their ids. **To
   objects** moves atmo objects back while there are free ids. Objects joined by a joint stay.
-- **Saving:** Save keeps the atmo in `data/atmospheres/MGE - <mod>.atmo`, next to the mod, and opening the
-  mod reads it back. Save writes that file only when the atmo changed. If you remove every atmo object,
-  Save asks before emptying the file. Scripts can't delete files, so delete it by hand if you don't want it.
-  **Save atmo** writes it without saving the mod.
+- **Saving:** Save keeps the atmo **inside the mod**, as `#@` comment lines the game skips (one file to
+  share), and opening the mod reads it back. **Atmo Play** draws it when the mod is loaded (a playable mod: also
+  solid). For players without Atmo Play, **World → Export**: **Atmo** writes
+  `data/atmospheres/MGE - <mod>.atmo` (loaded in the game's Shaders & Atmos > Atmos), **Mod** writes
+  `<mod>_clean.tbm`, the mod without its atmo. Mods saved before atmos went inside them still open with their
+  `MGE - <mod>.atmo`.
 - **The game's own atmo** is unloaded when MGE starts, so the saved copy loaded in game doesn't show on
   top of the one you're editing. Your default atmo setting isn't changed.
 - **Players tab:** atmo objects remain visible as translucent ghosts, like on the Objects tab.
@@ -98,8 +100,8 @@ each player, in fights, and the game records those moves, so replays need nothin
   - **Save** writes one file into `modmaker/` like any mod: the mod, the atmo inside it (as `#@` comment lines
     the game skips) and a pool of hidden static objects on every free id. No separate `.atmo` file.
 
-  Default makes it an ordinary mod again (the atmo only drawn); its atmo objects stay in the atmo, and Save writes
-  `MGE - <mod>.atmo`. Switching to Playable again moves static objects added since.
+  Default makes it an ordinary mod again (the atmo only drawn, still saved inside the mod); its atmo objects stay
+  in the atmo. Switching to Playable again moves static objects added since.
 - Opening a playable mod reads its atmo back into the Atmo list and the Atmo row shows Playable; the pool isn't shown
   (it's made again from the free ids on every save and reload).
 - Solid are boxes, spheres and capsules with a position. Custom models and objects with `count`, random

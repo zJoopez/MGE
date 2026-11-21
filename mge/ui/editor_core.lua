@@ -1,5 +1,5 @@
 -- Core tab: Pos, Rot, Scale (math in utils/transforms.lua), Color, Mass, Shape, Visible, and
--- Atmo: To atmo (Objects list) / To objects and Save atmo (Atmo list).
+-- Atmo: To atmo (Objects list) / To objects (Atmo list; a separate .atmo file is World > Export).
 -- Also the Atmo list's Core tab: the same rows on the selected atmo objects (ModData.getEditSelection),
 -- through their lines only (an atmo object's id isn't an object's). Mass (props) and Visible ("visible 0":
 -- solid, not drawn) act in Atmo Play; the game's own atmo ignores both lines
@@ -244,16 +244,15 @@ end
 
 
 ---Atmo row (the Core tab's last): moving between the lists. On the Objects list To atmo (the selected objects
----into the atmo), on the Atmo list To objects and Save atmo (the mod's .atmo now, without saving the mod).
----Rebuilt with the list it's on (utils/atmo_layer.lua)
+---into the atmo), on the Atmo list To objects. Rebuilt with the list it's on (utils/atmo_layer.lua). The atmo is
+---saved inside the mod; a separate .atmo file is World > Export
 ---@param holder UIElement
 local function buildLayerRow(holder)
     if atmoShown() then
         Rows.createToggleButtonRow("Atmo", holder, {
             { label = "To objects", active = false, onClick = function() MGE.AtmoLayer.toObjects() end },
-            { label = "Save atmo", active = false, onClick = function() MGE.AtmoLayer.exportAtmo() end },
         }, "To objects: back into the game (as many as ids are free).\n" ..
-            "Save atmo: writes the atmo now, without the mod.")
+            "Save keeps the atmo inside the mod (World > Export\nwrites it as a separate .atmo file).")
     else
         Rows.createToggleButtonRow("Atmo", holder, {
             { label = "To atmo", active = false, onClick = function() MGE.AtmoLayer.toAtmo() end },

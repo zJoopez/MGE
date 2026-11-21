@@ -414,13 +414,20 @@ function ModData.reloadObjects()
     -- kept like the atmo layer: the working copy is an ordinary mod. Opening a mod sets it (main.lua)
     local playable = ModData.parsed and ModData.parsed.playable
     init()
-    ModData.loadedPlayable = nil
+    ModData.loadedPlayable, ModData.loadedAtmo = nil, nil
 
     if MGE.modPath then
-        -- a playable mod (utils/playable.lua): its pool and atmo lines aren't parsed as the mod
+        -- a playable mod (utils/playable.lua): its pool and atmo lines aren't parsed as the mod. A drawn mod
+        -- (Default, utils/atmo.lua's bundledText) has only the atmo lines: its atmo, nothing playable
         local lines = FileHandler.readLines(MGE.modFolder .. MGE.modPath) or {}
         local split = MGE.Playable and MGE.Playable.split(lines)
-        if split and split.header then ModData.loadedPlayable = split end
+        if split and split.header then
+            if MGE.AtmoPlay.Format.isDrawOnly(split.header) then
+                ModData.loadedAtmo = split.atmo
+            else
+                ModData.loadedPlayable = split
+            end
+        end
         ModData.parsed = FileHandler.parseLines(split and split.lines or lines)
         -- shared body/joint parts (fatkido.tbm) as every player's own section, written back shared while
         -- they're all the same

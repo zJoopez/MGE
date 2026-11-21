@@ -5,6 +5,8 @@
 --   * a header line, "#atmoplay v1 rule=1 radius=4": format version and the pool rule's parameters
 --     (dradius=2: the props' reach)
 --   * after the header, the atmo: every atmo line behind ATMO_PREFIX ("#@ ")
+-- A DRAWN mod (MGE's Default, the atmo only drawn) has no pools: its header says "mode=draw" ("#atmoplay v1
+-- mode=draw"), and Atmo Play only draws its atmo.
 -- The game skips every "#" line of a mod, and its atmo parser only reads lines starting with shader,
 -- shaderopt, opt and env_obj, so neither sees the atmo part (measured: a 5k-object atmo as "#@ " lines
 -- doesn't slow /lm down and adds no objects).
@@ -16,6 +18,7 @@ local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOP
 ---@field rule integer? pool rule number (Pool.RULES)
 ---@field radius number? pool reach from a player's center
 ---@field dradius number? dynamic props' reach (dynamics.lua)
+---@field mode string? "draw": the atmo is only drawn (no pools), Format.isDrawOnly
 
 ---@class AtmoPlayPoolObject
 ---@field id integer the env_obj id as the file writes it (1-based; the game's object id is id - 1)
@@ -42,6 +45,8 @@ local Format = {
     DYNAMIC_MARKER = "#atmoplay dynamic",
     PARK_MARKER = "#atmoplay park",
     NOTE = "#atmoplay note: a playable atmo map, needs the Atmo Play script (without it nothing in the atmo is solid)",
+    DRAW_NOTE = "#atmoplay note: this mod's atmo is in its #@ lines, drawn by the Atmo Play script (MGE exports it as an .atmo file)",
+    DRAW_MODE = "draw",
     ATMO_PREFIX = "#@ ",
 }
 
@@ -69,14 +74,21 @@ function Format.isOwnLine(line)
     return line:match("^%s*#atmoplay") ~= nil or line:match("^#@") ~= nil
 end
 
----@param params { rule: integer?, radius: number?, dradius: number? }
+---@param params { rule: integer?, radius: number?, dradius: number?, mode: string? }
 ---@return string
 function Format.headerLine(params)
     local parts = { "#atmoplay v" .. Format.VERSION }
+    if params.mode then parts[#parts + 1] = "mode=" .. params.mode end
     if params.rule then parts[#parts + 1] = "rule=" .. params.rule end
     if params.radius then parts[#parts + 1] = "radius=" .. params.radius end
     if params.dradius then parts[#parts + 1] = "dradius=" .. params.dradius end
     return table.concat(parts, " ")
+end
+
+---@param header AtmoPlayHeader?
+---@return boolean a drawn mod's header: the atmo only drawn, no pools
+function Format.isDrawOnly(header)
+    return header ~= nil and header.mode == Format.DRAW_MODE
 end
 
 ---@param line string a block's line, trimmed

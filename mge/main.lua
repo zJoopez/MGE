@@ -239,8 +239,9 @@ MGE_SOURCE = MGE_SOURCE
 ---Functions over the old instance's data, so they give its latest, however that instance ended
 MGE_ATMO = MGE_ATMO
 
----The opened mod's atmo: from inside it for a playable mod (utils/playable.lua, read by
----ModData.reloadObjects), otherwise from its MGE - <mod>.atmo; and whether it's playable
+---The opened mod's atmo: from inside it (a playable mod, utils/playable.lua, or a drawn one, Default's Save: both
+---read by ModData.reloadObjects), otherwise from its MGE - <mod>.atmo (mods saved before atmos went inside them);
+---and whether it's playable
 local function loadSourceAtmo()
     local loaded = ModData.loadedPlayable
     ModData.parsed.playable = loaded and {
@@ -248,7 +249,7 @@ local function loadSourceAtmo()
         radius = tonumber(loaded.header.radius) or MGE.Playable.DEFAULT_RADIUS,
     } or nil
     MGE.savedPlayable = loaded ~= nil -- the file as it is: playable or not
-    Atmo.load(MGE.modPath, loaded and loaded.atmo)
+    Atmo.load(MGE.modPath, loaded and loaded.atmo or ModData.loadedAtmo)
     if MGE.EditorRows then MGE.EditorRows.refreshBlocks({ "playable" }) end -- the World tab's Atmo row (Playable / Default)
 end
 
@@ -343,7 +344,14 @@ local function writeMod(path)
             written = true
         end
     else
-        written = FileHandler.WriteMod(parsed, MGE.modFolder .. path)
+        -- Default: the mod with its atmo inside (a drawn mod, utils/atmo.lua): one file to share, Atmo Play
+        -- draws the atmo; World > Export writes a separate .atmo and a mod without it
+        local file = Files.Open(MGE.modFolder .. path, FILES_MODE_WRITE)
+        if file and file.data then
+            file:writeLine(Atmo.bundledText(FileHandler.modText(parsed)))
+            file:close()
+            written = true
+        end
     end
     if not written then
         MGE.say("couldn't save " .. path)
@@ -354,15 +362,42 @@ local function writeMod(path)
     if plan then
         MGE.say(string.format("saved %s: playable, %d atmo objects (%d solid), %d pool objects", path, plan.atmo,
             plan.solid, #plan.objects))
-        Atmo.markSaved() -- the atmo is in the mod file
     else
-        MGE.say("saved " .. path)
-        Atmo.saveFor(path) -- the atmo layer's file, when it changed (asks before deleting an emptied one)
+        local count = #(ModData.parsed.atmo or {})
+        MGE.say("saved " .. path .. (count > 0 and (" with its atmo (" .. count .. " objects, drawn)") or ""))
     end
+    Atmo.markSaved() -- the atmo is in the mod file
     -- the saved mod is what gets shared, say so if dynamic objects won't fully work in it
     local warning = MGE.Main and MGE.Main.dynamicWarning()
     if warning then MGE.say("saved with " .. warning) end
     MGE.apply()
+end
+
+---World > Export > Clean mod: the mod as the game reads it, without its atmo and pools (what Save puts inside it
+---for Atmo Play), written next to where Save writes as <name>_clean.tbm. A playable mod's static objects are in its
+---atmo, so its clean copy has only what stayed objects. Asks before replacing that file
+function MGE.exportCleanMod()
+    local target = MGE.saveTarget()
+    if not target then
+        MGE.say("save the mod first: the clean copy is named after it")
+        return
+    end
+    local folder, name = splitModPath(target)
+    local path = folder .. name .. "_clean.tbm"
+    local function write()
+        MGE.syncGamerules()
+        if FileHandler.WriteMod(ModData.parsedFor(path), MGE.modFolder .. path) then
+            MGE.say("exported " .. path .. ": the mod without its atmo" ..
+                (MGE.Playable.isOn() and " (playable: its static objects are in the atmo, not in this copy)" or ""))
+        else
+            MGE.say("couldn't write " .. path)
+        end
+    end
+    if Files.Exists(MGE.modFolder .. path) then
+        MGE.confirm(name .. "_clean.tbm already exists. Overwrite it?", write)
+    else
+        write()
+    end
 end
 
 ---True when writing path would replace a file that isn't ours (the source): an earlier copy or

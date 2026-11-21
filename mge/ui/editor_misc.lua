@@ -8,6 +8,8 @@
 --   Mod:     Reset all: loads the classic mod (/lm classic), asks first with unsaved changes
 --   Atmo:    Playable / Default, a playable atmo mod (utils/playable.lua; it was on the Atmo list's Advanced tab, the
 --            only row there that wasn't about the selection)
+--   Export:  Atmo (data/atmospheres/MGE - <mod>.atmo) and Mod (<mod>_clean.tbm, without its atmo): for
+--            players without Atmo Play; Save keeps the atmo inside the mod
 --   Credits: the last row
 local Rows = MGE.EditorRows
 local Widgets = MGE.Widgets
@@ -200,7 +202,21 @@ local function buildPlayableRow(holder)
         { label = "Default", active = not on, onClick = function() Playable.setPlayable(false) end },
     }, "Playable: the atmo is solid in fights (Atmo Play\nfor players, MGE itself while editing), with the\n" ..
         "atmo objects' Advanced lines. Static objects move\nto the atmo; Save writes the atmo and the objects\n" ..
-        "that follow the players into the mod.\nDefault: only drawn, an ordinary mod and .atmo file.")
+        "that follow the players into the mod.\nDefault: only drawn (by Atmo Play), saved inside\nthe mod as well.")
+end
+
+---Export row: "clean" copies for players without Atmo Play. Save keeps the atmo inside the mod (Atmo Play draws it,
+---or makes it solid); Atmo writes it as data/atmospheres/MGE - <mod>.atmo for the game's own atmo menu, Mod
+---writes the mod without it as <mod>_clean.tbm
+---@param holder UIElement
+local function buildExportRow(holder)
+    Rows.begin()
+    createToggleButtonRow("Export", holder, {
+        { label = "Atmo", active = false, onClick = function() MGE.AtmoLayer.exportAtmo() end },
+        { label = "Mod", active = false, onClick = function() MGE.exportCleanMod() end },
+    }, "Save keeps the atmo inside the mod: Atmo Play\ndraws it. For players without Atmo Play:\n" ..
+        "Atmo: data/atmospheres/MGE - <mod>.atmo, loaded\nin Shaders & Atmos > Atmos.\n" ..
+        "Mod: <mod>_clean.tbm, the mod without its atmo.")
 end
 
 ---@type EditorPanelModule
@@ -208,6 +224,7 @@ return {
     fixed = {
         { build = buildMapRow, panel = "misc", row = 2, rows = 1 },
         { build = buildModRow, panel = "misc", row = 3, rows = 1 },
+        { build = buildExportRow, panel = "misc", row = 5, rows = 1 },
         { build = buildCredits, panel = "misc", row = 8, rows = 1 },
     },
     blocks = {

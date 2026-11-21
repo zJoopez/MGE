@@ -1,11 +1,10 @@
--- Atmo files: MGE's atmo layer (the atmo objects, ModData.parsed.atmo, utils/atmo_layer.lua) is kept in
--- a Toribash atmosphere file per mod, data/atmospheres/MGE - <mod>.atmo, not in the mod file. Atmos are
--- drawn by each player's game (main menu > Shaders & Atmos > Atmos), never shared through the mod, and
--- keeping them out of the .tbm keeps the reload after every edit light. Plan: docs/atmo-tab-plan.md.
---   Opening a mod reads its atmo (Atmo.load).
---   Save writes the atmo only when its text changed since it was read or written (Atmo.saveFor). An
---     emptied layer asks, then empties the file: the game has no way for scripts to delete one (os.remove
---     didn't, tried in game 2026-11-14), and an empty atmo loads nothing.
+-- Atmo files: MGE's atmo layer (the atmo objects, ModData.parsed.atmo, utils/atmo_layer.lua) is saved INSIDE the
+-- mod (2026-11-21): a Default mod's Save writes it behind Atmo Play's draw-only header (Atmo.bundledText), a
+-- playable mod's behind its playable one (utils/playable.lua); the game skips both, Atmo Play draws the atmo.
+-- One file to share. Plan: docs/atmo-tab-plan.md.
+--   Opening a mod reads its atmo from inside it, or from data/atmospheres/MGE - <mod>.atmo for a mod saved
+--     before atmos went inside mods (Atmo.load).
+--   World > Export writes that separate .atmo file (Atmo.export) for the game's own atmo menu, no script needed.
 --   The working copy (MGE.apply) carries no atmo: reloads keep the layer in memory (ModData.reloadObjects),
 --     a script restart takes it from MGE_ATMO.
 -- The reader keeps every line of an object in order, also the ones MGE doesn't edit (count, randompos,
@@ -163,19 +162,6 @@ function Atmo.fileName(modPath)
     return Atmo.prefix .. name .. ".atmo"
 end
 
----What Save does with the atmo layer
----@param text string the layer's text now (Atmo.text)
----@param count integer atmo objects
----@param target string the file Save writes the atmo to (Atmo.fileName of the saved mod)
----@param saved { name: string?, text: string? } the file last read or written (Atmo.state)
----@param exists boolean the target file is there
----@return "write"|"empty"|"none" empty: the layer was emptied, Save asks before emptying the file
-function Atmo.saveAction(text, count, target, saved, exists)
-    if exists and saved.name == target and saved.text == text then return "none" end
-    if count == 0 then return exists and "empty" or "none" end
-    return "write"
-end
-
 ---What the atmo file would hold: its objects, and its shader line counts as one (an atmo with just a
 ---shader, set on the World list, is still worth a file)
 ---@return integer
@@ -250,7 +236,7 @@ function Atmo.applyShader(restore)
     runCmd("lws " .. file)
 end
 
----@param embedded string[]? a playable mod's atmo lines (utils/playable.lua): read instead of the file
+---@param embedded string[]? the atmo lines inside the mod (a playable or a drawn mod): read instead of the file
 function Atmo.load(modPath, embedded)
     local name = Atmo.fileName(modPath)
     local lines = embedded or (name and readLines(name))
@@ -263,59 +249,41 @@ function Atmo.load(modPath, embedded)
     ModData.parsed.atmo = file.objects
     Atmo.state = { name = name, header = file.header }
     Atmo.state.text = Atmo.currentText()
-    MGE.say("atmo: " .. #file.objects .. " objects from " .. (embedded and "the playable mod" or ("data/atmospheres/" .. name)))
+    MGE.say("atmo: " .. #file.objects .. " objects from " .. (embedded and "the mod file" or ("data/atmospheres/" .. name)))
+end
+
+---A Default mod's file: the mod with its atmo inside, as Atmo Play reads it (a drawn mod: header
+---"#atmoplay v1 mode=draw", the atmo behind "#@ ", the game skips both). Without an atmo (no objects, no
+---shader): the mod as it is. Export (the World tab) still writes a separate .atmo and a mod without it
+---@param modText string FileHandler.modText of the mod
+---@return string
+function Atmo.bundledText(modText)
+    if Atmo.contentCount() == 0 then return modText end
+    local Format = MGE.AtmoPlay.Format
+    local out = { Format.DRAW_NOTE, modText, "", Format.headerLine({ mode = Format.DRAW_MODE }) }
+    for line in (Atmo.currentText() .. "\n"):gmatch("(.-)\n") do
+        out[#out + 1] = line == "" and "#@" or (Format.ATMO_PREFIX .. line)
+    end
+    return table.concat(out, "\n")
+end
+
+---Writes data/atmospheres/MGE - <mod>.atmo now: the atmo for the game's own atmo menu, no script needed (World >
+---Export). It doesn't change what Save does
+---@param modPath string the mod, under data/mod
+---@return string? name the file written, nil when it couldn't be
+function Atmo.export(modPath)
+    local name = Atmo.fileName(modPath)
+    if not name then return nil end
+    local file = Files.Open(Atmo.folder .. name, FILES_MODE_WRITE)
+    if not file or not file.data then return nil end
+    for line in (Atmo.currentText() .. "\n"):gmatch("(.-)\n") do file:writeLine(line) end
+    file:close()
+    return name
 end
 
 ---The layer counts as saved as it is now (a playable mod's Save: the atmo went into the mod file)
 function Atmo.markSaved()
     Atmo.state.text = Atmo.currentText()
-end
-
----@param name string
----@return boolean
-local function exists(name)
-    return Files.Exists(Atmo.folder .. name)
-end
-
----Writes the layer to data/atmospheres/name
----@param name string
----@param text string
----@return boolean
-local function write(name, text)
-    local file = Files.Open(Atmo.folder .. name, FILES_MODE_WRITE)
-    if not file or not file.data then
-        MGE.say("couldn't write data/atmospheres/" .. name)
-        return false
-    end
-    for line in (text .. "\n"):gmatch("(.-)\n") do file:writeLine(line) end
-    file:close()
-    return true
-end
-
----Save's part for the atmo layer: writes data/atmospheres/MGE - <mod>.atmo when the layer changed (or the
----mod was saved under a new name), asks before emptying it when the layer was emptied
----@param modPath string the saved mod, under data/mod
-function Atmo.saveFor(modPath)
-    local name = Atmo.fileName(modPath)
-    if not name then return end
-    local atmoObjs = ModData.parsed.atmo or {}
-    local text = Atmo.currentText()
-    local action = Atmo.saveAction(text, Atmo.contentCount(), name, Atmo.state, exists(name))
-    if action == "write" then
-        if write(name, text) then
-            Atmo.state.name, Atmo.state.text = name, text
-            MGE.say("saved data/atmospheres/" .. name .. " (" .. #atmoObjs .. " atmo objects)")
-        end
-    elseif action == "empty" then
-        MGE.confirm("No atmo objects left. Empty data/atmospheres/" .. name .. "?", function()
-            if write(name, text) then
-                Atmo.state.name, Atmo.state.text = name, text
-                MGE.say("emptied data/atmospheres/" .. name .. " (scripts can't delete files: delete it by hand if you like)")
-            end
-        end)
-    else
-        Atmo.state.name = name
-    end
 end
 
 return Atmo

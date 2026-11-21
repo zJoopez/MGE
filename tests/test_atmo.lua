@@ -93,17 +93,40 @@ T.test("the mod's atmo file name", function()
     T.eq(Atmo.fileName(nil), nil, "no mod, no name")
 end)
 
-T.test("Save writes the atmo only when it changed", function()
-    local saved = { name = "MGE - a.atmo", text = "X" }
-    T.eq(Atmo.saveAction("X", 3, "MGE - a.atmo", saved, true), "none", "unchanged")
-    T.eq(Atmo.saveAction("Y", 3, "MGE - a.atmo", saved, true), "write", "changed")
-    T.eq(Atmo.saveAction("X", 3, "MGE - b.atmo", saved, false), "write", "saved under a new name")
-    T.eq(Atmo.saveAction("X", 3, "MGE - a.atmo", saved, false), "write", "the file was deleted meanwhile")
-    T.eq(Atmo.saveAction("", 0, "MGE - a.atmo", saved, true), "empty", "emptied: asks, then empties the file")
-    T.eq(Atmo.saveAction("", 0, "MGE - a.atmo", saved, false), "none", "empty and no file: nothing to do")
-    T.eq(Atmo.saveAction("", 0, "MGE - a.atmo", { name = "MGE - a.atmo", text = "" }, true), "none",
-        "already emptied: not asked again")
-    T.eq(Atmo.saveAction("X", 3, "MGE - a.atmo", { header = {} }, false), "write", "nothing read yet")
+T.test("a Default mod's Save: the atmo inside the mod (a drawn mod), read back; no atmo: the mod as it is", function()
+    local Format = MGE.AtmoPlay.Format
+    ModData.parsed = { env_obj = {}, env_obj_joint = {}, atmo = {}, ignores = {} }
+    T.files["../data/atmospheres/MGE - lamp.atmo"] = SAMPLE
+    Atmo.load("modmaker/lamp.tbm") -- two objects
+    local modText = "gamerule\n   numplayers 2\nenv_obj 1\n   pos 0 0 0"
+    local text = Atmo.bundledText(modText)
+    local lines = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+    T.eq(lines[1], Format.DRAW_NOTE, "the note first")
+    local split = Format.split(lines)
+    T.ok(Format.isDrawOnly(split.header), "Atmo Play's draw-only header")
+    T.eq((table.concat(split.lines, "\n"):gsub("%s+$", "")), modText, "the mod as it was (a blank line after it)")
+    local atmo = Atmo.parse(split.atmo)
+    T.eq(#atmo.objects, 2, "the atmo's objects inside")
+    local file = Format.read(lines)
+    T.eq(#file.pool + #file.dynamic, 0, "no pools: drawn only")
+    ModData.parsed.atmo = {}
+    Atmo.state.header = {}
+    T.eq(Atmo.bundledText(modText), modText, "no atmo: the mod as it is")
+end)
+
+T.test("opening a drawn mod reads its atmo from inside it, and it isn't playable", function()
+    ModData.parsed = { env_obj = {}, env_obj_joint = {}, atmo = {}, ignores = {} }
+    T.files["../data/atmospheres/MGE - lamp.atmo"] = SAMPLE
+    Atmo.load("modmaker/lamp.tbm")
+    local text = Atmo.bundledText("env_obj 1\n   pos 0 0 0")
+    T.files["drawn.tbm"] = text
+    MGE.modFolder, MGE.modPath = "", "drawn.tbm"
+    get_obj_pos = function() return nil end
+    ModData.reloadObjects()
+    T.eq(ModData.loadedPlayable, nil, "not playable")
+    T.ok(ModData.loadedAtmo and #ModData.loadedAtmo > 0, "its atmo lines")
+    T.eq(#ModData.parsed.env_obj, 1, "the mod's own object, no atmo line parsed as one")
 end)
 
 T.test("opening a mod reads its atmo, edits count as changes", function()

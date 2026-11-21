@@ -156,7 +156,7 @@ end
 
 ---Start the loaded pool over (driver.lua)
 local function resetPool()
-    if state.loaded then Driver.reset(state.loaded.driver) end
+    if state.loaded and state.loaded.driver then Driver.reset(state.loaded.driver) end
 end
 
 ---------------------------------------------------------------------------------------------------- debug log
@@ -283,6 +283,23 @@ end
 ---Reads a playable mod and draws its atmo. nil when the mod isn't playable (or can't be read)
 ---@param path string
 ---@return AtmoPlayLoaded?
+---Draws a mod's atmo: the drawn part written as the cache atmo and loaded through the game's manager
+---@param atmoLines string[]
+---@return boolean drawn
+local function drawModAtmo(atmoLines)
+    if not manager() then
+        say("the game's atmosphere manager isn't loaded, the atmo isn't drawn")
+        return false
+    end
+    if not writeLines(Runtime.ATMO_FOLDER .. Runtime.CACHE_ATMO, Format.drawnLines(atmoLines)) then
+        say("couldn't write data/atmospheres/" .. Runtime.CACHE_ATMO .. ", the atmo isn't drawn")
+        return false
+    end
+    local drawn = loadAtmo(Runtime.CACHE_ATMO)
+    state.drawnByUs = drawn
+    return drawn
+end
+
 local function loadPlayable(path)
     local start = clock()
     local lines = readLines(Runtime.MOD_FOLDER .. path)
@@ -296,6 +313,12 @@ local function loadPlayable(path)
     if type(mge) == "table" and mge.running then
         say(name .. ": MGE is open, it plays playable mods itself (World > Atmo: Playable)")
         return nil
+    end
+    -- a drawn mod (MGE's Default): its atmo is only drawn, there are no pools (driver nil: the hooks skip it)
+    if Format.isDrawOnly(file.header) then
+        local drawn = drawModAtmo(file.atmo)
+        say(string.format("%s: its atmo drawn (%d lines, not solid: a drawn mod)", name, #file.atmo))
+        return { path = path, name = name, file = file, drawn = drawn, drawOnly = true }
     end
     local colliders, stats, props = Colliders.build(file.atmo)
     local pool, err = Pool.new(file.pool, colliders, file.header)
@@ -328,17 +351,7 @@ local function loadPlayable(path)
     end
     local parsed = clock()
 
-    local drawn = false
-    if manager() then
-        if writeLines(Runtime.ATMO_FOLDER .. Runtime.CACHE_ATMO, Format.drawnLines(file.atmo)) then
-            drawn = loadAtmo(Runtime.CACHE_ATMO)
-            state.drawnByUs = drawn
-        else
-            say("couldn't write data/atmospheres/" .. Runtime.CACHE_ATMO .. ", the atmo isn't drawn")
-        end
-    else
-        say("the game's atmosphere manager isn't loaded, the atmo isn't drawn")
-    end
+    local drawn = drawModAtmo(file.atmo)
 
     local skipped = 0
     for _, n in pairs(stats.skipped) do skipped = skipped + n end
@@ -415,7 +428,7 @@ local function onMatchBegin()
     if state.loaded then
         local ws = get_world_state()
         runDynamics(Dynamics.matchBegin, ws)
-        Driver.matchBegin(state.loaded.driver, ws)
+        if state.loaded.driver then Driver.matchBegin(state.loaded.driver, ws) end
         -- a replay that opened cached (its mod loaded inside open_replay, after the cache was made)
         if ws.replay_mode > 0 and state.loaded.dynamics and get_replay_cache and (get_replay_cache() or 0) > 0 then
             say("this replay opened cached: props may not move in it. Open it again (the cache is off now)")
@@ -431,7 +444,7 @@ local function onDraw2d()
         local ws = get_world_state()
         logObjects(ws)
         runDynamics(Dynamics.draw, ws)
-        Driver.draw(state.loaded.driver, ws)
+        if state.loaded.driver then Driver.draw(state.loaded.driver, ws) end
         flushTrace()
     end
 end
@@ -450,6 +463,10 @@ function Runtime.status()
         say("running; the loaded mod (" .. tostring(state.modName) .. ") isn't a playable mod")
         return
     end
+    if loaded.drawOnly then
+        say(loaded.name .. ": a drawn mod, its atmo " .. (loaded.drawn and "drawn" or "not drawn") .. " (no pools)")
+        return
+    end
     local d = loaded.driver
     say(string.format("%s: %d/%d pool objects in use, %d solid atmo objects; pool step %.2f ms average, %.2f ms worst (%d frames)",
         loaded.name, Driver.active(d), #loaded.pool.entries, loaded.stats.collidable,
@@ -465,7 +482,7 @@ end
 ---Debug: pool objects visible (green) where they stand in for an atmo object
 function Runtime.toggleShow()
     state.show = not state.show
-    if state.loaded then Driver.setShow(state.loaded.driver, state.show) end
+    if state.loaded and state.loaded.driver then Driver.setShow(state.loaded.driver, state.show) end
     say("pool objects " .. (state.show and "shown in green" or "hidden"))
 end
 
@@ -498,7 +515,7 @@ local function onCommand(text)
         state.hold = not state.hold
         say(state.hold and "pool held: not moved at all (nothing is solid)" or "pool moving again")
         if state.loaded then
-            state.loaded.driver.hold = state.hold
+            if state.loaded.driver then state.loaded.driver.hold = state.hold end
             if not state.hold then resetPool() end
         end
     elseif rest == "quit" then

@@ -140,6 +140,24 @@ local function run(name, fn)
     end)
 end
 
+run("a drawn mod (MGE's Default): its atmo drawn, nothing moved", function(game)
+    local Format = ATMOPLAY.Format
+    local lines = { Format.DRAW_NOTE, "env_obj 1", "    shape box", "    flag 8", "",
+        Format.headerLine({ mode = Format.DRAW_MODE }) }
+    for _, line in ipairs(ATMO) do lines[#lines + 1] = Format.ATMO_PREFIX .. line end
+    game.files["../data/mod/drawn.tbm"] = table.concat(lines, "\n")
+    local Runtime = startRuntime()
+    game.lm("drawn.tbm")
+    T.ok(Runtime.state.loaded and Runtime.state.loaded.drawOnly, "read as a drawn mod")
+    T.eq(game.loads[#game.loads], "Atmo Play.atmo", "its atmo drawn")
+    T.ok(game.files["../data/atmospheres/Atmo Play.atmo"]:find("env_obj wall", 1, true) ~= nil, "the mod's atmo")
+    T.eq(#game.play(30, false, 1), 0, "a fight moves nothing")
+    game.fire("leave_game")
+    T.eq(#game.play(10, true), 0, "nor a replay")
+    game.fire("command", "atmoplay")
+    T.ok(game.said[#game.said]:find("drawn mod", 1, true) ~= nil, "the status says so")
+end)
+
 run("start: options untouched, normal mod left alone, playable mod drawn", function(game)
     local Runtime = startRuntime()
     T.eq(game.options.replaycache, 2, "replaycache isn't touched")

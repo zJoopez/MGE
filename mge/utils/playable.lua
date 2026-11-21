@@ -383,7 +383,7 @@ function Playable.setPlayable(on)
         ModData.parsed.playable = nil
         History.commit()
         MGE.apply() -- the working copy without its pool
-        MGE.say("not playable: Save writes an ordinary mod and its atmo file again")
+        MGE.say("atmo: Default, drawn only (Save keeps it inside the mod; World > Export for clean copies)")
         changed = true
     end
     refreshRow()

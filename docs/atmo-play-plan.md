@@ -520,6 +520,12 @@ flagged) while watching, and going back to a fight from a replay puts back the o
   props of another weight get pool objects written with it and nothing is set live any more; a static
   object's mass doesn't count (it doesn't move).
 - **Online play: not supported** (user, 2026-11-21). Atmo Play is for single player and replays.
+- **Drawn mods (2026-11-21, user):** MGE's Default (not playable) Save keeps the atmo inside the mod too, behind
+  `#atmoplay v1 mode=draw` (`Format.isDrawOnly`, `Atmo.bundledText`): one file to share, Atmo Play draws it (no
+  pools). The game skips the lines, so without Atmo Play the map just isn't drawn. World > Export writes the
+  clean copies for players without Atmo Play: Atmo (`data/atmospheres/MGE - <mod>.atmo`) and Mod
+  (`<mod>_clean.tbm`, without its atmo). Save atmo left the Atmo list's Core row; the save-time `.atmo` logic
+  (`saveFor`, `saveAction`) went. Mods saved before still open with their separate `.atmo`.
 - **Frame time measured:** a match frame is ~0.006 s (test2.rpl: the cube moved 0.1798 between two
   recorded frames at a recorded 29.98 per second), so `LOOKAHEAD = 0.1` s is ~17 frames ahead as meant.
 - **Cleanup (2026-11-21):** the probe scripts (native, timing, replay, size, dynamic, replay patch, bounce)

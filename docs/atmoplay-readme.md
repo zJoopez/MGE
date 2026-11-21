@@ -8,12 +8,15 @@ Atmo objects that aren't static are **props**: pushable crates and the like. A s
 dynamic objects carries the props near the players (and near the mod's own moving objects); a carried prop
 shows the game's move predictions like any dynamic object.
 
+Mods made with MGE keep their atmo inside the mod file even when it isn't playable (**drawn mods**): Atmo
+Play draws those too, without making anything solid.
+
 ## Use
 
 1. Unzip into `data/script` (you get `data/script/atmoplay/`).
 2. `/ls atmoplay/atmoplay.lua`. It runs until the game closes or `/atmoplay quit`; opening the menu or
    loading other scripts doesn't stop it.
-3. `/lm` a playable mod: its atmo is drawn and the map is solid.
+3. `/lm` a playable mod: its atmo is drawn and the map is solid. A drawn mod: its atmo is drawn.
 4. Loading a normal mod gives you your own atmo back.
 
 Commands: `/atmoplay` (status), `/atmoplay show` (the pool objects in green), `/atmoplay reload` (read the
