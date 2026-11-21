@@ -86,6 +86,58 @@ T.test("convert: static objects into the atmo, the mod playable, one undo step",
     T.ok(ModData.parsed.playable ~= nil, "redo: playable again")
 end)
 
+T.test("Default: the objects Playable moved come back as far as ids allow, the rest stay", function()
+    local static = smallMod()
+    local extra = object(70, { flag = "8" })
+    table.insert(ModData.parsed.env_obj, extra)
+    for i = #ModData.freeIds.static, 1, -1 do
+        if ModData.freeIds.static[i] == 70 then table.remove(ModData.freeIds.static, i) end
+    end
+    MGE.History.reset()
+    T.ok(Playable.setPlayable(true), "on")
+    T.eq(#ModData.parsed.atmo, 6, "both static objects moved")
+    T.eq(static.props[MGE.AtmoLayer.FROM_KEY], "60", "marked with the old id")
+    local text = Atmo.currentText()
+    T.ok(text:find("mge_was_object 60", 1, true) ~= nil, "the mark is saved with the atmo")
+    -- the mod fills up: one free id left, not the old ones
+    local free = ModData.freeIds
+    local keep = table.remove(free.nonStatic, 1)
+    free.static, free.nonStatic = {}, { keep }
+    local said = {}
+    local say = MGE.say
+    MGE.say = function(msg) said[#said + 1] = msg end
+    T.ok(Playable.setPlayable(false), "off")
+    MGE.say = say
+    T.ok(not Playable.isOn(), "not playable")
+    T.eq(#ModData.parsed.env_obj, 4, "one came back")
+    T.eq(#ModData.parsed.atmo, 5, "one stays in the atmo")
+    T.eq(ModData.parsed.env_obj[1].id, keep, "on the free id")
+    local warned = false
+    for _, msg in ipairs(said) do if msg:find("stay in the atmo", 1, true) then warned = true end end
+    T.ok(warned, "says some stay")
+    local stays = 0
+    for _, obj in ipairs(ModData.parsed.atmo) do
+        if obj.props[MGE.AtmoLayer.FROM_KEY] then stays = stays + 1 end
+    end
+    T.eq(stays, 1, "the one left keeps its mark")
+end)
+
+T.test("To objects drops Playable's mark; the atmo's own objects never had one", function()
+    smallMod()
+    Playable.setPlayable(true)
+    local marked = 0
+    for _, obj in ipairs(ModData.parsed.atmo) do
+        obj.selected = obj.props[MGE.AtmoLayer.FROM_KEY] and true or nil
+        if obj.selected then marked = marked + 1 end
+    end
+    T.eq(marked, 1, "only the converted object is marked")
+    MGE.AtmoLayer.moveOut()
+    for _, obj in ipairs(ModData.parsed.env_obj) do
+        T.eq(obj.props[MGE.AtmoLayer.FROM_KEY], nil, "no mark on objects")
+    end
+    T.eq(#ModData.parsed.env_obj, 4, "back")
+end)
+
 T.test("the playable text: pool on free static ids, header, atmo; read back", function()
     smallMod()
     Playable.setPlayable(true)
@@ -322,9 +374,16 @@ T.test("On: the working copy carries the pool, MGE moves it like Atmo Play; Off 
         T.ok(Playable.setPlayable(false), "off")
         T.ok(not Playable.isOn(), "not playable")
         T.eq(#MGE.History.states, steps + 1, "one undo step")
-        T.eq(#ModData.parsed.atmo, 5, "the atmo objects stay in the atmo")
+        T.eq(#ModData.parsed.atmo, 4, "the atmo's own objects stay in the atmo")
+        T.eq(#ModData.parsed.env_obj, 4, "the object Playable moved is an object again")
+        local back
+        for _, obj in ipairs(ModData.parsed.env_obj) do if obj.props.friction == "10000" then back = obj end end
+        T.ok(back ~= nil and back.kind == "env_obj", "the converted one")
+        T.eq(back and back.id, 60, "on its old id")
+        T.eq(back and back.props[MGE.AtmoLayer.FROM_KEY], nil, "without Playable's mark")
         MGE.History.undo()
         T.ok(Playable.isOn(), "undo: playable again")
+        T.eq(#ModData.parsed.atmo, 5, "undo: back in the atmo")
         ModData.loadedPlayable = nil
     end)
     for _, name in ipairs(names) do rawset(_G, name, saved[name]) end

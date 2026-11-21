@@ -526,6 +526,12 @@ flagged) while watching, and going back to a fight from a replay puts back the o
   clean copies for players without Atmo Play: Atmo (`data/atmospheres/MGE - <mod>.atmo`) and Mod
   (`<mod>_clean.tbm`, without its atmo). Save atmo left the Atmo list's Core row; the save-time `.atmo` logic
   (`saveFor`, `saveAction`) went. Mods saved before still open with their separate `.atmo`.
+- **Default undoes Playable's move (2026-11-22, user):** Playable writes `mge_was_object <id>`
+  (`AtmoLayer.FROM_KEY`) on the objects it moves into the atmo; it's saved with the atmo, so it survives
+  reopening, and the game's atmo loader skips it. Default moves the marked ones back
+  (`AtmoLayer.returnObjects`, shared with To objects): their old id when it's free, other free ids next, as
+  many as there are; the rest stay in the atmo, marked, and MGE says how many. One undo step with the
+  switch. To objects drops the mark. A duplicate of a marked object carries the mark too.
 - **Frame time measured:** a match frame is ~0.006 s (test2.rpl: the cube moved 0.1798 between two
   recorded frames at a recorded 29.98 per second), so `LOOKAHEAD = 0.1` s is ~17 frames ahead as meant.
 - **Cleanup (2026-11-21):** the probe scripts (native, timing, replay, size, dynamic, replay patch, bounce)
@@ -643,3 +649,21 @@ flagged) while watching, and going back to a fight from a replay puts back the o
 4. **Release.** Packaging done (`tools/package.ps1`: mge.zip and atmoplay.zip; README
    `docs/atmoplay-readme.md`). Phase 3 checked in game (user, 2026-11-20: "seems to work"). Left: maybe a
    small status window; committing. No converter in the runtime (part 5).
+
+## Future ideas (out of scope for now)
+
+### Jointed atmo assemblies (user, 2026-11-22)
+
+Atmo objects joined by joints (doors, hanging lamps, chains), played the way props are: a pool of whole
+**assemblies** (the real objects and their `env_obj_joint`s) parked above the map, and the one nearest a player
+placed onto that copy of the assembly: every part at its pose, at rest. Its drawn copy hides while it's
+carried, as a prop's does.
+
+- **First step, a probe:** do joints survive the move? Joint anchors are stored relative to the bodies they
+  join, so setting every part's pose together (relative poses kept) should leave the joints intact. Test with
+  a 2-3 part assembly: move it, then check its parts stay together and its joints still act as before.
+- **Costs:** every part takes one of the 48 dynamic ids (shared with props and the mod's own dynamic objects:
+  a 4-part assembly x 3 pooled copies is 12); assemblies share a pool only when identical (parts, sizes, joints:
+  one group per design); a moved assembly holds state (joint angles, motion), so it can only be given back at
+  rest, which motorized joints may never reach; MGE needs a new atmo kind (atmo has no joints today:
+  authoring, drawing, the Atmo list, saving); every prop concern (drawn copies, replays, freezing) times parts.

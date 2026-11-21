@@ -202,7 +202,8 @@ local function buildPlayableRow(holder)
         { label = "Default", active = not on, onClick = function() Playable.setPlayable(false) end },
     }, "Playable: the atmo is solid in fights (Atmo Play\nfor players, MGE itself while editing), with the\n" ..
         "atmo objects' Advanced lines. Static objects move\nto the atmo; Save writes the atmo and the objects\n" ..
-        "that follow the players into the mod.\nDefault: only drawn (by Atmo Play), saved inside\nthe mod as well.")
+        "that follow the players into the mod.\nDefault: only drawn (by Atmo Play), saved inside\nthe mod as well. " ..
+        "The objects Playable moved\nare objects again (as many as free ids allow).")
 end
 
 ---Export row: "clean" copies for players without Atmo Play. Save keeps the atmo inside the mod (Atmo Play draws it,

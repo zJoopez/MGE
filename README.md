@@ -100,8 +100,11 @@ each player, in fights, and the game records those moves, so replays need nothin
   - **Save** writes one file into `modmaker/` like any mod: the mod, the atmo inside it (as `#@` comment lines
     the game skips) and a pool of hidden static objects on every free id. No separate `.atmo` file.
 
-  Default makes it an ordinary mod again (the atmo only drawn, still saved inside the mod); its atmo objects stay
-  in the atmo. Switching to Playable again moves static objects added since.
+  Default makes it an ordinary mod again (the atmo only drawn, still saved inside the mod). The objects Playable
+  moved into the atmo become objects again, on their old ids when those are free, as many as there are free ids;
+  MGE says how many stay in the atmo when ids run out (To objects moves them later). The atmo's own objects stay.
+  Playable remembers the objects it moved with a `mge_was_object` line, saved with the atmo (the game skips it).
+  Switching to Playable again moves static objects added since.
 - Opening a playable mod reads its atmo back into the Atmo list and the Atmo row shows Playable; the pool isn't shown
   (it's made again from the free ids on every save and reload).
 - Solid are boxes, spheres and capsules with a position. Custom models and objects with `count`, random

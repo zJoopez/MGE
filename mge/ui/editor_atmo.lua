@@ -16,7 +16,8 @@ local sharedChoice = Rows.sharedChoice
 -- the lines atmo objects use that MGE edits (the Core and Advanced tabs): every other one is kept as it is
 local EDITED = { shape = true, pos = true, rot = true, sides = true, color = true, no_depth = true,
     min_level = true, max_level = true, mass = true, visible = true, friction = true, bounce = true,
-    hardness = true, flag = true }
+    hardness = true, flag = true,
+    mge_was_object = true } -- Playable's mark (AtmoLayer.FROM_KEY), not for editing
 
 ---Writes a line on the selected atmo objects (nil: removes it), one undo step when one changed
 ---@param key string

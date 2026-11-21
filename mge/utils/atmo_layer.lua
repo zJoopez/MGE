@@ -131,7 +131,8 @@ end
 
 ---Moves the selected objects into the atmo: they leave the game's objects (their ids are freed), still
 ---selected. Objects joined by a joint stay: a joint can only hold objects in the game
-function AtmoLayer.moveIn()
+---@param mark boolean? Playable's move: each gets the FROM_KEY line (its id), so Default can move it back
+function AtmoLayer.moveIn(mark)
     local selected = ModData.getSelected()
     if #selected == 0 then
         MGE.say("select the objects to move to the atmo first")
@@ -146,6 +147,7 @@ function AtmoLayer.moveIn()
                 joined = joined + 1
             else
                 writeMissingLines(obj)
+                if mark then obj.props[AtmoLayer.FROM_KEY] = tostring(obj.id) end
                 MGE.Atmo.fromMod(obj)
                 obj.kind = "atmo"
                 table.remove(ModData.parsed.env_obj, i)
@@ -167,29 +169,57 @@ function AtmoLayer.moveIn()
     MGE.apply()
 end
 
----Moves the selected atmo objects back: they get free ids and are objects in the game again, still selected. When
----there aren't enough ids the first ones come back and the rest stay in the atmo
-function AtmoLayer.moveOut()
-    local list = ModData.getSelectedAtmo()
-    if #list == 0 then
-        MGE.say("select atmo objects (the Atmo list) to move back first")
-        return
+-- the line Playable (World > Atmo) writes on the objects it moves into the atmo: their object id. Default moves
+-- them back with it (utils/playable.lua). Saved with the atmo, which keeps it over reopening; the game's
+-- atmo loader skips it like the other object lines (flag, mass...)
+AtmoLayer.FROM_KEY = "mge_was_object"
+
+---Takes id off the free lists when it's on one
+---@param id integer?
+---@return boolean taken
+local function takeFreeId(id)
+    for _, pool in pairs(ModData.freeIds) do
+        for i, free in ipairs(pool) do
+            if free == id then
+                table.remove(pool, i)
+                return true
+            end
+        end
     end
-    local free = ModData.freeCount()
-    local count = math.min(#list, free)
-    if count == 0 then
-        MGE.say("no free object ids (" .. MGE.MAX_ENV_OBJECTS .. " in the game): move or delete objects first")
-        return
+    return false
+end
+
+---Makes atmo objects objects again: free ids (an object Playable moved gets its old id back when that one's
+---free), out of the atmo, without the FROM_KEY line. When there aren't enough ids the first ones come back
+---and the rest stay in the atmo. No undo step: the caller commits
+---@param list FileParserEnvObj[] atmo objects
+---@return integer count moved back
+function AtmoLayer.returnObjects(list)
+    local count = math.min(#list, ModData.freeCount())
+    if count == 0 then return 0 end
+    local ids, plans, planned = {}, {}, {}
+    for i = 1, count do
+        local old = tonumber(list[i].props[AtmoLayer.FROM_KEY])
+        if old and takeFreeId(old) then
+            ids[i] = old
+        else
+            plans[#plans + 1] = { pool = ModData.idPool(list[i], false, {}), linked = false }
+            planned[#plans] = i
+        end
     end
-    local plans = {}
-    for i = 1, count do plans[i] = { pool = ModData.idPool(list[i], false, {}), linked = false } end
-    local ids = ModData.allocateIds(plans)
-    if not ids then return end -- allocateIds says why
+    local got = ModData.allocateIds(plans) -- fits: count is at most the free ids
+    if not got then
+        for i = 1, count do if ids[i] then ModData.releaseId(ids[i]) end end
+        return 0
+    end
+    for k, i in ipairs(planned) do ids[i] = got[k] end
     local back = {}
     for i = 1, count do
-        back[list[i]] = true
-        list[i].id, list[i].kind = ids[i], "env_obj"
-        table.insert(ModData.parsed.env_obj, list[i])
+        local obj = list[i]
+        back[obj] = true
+        obj.props[AtmoLayer.FROM_KEY] = nil
+        obj.id, obj.kind = ids[i], "env_obj"
+        table.insert(ModData.parsed.env_obj, obj)
     end
     local stay = {}
     for _, obj in ipairs(ModData.parsed.atmo) do
@@ -200,6 +230,22 @@ function AtmoLayer.moveOut()
     end
     ModData.parsed.atmo = stay
     ModData.sortObjects()
+    return count
+end
+
+---Moves the selected atmo objects back: they get free ids and are objects in the game again, still selected. When
+---there aren't enough ids the first ones come back and the rest stay in the atmo
+function AtmoLayer.moveOut()
+    local list = ModData.getSelectedAtmo()
+    if #list == 0 then
+        MGE.say("select atmo objects (the Atmo list) to move back first")
+        return
+    end
+    local count = AtmoLayer.returnObjects(list)
+    if count == 0 then
+        MGE.say("no free object ids (" .. MGE.MAX_ENV_OBJECTS .. " in the game): move or delete objects first")
+        return
+    end
     MGE.say("moved " .. count .. " atmo objects back to objects" ..
         (count < #list and (", " .. (#list - count) .. " stay in the atmo: no more free ids") or ""))
     History.commit()

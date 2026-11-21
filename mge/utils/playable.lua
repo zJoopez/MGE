@@ -356,7 +356,7 @@ local function turnOn()
     -- set before the step To atmo commits, so undo takes it back with the moved objects
     ModData.parsed.playable = { rule = Playable.DEFAULT_RULE, radius = Playable.DEFAULT_RADIUS }
     if count > 0 then
-        AtmoLayer.moveIn() -- History.commit, MGE.apply (with the pool now)
+        AtmoLayer.moveIn(true) -- marked for Default; History.commit, MGE.apply (with the pool now)
     else
         History.commit()
         MGE.apply()
@@ -371,8 +371,31 @@ local function turnOn()
     return true
 end
 
+---Default: the mod isn't playable, and the objects Playable moved into the atmo (AtmoLayer.FROM_KEY) are objects
+---again, as many as there are free ids (the rest stay in the atmo, said so). One undo step
+local function turnOff()
+    local marked = {}
+    for _, obj in ipairs(ModData.parsed.atmo or {}) do
+        obj.selected = nil
+        if obj.props[AtmoLayer.FROM_KEY] then marked[#marked + 1] = obj end
+    end
+    for _, obj in ipairs(ModData.parsed.env_obj) do obj.selected = nil end
+    ModData.parsed.playable = nil
+    local back = AtmoLayer.returnObjects(marked)
+    for i = 1, back do marked[i].selected = true end
+    History.commit()
+    MGE.apply() -- the working copy without its pool
+    local note = ""
+    if back > 0 then note = ", " .. back .. " objects moved back from the atmo" end
+    MGE.say("atmo: Default, drawn only" .. note .. " (Save keeps it inside the mod; World > Export for clean copies)")
+    if back < #marked then
+        MGE.say(string.format("%d objects Playable moved stay in the atmo: no free object ids (%d in the game). " ..
+            "Delete objects, then select them on the Atmo list and To objects", #marked - back, MGE.MAX_ENV_OBJECTS))
+    end
+end
+
 ---The World tab's Atmo row (Playable / Default). Playable: a playable mod (see the header), tested in the editor. Default: an
----ordinary mod again; its atmo objects stay in the atmo. Each is one undo step
+---ordinary mod again, the objects Playable moved into the atmo back (turnOff). Each is one undo step
 ---@param on boolean
 ---@return boolean changed
 function Playable.setPlayable(on)
@@ -380,10 +403,7 @@ function Playable.setPlayable(on)
     if on and not Playable.isOn() then
         changed = turnOn()
     elseif not on and Playable.isOn() then
-        ModData.parsed.playable = nil
-        History.commit()
-        MGE.apply() -- the working copy without its pool
-        MGE.say("atmo: Default, drawn only (Save keeps it inside the mod; World > Export for clean copies)")
+        turnOff()
         changed = true
     end
     refreshRow()
