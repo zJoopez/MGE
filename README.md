@@ -25,7 +25,7 @@ The window has five lists, each with its own tabs.
 | **Atmo** | **Core**: as on Objects, with To objects and Save atmo. **Advanced**: friction, bounce, hardness, flags (as on Objects, for Atmo Play), depth, graphics levels, kept lines. **Generate**: as on Objects. |
 | **Joints** | **Link**: the two objects a joint connects, picked in the list or, with Pick from world on, in the world. **Properties**: position, axis, range, strength, velocity, type. |
 | **Players** | Start position, rotation, scale and body parts of each player. |
-| **World** | The mod's message, the atmo's shader, map import, Reset all (loads the classic mod), Playable (a playable atmo mod). |
+| **World** | The mod's message, the atmo's shader, map import, Reset all (loads the classic mod), Atmo: Playable / Default (a playable atmo mod, or the atmo only drawn). |
 
 - Number fields apply what you type when you leave them (click elsewhere) or press Enter, then show the
   new value as their placeholder. Esc while typing drops it. The Generate tab's fields keep their text:
@@ -91,16 +91,16 @@ Atmo objects are only drawn: tori fall through them. A **playable atmo mod** mak
 the **Atmo Play** script, which the players need: it moves hidden objects onto the atmo objects near
 each player, in fights, and the game records those moves, so replays need nothing extra.
 
-- **World → Playable: On / Off** (for the whole mod, whatever is selected). On makes the mod playable, one undo step:
+- **World → Atmo: Playable / Default** (for the whole mod, whatever is selected). Playable makes the mod playable, one undo step:
   - its static objects move into the atmo (like To atmo; dynamic, joint-linked and model objects stay objects),
   - fights in the editor are solid: MGE moves the pool with the same code Atmo Play uses (hide the window
     with F1 to play: the atmo stays drawn, as it looks in game),
   - **Save** writes one file into `modmaker/` like any mod: the mod, the atmo inside it (as `#@` comment lines
     the game skips) and a pool of hidden static objects on every free id. No separate `.atmo` file.
 
-  Off makes it an ordinary mod again; its atmo objects stay in the atmo, and Save writes `MGE - <mod>.atmo`.
-  Switching On again moves static objects added since.
-- Opening a playable mod reads its atmo back into the Atmo list and Playable shows On; the pool isn't shown
+  Default makes it an ordinary mod again (the atmo only drawn); its atmo objects stay in the atmo, and Save writes
+  `MGE - <mod>.atmo`. Switching to Playable again moves static objects added since.
+- Opening a playable mod reads its atmo back into the Atmo list and the Atmo row shows Playable; the pool isn't shown
   (it's made again from the free ids on every save and reload).
 - Solid are boxes, spheres and capsules with a position. Custom models and objects with `count`, random
   (`rpos`, `rsize`), animated (`move`, `rotate`, draw functions) or parented lines are only drawn.

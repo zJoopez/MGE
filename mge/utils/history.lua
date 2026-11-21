@@ -202,7 +202,7 @@ local function restore(index)
     for i, obj in ipairs(current.atmo or {}) do atmoSelected[i] = obj.selected end
     for i, obj in ipairs(ModData.parsed.atmo) do obj.selected = atmoSelected[i] end
 
-    -- undoing Convert (utils/playable.lua): the World tab's Playable row shows the other buttons
+    -- undoing Convert (utils/playable.lua): the World tab's Atmo row shows the other button lit
     if current.playable ~= ModData.parsed.playable and MGE.EditorRows then
         MGE.EditorRows.refreshBlocks({ "playable" })
     end

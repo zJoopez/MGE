@@ -34,7 +34,7 @@ a replay still plays right, the map just isn't drawn.
 
 ## Making playable mods
 
-With MGE (Mod Group Editor): **World → Playable: On**, then Save. While it's On, fights in the editor are
+With MGE (Mod Group Editor): **World → Atmo: Playable**, then Save. While it's Playable, fights in the editor are
 solid the same way. While MGE is open, Atmo Play leaves playable mods to it. A playable mod made with an
 older MGE version must be saved again.
 

@@ -1,5 +1,5 @@
 -- Makes a playable mod outside the game (plain Lua 5.1), with tools/atmoplay/builder.lua (MGE's World tab
--- does it in the editor: World > Playable):
+-- does it in the editor: World > Atmo: Playable):
 --
 --   lua5.1 mgeDev/tools/atmoplay/build_playable.lua <base.tbm | classic> <atmo.atmo> <out.tbm> [radius]
 --

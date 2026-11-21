@@ -249,7 +249,7 @@ local function loadSourceAtmo()
     } or nil
     MGE.savedPlayable = loaded ~= nil -- the file as it is: playable or not
     Atmo.load(MGE.modPath, loaded and loaded.atmo)
-    if MGE.EditorRows then MGE.EditorRows.refreshBlocks({ "playable" }) end -- the World tab's Playable row
+    if MGE.EditorRows then MGE.EditorRows.refreshBlocks({ "playable" }) end -- the World tab's Atmo row (Playable / Default)
 end
 
 ---@param path string?

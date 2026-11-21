@@ -294,7 +294,7 @@ local function loadPlayable(path)
     -- would move the same objects
     local mge = rawget(_G, "MGE")
     if type(mge) == "table" and mge.running then
-        say(name .. ": MGE is open, it plays playable mods itself (Atmo list > Advanced > Playable On)")
+        say(name .. ": MGE is open, it plays playable mods itself (World > Atmo: Playable)")
         return nil
     end
     local colliders, stats, props = Colliders.build(file.atmo)

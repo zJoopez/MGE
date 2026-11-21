@@ -57,7 +57,7 @@ function Playable.split(lines)
     return split
 end
 
----@return boolean the data is a playable mod (Playable On, the Atmo list's Advanced tab)
+---@return boolean the data is a playable mod (World > Atmo: Playable)
 function Playable.isOn()
     return ModData.parsed.playable ~= nil
 end
@@ -337,7 +337,7 @@ local function refreshRow()
     if MGE.EditorRows then MGE.EditorRows.refreshBlocks({ "playable" }) end
 end
 
----Playable On: the mod's convertible static objects into the atmo (To atmo: one undo step, the working copy
+---Atmo: Playable: the mod's convertible static objects into the atmo (To atmo: one undo step, the working copy
 ---reloads with its pool) and the mod marked playable
 ---@return boolean on
 local function turnOn()
@@ -371,7 +371,7 @@ local function turnOn()
     return true
 end
 
----The World tab's Playable switch. On: a playable mod (see the header), tested in the editor. Off: an
+---The World tab's Atmo row (Playable / Default). Playable: a playable mod (see the header), tested in the editor. Default: an
 ---ordinary mod again; its atmo objects stay in the atmo. Each is one undo step
 ---@param on boolean
 ---@return boolean changed
