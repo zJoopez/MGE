@@ -654,13 +654,13 @@ local function changeParts(list, key, change)
 end
 
 ---Multiplies a value of the parts of players (density: body parts, strength: joints, friction /
----bounce: both), their ratios stay
+---bounce: both), their ratios stay. A negative factor only for friction (it can be negative)
 ---@param players integer|integer[] 0-based
 ---@param key "density"|"strength"|"friction"|"bounce"
 ---@param factor number
 function Players.multiplyParts(players, key, factor)
     local list = asList(players)
-    if #list == 0 or factor < 0 or math.abs(factor - 1) < 1e-9 then return end
+    if #list == 0 or (factor < 0 and key ~= "friction") or math.abs(factor - 1) < 1e-9 then return end
     changeParts(list, key, function(value) return value * factor end)
 end
 

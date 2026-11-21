@@ -21,6 +21,8 @@ local Pool = NS.Pool
 ---@field show boolean debug: pool objects visible (green) where they stand in for an atmo object
 ---@field hold boolean debug: the pool isn't moved at all
 ---@field onDrive (fun(changes: AtmoPlayPoolChange[], ws: table))? called before a step's moves are made (debug log)
+---@field moreCenters (fun(): number[][])? more points to cover than the players' centers (carried props)
+---@field follow integer[]? 0-based ids of the mod's own dynamic objects: the pool covers them too
 ---@field steps integer frames driven, for the status
 ---@field stepTime number ms in all
 ---@field worstStep number ms, the slowest frame
@@ -118,6 +120,26 @@ function Driver.new(pool)
         worstStep = 0 }
 end
 
+---The mod's own dynamic objects in the world now (right after /lm): every object without the static bit
+---that isn't one of Atmo Play's (the dynamic pool). An atmo floor is only solid where the pool is, so
+---the pool follows them too or they fall through the map
+---@param skip table<integer, boolean>? file ids to leave out (the dynamic pool, dynamics.lua)
+---@return integer[] 0-based ids
+function Driver.dynamicIds(skip)
+    local ids = {}
+    for id = 0, 255 do
+        if not (skip and skip[id + 1]) then
+            local okPos, x = pcall(get_obj_pos, id)
+            if okPos and x then
+                local ok, flag = pcall(get_obj_flag, id)
+                flag = ok and tonumber(flag) or Driver.STATIC_FLAG
+                if math.floor(flag / Driver.STATIC_FLAG) % 2 == 0 then ids[#ids + 1] = id end
+            end
+        end
+    end
+    return ids
+end
+
 ---Start over: the next move assigns from scratch and sets every pool object, flag and bounce included
 ---@param d AtmoPlayDriver
 function Driver.reset(d)
@@ -139,7 +161,17 @@ function Driver.drive(d, ws)
         return
     end
     local start = clock()
-    local changes = Pool.step(d.pool, playerCenters())
+    local centers = playerCenters()
+    -- more points the pool covers, so they keep a floor under them: the mod's own dynamic objects
+    -- (Driver.dynamicIds) and the props being pushed (dynamics.lua)
+    for _, id in ipairs(d.follow or {}) do
+        local x, y, z = get_obj_pos(id)
+        if x then centers[#centers + 1] = { x, y, z } end
+    end
+    if d.moreCenters then
+        for _, c in ipairs(d.moreCenters()) do centers[#centers + 1] = c end
+    end
+    local changes = Pool.step(d.pool, centers)
     if d.onDrive then d.onDrive(changes, ws) end
     for _, change in ipairs(changes) do
         if change.collider then place(d, change.entry, change.collider) else park(d, change.entry) end

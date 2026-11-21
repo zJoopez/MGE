@@ -16,6 +16,7 @@ local Format = NS.Format
 local Colliders = NS.Colliders
 local Pool = NS.Pool
 local Driver = NS.Driver
+local Dynamics = NS.Dynamics
 
 ---@class AtmoPlayRuntime
 local Runtime = {
@@ -35,6 +36,7 @@ local Runtime = {
 ---@field pool AtmoPlayPoolState
 ---@field driver AtmoPlayDriver moves the pool (driver.lua)
 ---@field missing integer pool objects not in the world (the mod file changed since /lm?)
+---@field dynamics table? the props and their pool (dynamics.lua), nil without props
 
 local state = {
     modName = nil, ---@type string? the mod gamerule last seen at match_begin
@@ -45,6 +47,7 @@ local state = {
     show = false, -- debug: pool objects visible (/atmoplay show), kept for the next mod
     log = false, -- debug: hooks and object calls to Runtime.LOG_PATH (/atmoplay log)
     hold = false, -- debug: the pool isn't moved at all (/atmoplay hold), kept for the next mod
+    cacheBefore = nil, ---@type number? the player's replaycache, while a mod with props has it off
 }
 Runtime.state = state
 
@@ -219,7 +222,7 @@ local function loadPlayable(path)
         say(name .. ": MGE is open, it plays playable mods itself (Atmo list > Advanced > Playable On)")
         return nil
     end
-    local colliders, stats = Colliders.build(file.atmo)
+    local colliders, stats, props = Colliders.build(file.atmo)
     local pool, err = Pool.new(file.pool, colliders, file.header)
     if not pool then
         say(name .. ": " .. tostring(err))
@@ -229,9 +232,24 @@ local function loadPlayable(path)
     for _, object in ipairs(file.pool) do
         if get_obj_pos(object.id - 1) == nil then missing = missing + 1 end
     end
+    for _, object in ipairs(file.dynamic) do
+        if get_obj_pos(object.id - 1) == nil then missing = missing + 1 end
+    end
     -- the pool objects are in the world right after /lm: the driver reads their own flag and bounce
     local driver = Driver.new(pool)
     driver.show, driver.hold, driver.onDrive = state.show, state.hold, logFrame
+    -- the mod's own dynamic objects: the static pool keeps a floor under them too
+    local skip = {}
+    for _, object in ipairs(file.dynamic) do skip[object.id] = true end
+    driver.follow = Driver.dynamicIds(skip)
+    -- props (proof of concept): their own pool, and the static pool covers the carried ones
+    local dynamics
+    if #file.dynamic > 0 and #props > 0 then
+        dynamics = Dynamics.new(file.dynamic, props, file.header)
+        driver.moreCenters = function() return Dynamics.centers(dynamics) end
+    elseif #props > 0 then
+        say(name .. ": " .. #props .. " props (dynamic atmo objects) but no dynamic pool: they aren't solid")
+    end
     local parsed = clock()
 
     local drawn = false
@@ -251,15 +269,41 @@ local function loadPlayable(path)
     say(string.format("%s: %d atmo objects, %d solid%s, %d pool objects (rule %d, radius %s); read %.0f ms, drawn %.0f ms",
         name, stats.total, stats.collidable, skipped > 0 and (", " .. skipped .. " drawn only") or "", #file.pool,
         pool.rule, tostring(pool.radius), (parsed - start) * 1000, (clock() - parsed) * 1000))
+    if #driver.follow > 0 then
+        say(#driver.follow .. " dynamic objects of the mod: the pool keeps a floor under them too")
+    end
+    if dynamics then
+        say(string.format("%d props (pushable), %d dynamic pool objects, reach %s (proof of concept)", #props,
+            #file.dynamic, tostring(dynamics.radius)))
+    end
     if missing > 0 then
         say(missing .. " pool objects aren't in the world: reload the mod (/lm) after changing it")
     end
     return { path = path, name = name, file = file, colliders = colliders, stats = stats, pool = pool,
-        driver = driver, missing = missing, drawn = drawn }
+        driver = driver, missing = missing, drawn = drawn, dynamics = dynamics }
+end
+
+---Props are followed in replays by watching their pool objects, and cached replays misplace teleported
+---dynamic objects (measured: 33-88 units off), so a mod with props has the replay cache off while it's
+---loaded; the player's setting comes back when it leaves
+local function replayCacheOff()
+    local ok, value = pcall(get_option, "replaycache")
+    if not ok or tonumber(value) == 0 then return end
+    state.cacheBefore = tonumber(value)
+    set_option("replaycache", 0)
+    say("replay cache off while this mod is loaded (cached replays misplace the props); it's set back after")
+end
+
+local function restoreReplayCache()
+    if state.cacheBefore == nil then return end
+    pcall(set_option, "replaycache", state.cacheBefore)
+    state.cacheBefore = nil
 end
 
 local function leavePlayable()
+    if state.loaded and state.loaded.dynamics then pcall(Dynamics.restoreCopies, state.loaded.dynamics) end
     state.loaded = nil
+    restoreReplayCache()
     restorePlayerAtmo()
 end
 
@@ -269,21 +313,48 @@ local function switchMod(name)
     if state.loaded then leavePlayable() end
     local path = resolveModPath(name)
     if path then state.loaded = loadPlayable(path) end
+    if state.loaded and state.loaded.dynamics then replayCacheOff() end
 end
 
 ---------------------------------------------------------------------------------------------------- hooks
+
+---Runs a dynamics.lua call; an error stops the props (proof of concept), not the static pool
+local function runDynamics(fn, ws)
+    local loaded = state.loaded
+    if not (loaded and loaded.dynamics) then return end
+    local ok, err = pcall(fn, loaded.dynamics, ws)
+    if not ok then
+        say("props stopped: " .. tostring(err))
+        loaded.driver.moreCenters = nil
+        loaded.dynamics = nil
+    end
+end
 
 local function onMatchBegin()
     logEvent("match_begin")
     local name = get_game_rules().mod
     if name ~= state.modName then switchMod(name) end
-    -- a fight: the pool is placed now (recorded under FRAME 0); a replay has it in its own FRAME 0
-    if state.loaded then Driver.matchBegin(state.loaded.driver, get_world_state()) end
+    -- a fight: the pool is placed now (recorded under FRAME 0); a replay has it in its own FRAME 0. Props
+    -- first: the static pool covers the props they carry
+    if state.loaded then
+        local ws = get_world_state()
+        runDynamics(Dynamics.matchBegin, ws)
+        Driver.matchBegin(state.loaded.driver, ws)
+        -- a replay that opened cached (its mod loaded inside open_replay, after the cache was made)
+        if ws.replay_mode > 0 and state.loaded.dynamics and get_replay_cache and (get_replay_cache() or 0) > 0 then
+            say("this replay opened cached: props may not move in it. Open it again (the cache is off now)")
+        end
+    end
 end
 
----Between physics steps: in a fight, the pool follows the players once per new frame (driver.lua)
+---Between physics steps: in a fight, the pools follow the players once per new frame (driver.lua,
+---dynamics.lua); in replays the props' drawn copies follow their objects
 local function onDraw2d()
-    if state.loaded then Driver.draw(state.loaded.driver, get_world_state()) end
+    if state.loaded then
+        local ws = get_world_state()
+        runDynamics(Dynamics.draw, ws)
+        Driver.draw(state.loaded.driver, ws)
+    end
 end
 
 local function onLeaveGame()
@@ -303,6 +374,12 @@ function Runtime.status()
     say(string.format("%s: %d/%d pool objects in use, %d solid atmo objects; pool step %.2f ms average, %.2f ms worst (%d frames)",
         loaded.name, Driver.active(d), #loaded.pool.entries, loaded.stats.collidable,
         d.steps > 0 and d.stepTime / d.steps or 0, d.worstStep, d.steps))
+    if loaded.dynamics then
+        local dyn = loaded.dynamics
+        local carried, props = Dynamics.counts(dyn)
+        say(string.format("props: %d of %d carried by %d dynamic pool objects; %.2f ms average, %.2f ms worst (%d frames)",
+            carried, props, #dyn.entries, dyn.steps > 0 and dyn.stepTime / dyn.steps or 0, dyn.worstStep, dyn.steps))
+    end
 end
 
 ---Debug: pool objects visible (green) where they stand in for an atmo object

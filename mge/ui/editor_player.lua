@@ -59,16 +59,17 @@ local function whom(list)
 end
 
 ---Applies a typed part value to the players: as a factor of their current average (ratios between
----parts and players stay), or set on every part when that average is 0
+---parts and players stay), or set on every part when that average is 0. Friction can be negative, the
+---other values can't
 ---@param inputs UIElement[]
 ---@param key "density"|"strength"|"friction"|"bounce"
 ---@param list integer[] the players
 ---@param current number their average now
 local function applyTyped(inputs, key, list, current)
     local typed = tonumber(inputs[1].textfieldstr[1])
-    if not typed or typed < 0 or #list == 0 then return end
+    if not typed or (typed < 0 and key ~= "friction") or #list == 0 then return end
     local Players = MGE.Players
-    if current <= 1e-9 then
+    if math.abs(current) <= 1e-9 then
         Players.setParts(list, key, typed)
     else
         Players.multiplyParts(list, key, typed / current)

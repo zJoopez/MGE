@@ -401,7 +401,7 @@ end
 -- (friction 10000.00, bounce 0.100000, hardness 0.000000, mass 0.1000), used for the file and the
 -- placeholders.
 ---@class EditorProperty
----@field min number
+---@field min number? the lowest value it takes, nil: any (friction can be negative)
 ---@field default number
 ---@field decimals integer
 ---@field setter (fun(id: integer, value: number))?
@@ -411,7 +411,7 @@ end
 local PROPERTIES = {
     mass = { min = 0.0001, default = 0.1, decimals = 4, -- zero mass breaks physics
         setter = function(id, v) set_obj_mass(id, v) end, getter = function(id) return get_obj_mass(id) end },
-    friction = { min = 0, default = 10000, decimals = 2 },
+    friction = { default = 10000, decimals = 2 }, -- negative values too: the game takes them
     bounce = { min = 0, default = 0.1, decimals = 6,
         setter = function(id, v) set_obj_bounce(id, v) end, getter = function(id) return get_obj_bounce(id) end },
     -- points multiplier on contact with a player, no get_obj / set_obj for it. Without the line the
@@ -437,7 +437,7 @@ local function setProperty(key, input)
     if #selectedObjects == 0 then return end
 
     local property = PROPERTIES[key]
-    value = math.max(value, property.min)
+    if property.min then value = math.max(value, property.min) end
     for _, v in ipairs(selectedObjects) do
         v.props[key] = formatProperty(property, value)
         if property.setter then property.setter(v.id - 1, value) end

@@ -223,3 +223,34 @@ T.test("On: the working copy carries the pool, MGE moves it like Atmo Play; Off 
     for _, name in ipairs(names) do rawset(_G, name, saved[name]) end
     if not ok then error(err) end
 end)
+
+T.test("props (dynamic atmo objects): a dynamic pool on free ids 1-48 and a parking platform", function()
+    smallMod()
+    Playable.setPlayable(true)
+    -- the dynamic object 2 has a joint: unlink it, then To atmo makes it a prop (its flag 0 goes along)
+    ModData.parsed.env_obj_joint = {}
+    ModData.refreshJointIds()
+    for _, obj in ipairs(ModData.parsed.env_obj) do obj.selected = obj.id == 2 or nil end
+    MGE.AtmoLayer.moveIn()
+    local colliders, props = Playable.colliders(ModData.parsed.atmo)
+    T.eq(#props, 1, "one prop")
+    T.eq(#colliders, 3, "the static colliders unchanged")
+    local text, plan = Playable.text(ModData.parsed, Atmo.currentText())
+    T.eq(plan.props, 1, "plan counts the prop")
+    T.eq(#plan.dynamic, 1, "one dynamic pool object (no more than props)")
+    T.eq(plan.dynamic[1].id, 1, "on the first free id up to 48")
+    T.eq(plan.park, MGE.MAX_NONSTATIC_OBJECTS + 1, "the platform on the first free static id")
+    T.eq(plan.objects[1].id, MGE.MAX_NONSTATIC_OBJECTS + 2, "the static pool after it")
+    local file = MGE.AtmoPlay.Format.read(splitLines(text))
+    T.eq(#file.dynamic, 1, "Atmo Play reads the dynamic pool")
+    T.eq(file.park, plan.park, "and the platform")
+    T.eq(#file.pool, #plan.objects, "and the static pool")
+    local split = Playable.split(splitLines(text))
+    local parsed = FileHandler.parseLines(split.lines)
+    local ids = {}
+    for _, obj in ipairs(parsed.env_obj) do ids[#ids + 1] = obj.id end
+    T.eq(table.concat(ids, ","), "61,62", "MGE's data: the real objects only")
+    -- the dynamic pool object's lines: hidden, dynamic, on the platform
+    local block = text:match("env_obj 1\n(.-)\n\n") or text:match("env_obj 1\n(.-)env_obj")
+    T.ok(block and block:match("flag 0") and block:match("visible 0"), "dynamic and hidden")
+end)

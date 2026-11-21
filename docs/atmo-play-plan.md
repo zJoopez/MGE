@@ -1,7 +1,7 @@
 # Atmo Play plan (playable atmo maps)
 
-Status (2026-11-20): **Atmo Play works in game (fights and replays, two players). Phase 3 built and tested
-offline, not yet in game: MGE converts (Atmo list → Advanced → Playable) and tests playable mods with the same code; one
+Status (2026-11-20): **Atmo Play works in game (fights and replays, two players). Phase 3 built, tested
+offline and checked in game by the user (2026-11-20): MGE converts (Atmo list → Advanced → Playable) and tests playable mods with the same code; one
 source in MGE's repo, two releases (mge.zip, atmoplay.zip).** History: a proof of concept inside MGE came
 first; then a repo of its own (`atmoplayDev/`, deleted after the merge); then (user's choice "C") everything moved into MGE's repo
 (`atmoplay.lua`, `atmoplay/`, this file, `tools/atmoplay/`, `tests/test_atmoplay_*`), with Atmo Play built
@@ -234,6 +234,161 @@ is dropped; Atmo Play stays a player-side script (draw + pool in fights).
 - **Opening a playable mod in MGE:** read its `#@ ` atmo into the Atmo list and leave the pool objects out
   of the Objects list, so editing and converting again doesn't duplicate the pool.
 
+### 6. Dynamic atmo objects (exploring, 2026-11-20)
+
+Pushable atmo objects (crates, props) through a pool of dynamic objects. Budget: dynamic objects must be on
+ids 1-48 (above that the game shows no predictions and they misbehave in replays: user), minus the mod's
+own dynamic and joint-linked objects: about 40 live at once. Calculation is cheap (the static grid plus
+reading ~40 objects' state per frame). The hard parts: a released object's state (only released at rest,
+pose saved), chain reactions (moving objects must pull in pool objects around them too), moving the drawn
+atmo copy, saturation (a missing dynamic object behaves visibly wrong).
+
+`tools/atmoplay/atmoplay_dynamic_probe.lua`: 16 crates around tori, a dynamic pool on ids 1-6, parked on a
+far static platform; moves from `draw2d`; a crate is released only at rest. First run:
+
+| Fight | Bodies, cache 0 | Bodies, cache 2 | Pool objects |
+|---|---|---|---|
+| pool6 (25 activations, 19 releases, 7 crates pushed) | from frame 56, max 1.12 | from frame 1, max 60.6 | exact |
+| pool3 (13 activations, 13 releases) | from frame 126, max 0.03 | from frame 1, max 29.4 | exact |
+
+- **These numbers (and the second run's) aren't valid:** the probe stored each position with
+  `out[#out + 1], out[#out + 1], out[#out + 1] = x, y, z`, which takes every index before assigning: only z
+  was kept, and the body / pool-object split counted everything as body ("pool objects exact" was never
+  compared). Fixed in the third version. The static-pool probes (replay, native, timing) store values one
+  at a time and are unaffected.
+- What still holds from watching the runs (user): dismemberment was on (a cut-off limb relaxes the joints;
+  a cut-off hand holding a crate isn't a gripping hand of the body), and in one fight a player grabbed
+  the other. The third version: the probe's mods set no dismemberment, no fracture, flags 0; a crate isn't
+  released while any body part is near it; one-frame jumps over 1 unit are logged; a baseline fight with 6
+  ordinary dynamic crates and no script moves comes first.
+
+Third run (valid; replay frame compared with the same fight frame, no one-frame jumps logged):
+
+| Fight | Bodies, cache 0 | Objects, cache 0 | Bodies, cache 2 | Objects, cache 2 |
+|---|---|---|---|---|
+| baseline: 6 ordinary crates, no script | exact (0.0001) | exact | 0.08 from frame 1 | 0.004 |
+| pool6 (8 activations, 3 releases) | 1.23 from frame 128 | 0.0016 from frame 448 | 1.23 | 37 from frame 1 |
+| pool3 (3 activations at the start, 0 releases) | 0.35 from frame 128 | 0.0016 from frame 257 | 0.36 | 0.002 |
+
+- The replay files: the game writes an `EOBJ` line for **every dynamic object every turn**, script or not
+  (the baseline has them too): position, rotation quaternion, sides, linear and angular velocity, the same
+  snapshot body parts get (POS / QAT / LINVEL / ANGVEL). So a teleported pool crate's full transform and
+  velocity are recorded, like a static's position. For statics that line is the whole state, hence exact
+  replays; for dynamics something outside it differs (guess: the physics engine's sleep / contact state
+  after a teleport, unverified).
+- Even pool3, which only placed its crates in `match_begin` (FRAME 0), drifts from frame 128.
+- Verdict so far: dynamic pool objects work in fights but replays drift (0.35-1.2 against exact). Next
+  probes, if pursued: the same crates written into the mod (nothing teleported); a teleported crate woken
+  with a tiny velocity or force.
+
+Fourth run (crate starts rounded to 4 decimals; replay frame = fight frame):
+
+| Fight | Bodies, cache 0 | Bodies, cache 2 | Objects (both) | Fight against pool3's |
+|---|---|---|---|---|
+| plain (baseline) | exact | exact | exact | - |
+| pool3 (3 placed in match_begin) | 0.46 from frame 133 | 0.46 from 133 | 0.0009 | - |
+| placed3 (the same 3 crates in the mod, no script) | 0.46 from 133 | 0.46 from 133 | 0.0009 | identical |
+| wake3 (pool3 + force 0 0 -0.001 after placing) | 0.46 from 133 | 0.46 from 133 | 0.0009 | identical |
+
+- **Teleporting isn't the cause.** placed3 is an ordinary mod with no script, and it drifts exactly like
+  pool3. Its fight is identical to pool3's, so placing objects in `match_begin` equals writing them into
+  the mod.
+- The force did nothing (wake3's fight is identical to pool3's): too small, or not applied. Moot now.
+- What differs from the exact baseline is the mod: placed3 has a static platform on id 49 with 3 dynamic
+  objects resting on it far away, and its crates sit elsewhere. One of those makes the game's own
+  replays drift. Next probe: the baseline plus each difference alone.
+- Hint from `clone_parser_v1.0.1.lua` (a third-party replay merger in the workspace root): its recorder
+  writes a `FRAME` line every frame with each player's POS, QAT, LINVEL and ANGVEL (WriteBoutActions), and
+  merged replays of separately recorded fights play back right, so the game applies those lines as state.
+  The game itself writes them only once per turn (every 10 frames here). Untested for us: whether a replay
+  with per-frame body and EOBJ lines replays exactly whatever makes the physics differ. The clone parser
+  also turns the replay cache off while recording, so `enter_frame` fires (matches our cache finding).
+
+Fifth run (each fight changes one thing from the baseline; replay frame = fight frame):
+
+| Fight | Replay | Bodies | Objects |
+|---|---|---|---|
+| plain, plat49 (+ empty static platform id 49), plat7 (platform id 7), parked (+ 3 dynamic objects resting on it) | cache 0 | exact | exact |
+| placed3 | cache 0 | 0.46 from frame 133 | 0.0009 |
+| placed3 | cache 2 | 0.46 from frame 1 | 0.0018 |
+| placed3 patched (FRAME, body and EOBJ lines on every frame) | cache 0 | **exact** | **exact** |
+| placed3 patched | cache 2 | 0.057 from frame 1 | 0.0036 |
+| placedOnly (placed3's 3 crates alone, ids 1-3) | cache 0 | 0.46 from frame 133 (identical to placed3) | 0.0009 |
+
+- **The platform, its id and parked objects change nothing.** placedOnly drifts exactly like placed3: the
+  cause is the crates' positions near tori, i.e. the fight itself. The game's own replays of ordinary
+  dynamic objects drift in some fights; the baseline happened to replay exactly. So a dynamic pool that
+  places its objects at the start drifts no more than the same mod without a script (pool3 = placed3).
+- **The game doesn't apply its own per-turn lines** (or not enough to resync): the drift starts at 0.0009
+  and grows across turns (36 turns start drifted, 1 exact).
+- **Per-frame lines are applied: the patched replay is exact uncached.** Cached it's 0.057 instead of 0.46
+  (the cache is built differently; its drift starts at frame 1 even for the game's own replay here).
+- The patched file is 12 times longer (615 lines -> 7365 for 500 frames). The probe found the recorded
+  state at `enter_frame` matches the FRAME line of the same match frame (offset 0), plain quaternion order
+  (ODE's row-major matrix, w x y z), for bodies and objects.
+- Sixth run, the pool with moves during the fight, patched:
+
+  | Fight | Own replay, cache 0 | Own replay, cache 2 | Patched, cache 0 | Patched, cache 2 |
+  |---|---|---|---|---|
+  | plain (baseline) | exact | - | - | - |
+  | pool6 (8 activations, 3 releases) | bodies 0.048 from 133, objects 0.0002 | same | **exact** | **exact** |
+  | pool3 (3 activations at the start) | bodies 0.46 from 133 | same | **exact** | **exact** |
+
+  Per-frame lines make even a fight with teleports replay exactly, cached or not. The cache is
+  inconsistent between runs (the fifth run's cache 2 drifted from frame 1, this run's matched cache 0;
+  the third run's pool6 cached objects were off by 37), but the patched replays were exact here both ways.
+  The fights' crates sit around uke: the rings are built around tori, but the nearest crates to either
+  player are the ones on uke's side, and only tori moves (setTurnJoints), so uke stands still among them.
+- Untested: a patched replay
+  saved by a script rather than the game (a player saves from the menu, so Atmo Play would need its own
+  save command or to rewrite the game's file after saving).
+
+Seventh run (no patching; three fights each, both players moving; most body drift / at the last frame):
+
+| Fight | Cache 0 | Cache 2 bodies | Cache 2 objects |
+|---|---|---|---|
+| all16 (16 ordinary dynamic crates, no script) | 0.0148, 0.0308, 0.0013 / 0 | ~0.1 | < 0.01 |
+| pool6 | identical to all16 | ~0.1 | **78-88** |
+| pool3 | identical to all16 | ~0.1 | **33-57** |
+
+- Uncached, the pool replays exactly as a normal mod with the same crates does (same drift, back to 0 by
+  the last frame). Cached, the bodies are as good as a normal mod's, but the teleported pool objects are
+  misplaced (33-88 units): a cached replay shows crates in the wrong places.
+
+**Proof of concept (2026-11-20), for the user to try:** `atmoplay/dynamics.lua`.
+- A prop is an atmo object whose flag line lacks the static bit (colliders.lua returns props apart, with
+  their mass). In MGE: make objects dynamic, then To atmo; Save writes a dynamic pool on the free ids
+  1-48 (`#atmoplay dynamic` blocks, Pool.plan by shape and friction) and a hidden static parking platform
+  far below (`#atmoplay park`, the first free static id). Header `dradius=` (default 2).
+- Fights: the probe's rule (props within reach of a player's center, nearest first; release only at rest
+  with no body part near; freed objects reusable from the next frame) plus chain reactions (props touching
+  a moving carried prop are wanted) and props that fell 50 below the lowest prop's start are released.
+  The static pool also covers carried props (Driver's `moreCenters`).
+- Drawn copies: the game's atmo items are local to its manager; dynamics.lua finds the props' items
+  among `Atmospheres.EntityHolder`'s children by position and moves them (rotation from the object's
+  matrix through `Utils3D.MatrixTBToMatrix`, checked offline to equal the atmo's own Euler rotation).
+- Replays: nothing moved; the script watches the pool objects (leaving the platform = took the nearest free
+  prop of its group; back on it = left its prop where last seen). Events by frame rebuild the props on a
+  rewind and when a fight resumes from a replay.
+- First try (user): the mod's own dynamic objects fell through the atmo floor (the static pool only
+  covered the players), and the props didn't move in MGE's test fight (they only ran in Atmo Play). Now
+  the static pool also follows every dynamic object of the mod (`Driver.dynamicIds`, `driver.follow`),
+  and MGE runs the props in its own fights too, drawing them where they are (`Playable.movedGhost`).
+- Cached replays (user: props didn't move in a saved replay): the cache misplaces the pool objects, so
+  the props weren't followed. While a mod with props is loaded, Atmo Play (and MGE) turn `replaycache`
+  off and set it back after; a replay that opened cached (its mod loaded inside open_replay) says to open
+  it again. With the cache off, props replay right without patching.
+- Speed (offline, plain Lua 5.1, 5,000 props, a 40-object pool): the first version scanned every prop
+  each frame, 1.6 ms a step and 23 ms with pushed props (the chain check). Now props are listed by x / y
+  cell (as the static pool's grid): 0.1 ms a step, ~1 ms with 40 pushed props; replay watching 0.3-0.4 ms.
+  The tests check the grid gives the same takes and releases as the full scan (`noGrid`), in a fight and
+  in its replay. Drawn copies: only carried and just-released props are looked at, and a still carried
+  prop keeps its pose tables, so it isn't redrawn. `/atmoplay status` shows the props' ms per frame.
+- A prop is still until something wants it (a player's center within `dradius`, or a pushed prop
+  touching it): one placed in mid-air hangs there until a player comes near.
+- Not in it: the offline builder, patched replays. Unknown until tried: whether set_obj_mass and set_obj_sides on dynamic objects are recorded in
+  replays and change their physics; how cached replays look (objects misplaced, the drawn props follow).
+
 ## Still open (checked during Phases 1-2, in game)
 
 - **R2:** do `set_obj_flag` / `set_obj_bounce` take effect on a static object, and can static objects use
@@ -347,5 +502,5 @@ is dropped; Atmo Play stays a player-side script (draw + pool in fights).
      blank lines one in a row); line numbers move, so `tools/same_bytecode.lua` compares `luac -s` output
      ignoring the functions' source lines.
 4. **Release.** Packaging done (`tools/package.ps1`: mge.zip and atmoplay.zip; README
-   `docs/atmoplay-readme.md`). Left: in-game checks of Phase 3 (Convert, Save, reopen, Test), maybe a small
-   status window. No converter in the runtime (part 5).
+   `docs/atmoplay-readme.md`). Phase 3 checked in game (user, 2026-11-20: "seems to work"). Left: maybe a
+   small status window; committing. No converter in the runtime (part 5).

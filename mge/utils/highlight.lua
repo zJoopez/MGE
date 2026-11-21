@@ -201,9 +201,12 @@ end
 local function drawAtmo(full, plain)
     local AtmoLayer = MGE.AtmoLayer
     local list = ModData.parsed.atmo or {}
+    -- props pushed in a fight (a playable mod's dynamic atmo objects) are drawn where they are now
+    local moved = MGE.Playable and MGE.Playable.movedGhost
     if not full then
-        for _, obj in ipairs(list) do
+        for i, obj in ipairs(list) do
             local g = AtmoLayer.ghost(obj)
+            if g and moved then g = moved(i, g) end
             if g and onScreen(g) then drawGhost(g, AtmoLayer.color, AtmoLayer.alpha, false) end
         end
         return
@@ -211,8 +214,9 @@ local function drawAtmo(full, plain)
     -- a gizmo drag: the selected ones' ghosts as it leaves them (AtmoLayer.liveGhost: matrices on the cached
     -- ghost; copying and re-parsing every selected object's lines each frame stuttered with thousands)
     local live = AtmoLayer.live
-    for _, atmoObj in ipairs(list) do
+    for i, atmoObj in ipairs(list) do
         local g = AtmoLayer.ghost(atmoObj)
+        if g and moved then g = moved(i, g) end
         local selected = atmoObj.selected and not plain
         if g and live and selected then g = AtmoLayer.liveGhost(g, live) end
         if g and onScreen(g) then

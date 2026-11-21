@@ -6,6 +6,8 @@
 -- moves while it draws them (count, rpos, rsize, move, rotate, drawfunc, framefunc: their collision
 -- wouldn't be where they're drawn), and parented objects (their pos is relative to the parent).
 -- Collision never depends on the graphics level (min_level / max_level): the map is the same for everyone.
+-- Props (dynamics.lua, proof of concept): an entity whose flag line lacks the static bit (8) is a pushable
+-- prop, not a static collider: build returns them apart, with their mass.
 -- Shape math from MGE (mge/utils/atmo_layer.lua: shapeOf, frameOf, ghost) and the playable-atmo PoC.
 
 local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY, MGE's MGE.AtmoPlay)
@@ -30,7 +32,16 @@ local Mat3 = NS.Mat3
 ---@class AtmoPlayColliders
 local Colliders = {
     MIN_SIDE = 0.01,
+    STATIC_FLAG = 8,
 }
+
+---@param flag string? a flag line
+---@return boolean the line makes the entity a dynamic prop: a flag without the static bit
+function Colliders.isDynamicFlag(flag)
+    local n = tonumber(flag)
+    if not n then return false end
+    return math.floor(n / Colliders.STATIC_FLAG) % 2 == 0
+end
 
 -- keys that keep an entity out of collision, and why (the reason counted in the stats)
 local SKIP_KEYS = {
@@ -103,10 +114,12 @@ end
 
 ---Collision shapes of an atmo
 ---@param lines string[] the atmo's lines
----@return AtmoPlayCollider[] colliders, { collidable: integer, total: integer, skipped: table<string, integer> } stats
+---@return AtmoPlayCollider[] colliders static ones
+---@return { collidable: integer, total: integer, skipped: table<string, integer>, props: integer } stats
+---@return AtmoPlayCollider[] props dynamic ones (with mass), in atmo order
 function Colliders.build(lines)
     local entities = Colliders.entities(lines)
-    local colliders, skipped = {}, {}
+    local colliders, skipped, props = {}, {}, {}
     -- one frame per rot line: maps repeat rotations a lot (MGE's frameByRot), colliders only read them
     local frames = {}
     for index, entity in ipairs(entities) do
@@ -142,7 +155,9 @@ function Colliders.build(lines)
                 frame = Colliders.frameOf(numbers(p.rot))
                 frames[rotKey] = frame
             end
-            colliders[#colliders + 1] = {
+            local dynamic = Colliders.isDynamicFlag(p.flag)
+            local list = dynamic and props or colliders
+            list[#list + 1] = {
                 index = index,
                 name = entity.name,
                 shape = shape,
@@ -155,10 +170,11 @@ function Colliders.build(lines)
                 flag = tonumber(p.flag),
                 bounce = tonumber(p.bounce),
                 visible = not (p.visible and p.visible:match("^0") ~= nil),
+                mass = dynamic and tonumber(p.mass) or nil,
             }
         end
     end
-    return colliders, { collidable = #colliders, total = #entities, skipped = skipped }
+    return colliders, { collidable = #colliders, total = #entities, skipped = skipped, props = #props }, props
 end
 
 ---Distance from a point to a collider's surface, 0 inside it

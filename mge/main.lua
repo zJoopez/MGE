@@ -137,7 +137,7 @@ loadModule("utils/atmo.lua") -- the atmo layer's .atmo file per mod
 -- MGE's own namespace (ATMOPLAY_LOADING while one loads), so Atmo Play running at the same time keeps its own.
 -- MGE writes playable mods with them and the player script reads them with the same code
 MGE.AtmoPlay = { scriptPath = MGE.scriptPath .. "../atmoplay/" }
-for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua" }) do
+for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "dynamics.lua" }) do
     ATMOPLAY_LOADING = MGE.AtmoPlay
     local ok, err = pcall(dofile, MGE.AtmoPlay.scriptPath .. module)
     ATMOPLAY_LOADING = nil
