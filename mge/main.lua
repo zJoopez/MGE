@@ -726,7 +726,12 @@ end
 -- Ctrl+A selects / deselects all objects, Alt + Q / W / E toggles a gizmo tool,
 -- Ctrl + N / D new / duplicate, Delete deletes the selection (asks first), Esc closes MGE's overlays,
 -- Enter confirms MGE's confirmation popup (Esc cancels it).
-add_hook("key_down", MGE.hookname, function(key)
+-- A key handled here is swallowed on its key_up too (consumedKeys): the game also acts on released keys, and
+-- returning 1 only on the press let it. Ctrl + N's release reached the game, whose reload MGE didn't start
+-- reset the undo history: the new object couldn't be undone
+---@type table<integer, boolean>
+local consumedKeys = {}
+local function onKeyDown(key)
     -- before the text field check: the name prompt focuses its field
     if key == KEY_ESCAPE then
         if MGE.closeTopOverlay() then return 1 end -- consumed, the game doesn't open its menu too
@@ -790,6 +795,11 @@ add_hook("key_down", MGE.hookname, function(key)
         end
         return 1
     end
+end
+add_hook("key_down", MGE.hookname, function(key)
+    local result = onKeyDown(key)
+    if result == 1 then consumedKeys[key] = true end
+    return result
 end)
 
 -- The game's HUD is hidden while MGE's window shows (the top bar and panel cover where it is), back as it
@@ -805,12 +815,14 @@ table.insert(MGE.onQuit, function()
     MGE.hideGameHud(false)
     MGE_HUD_BEFORE = nil
 end)
--- another script loaded (/ls) ends MGE without its quit: the HUD comes back then too. (A game closed with
--- MGE open keeps it off: the option is saved by the game, Settings > HUD or /opt hud 1 brings it back)
-add_hook("unload", MGE.hookname, function() MGE.hideGameHud(false) end)
--- Hidden on the next frame, not right away: a /ls of MGE (starting it, or showing the running one) fires
--- "unload" after MGE's code ran, and the hook above (already MGE's, it replaced the old one) put the HUD
--- back at once. A hook set of its own, removed once it ran (and by quit, when MGE closes before a frame)
+-- "unload" isn't an end: the game fires it whenever it loads a script of its own (the Esc menu, the mods,
+-- downloads and gamerules windows its shortcuts open) and for /ls, and MGE keeps running through all of them.
+-- It used to put the HUD back here, which is what turned it on with those windows. Now the HUD is hidden again on
+-- the next frame while MGE's window shows (a /ls of MGE fires "unload" after MGE's code ran, so not right away).
+-- MGE.quit puts the player's HUD back when MGE really ends. (A game closed with MGE open keeps it off: the option
+-- is saved by the game, Settings > HUD or /opt hud 1 brings it back)
+add_hook("unload", MGE.hookname, function() MGE.hideGameHudNextFrame() end)
+-- A hook set of its own, removed once it ran (and by quit, when MGE closes before a frame)
 local HUD_START_HOOK = MGE.hookname .. "_hudStart"
 function MGE.hideGameHudNextFrame()
     add_hook("draw2d", HUD_START_HOOK, function()
@@ -836,6 +848,10 @@ end)
 table.insert(MGE.onQuit, function() remove_hooks(HUD_MENU_HOOK) end)
 
 add_hook("key_up", MGE.hookname, function(key)
+    if consumedKeys[key] then -- its press was MGE's shortcut: the release isn't the game's either
+        consumedKeys[key] = nil
+        return 1
+    end
     if key ~= 282 then return end --F1
     if MGE.isPlacing() then return end -- the placement view shows it again when it ends
     local Main = MGE.Main
