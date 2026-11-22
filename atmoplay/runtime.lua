@@ -165,9 +165,6 @@ end
 
 ---------------------------------------------------------------------------------------------------- mods
 
----Reads a playable mod and draws its atmo. nil when the mod isn't playable (or can't be read)
----@param path string
----@return AtmoPlayLoaded?
 ---Draws a mod's atmo: the drawn part written as the cache atmo and loaded through the game's manager
 ---@param atmoLines string[]
 ---@return boolean drawn
@@ -185,6 +182,9 @@ local function drawModAtmo(atmoLines)
     return drawn
 end
 
+---Reads a playable mod and draws its atmo. nil when the mod isn't playable (or can't be read)
+---@param path string
+---@return AtmoPlayLoaded?
 local function loadPlayable(path)
     local start = clock()
     local lines = readLines(Runtime.MOD_FOLDER .. path)
@@ -194,8 +194,7 @@ local function loadPlayable(path)
     local name = path:match("([^/]+)%.tbm$") or path
     -- MGE open: it draws the atmo itself and moves a playable mod's pool (the same driver.lua); two drivers
     -- would move the same objects
-    local mge = rawget(_G, "MGE")
-    if type(mge) == "table" and mge.running then
+    if Runtime.mgeRunning() then
         say(name .. ": MGE is open, it plays playable mods itself (World > Atmo: Playable)")
         return nil
     end
@@ -218,7 +217,7 @@ local function loadPlayable(path)
     for _, object in ipairs(file.dynamic) do
         if get_obj_pos(object.id - 1) == nil then missing = missing + 1 end
     end
-    -- the pool objects are in the world right after /lm: the driver reads their own flag and bounce
+    -- the pool objects are in the world right after /lm (each written with its group's flag and bounce)
     local driver = Driver.new(pool)
     driver.onDrive = NS.DebugLog and NS.DebugLog.onDrive
     -- the mod's own dynamic objects: the static pool keeps a floor under them too
@@ -292,6 +291,15 @@ end
 
 ---------------------------------------------------------------------------------------------------- hooks
 
+---MGE is open: it draws and plays playable mods itself (the same driver.lua), so Atmo Play moves nothing then. A
+---mod Atmo Play had loaded before MGE started stays loaded, untouched, until MGE closes (two drivers would move the
+---same objects)
+---@return boolean
+function Runtime.mgeRunning()
+    local mge = rawget(_G, "MGE")
+    return type(mge) == "table" and mge.running == true
+end
+
 ---Runs a dynamics.lua call; an error stops the props (proof of concept), not the static pool
 local function runDynamics(fn, ws)
     local loaded = state.loaded
@@ -306,6 +314,7 @@ end
 
 local function onMatchBegin()
     debugCall("event", "match_begin")
+    if Runtime.mgeRunning() then return end -- MGE plays it (a mod switch is seen after MGE closes)
     local name = get_game_rules().mod
     if name ~= state.modName then switchMod(name) end
     -- a fight: the pool is placed now (recorded under FRAME 0); a replay has it in its own FRAME 0. Props
@@ -325,7 +334,7 @@ end
 ---Between physics steps: in a fight, the pools follow the players once per new frame (driver.lua,
 ---dynamics.lua); in replays the props' drawn copies follow their objects
 local function onDraw2d()
-    if state.loaded then
+    if state.loaded and not Runtime.mgeRunning() then
         local ws = get_world_state()
         debugCall("frame", ws)
         runDynamics(Dynamics.draw, ws)

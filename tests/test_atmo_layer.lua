@@ -103,6 +103,59 @@ T.test("atmo over a save and undo", function()
     T.eq(#ModData.parsed.atmo, 0, "undo: atmo empty")
 end)
 
+T.test("undo steps share unchanged atmo copies, an edited one gets its own; undo gives each step back", function()
+    setup({})
+    local atmo = {}
+    for i = 1, 3 do atmo[i] = { kind = "atmo", id = i, lines = {}, props = { pos = i .. " 0 0", shape = "box" } } end
+    ModData.parsed.atmo = atmo
+    local History = MGE.History
+    History.reset()
+    History.commit()
+    local first = History.states[History.index]
+    atmo[2].props.pos = "9 9 9" -- an edit writes the live props in place (Transforms.writeVector)
+    History.commit()
+    local second = History.states[History.index]
+    T.eq(second.atmo[1], first.atmo[1], "an unchanged one is shared")
+    T.eq(second.atmo[3], first.atmo[3], "and the other")
+    T.ok(second.atmo[2] ~= first.atmo[2], "the edited one is a new copy")
+    T.eq(first.atmo[2].props.pos, "2 0 0", "the step before keeps its value")
+    atmo[3].props.extra = "1" -- a line added
+    History.commit()
+    T.ok(History.states[History.index].atmo[3] ~= second.atmo[3], "a new line: a new copy")
+    History.undo()
+    T.eq(ModData.parsed.atmo[2].props.pos, "9 9 9", "undo: the second step")
+    T.eq(ModData.parsed.atmo[3].props.extra, nil, "without the added line")
+    ModData.parsed.atmo[1].props.pos = "7 7 7" -- the restored live copy is the data's own, not the stored one
+    T.eq(first.atmo[1].props.pos, "1 0 0", "editing after undo leaves the stored steps alone")
+    History.undo()
+    T.eq(ModData.parsed.atmo[2].props.pos, "2 0 0", "undo: the first step")
+end)
+
+T.test("history: the mod's lines by content (a reload's new tables alone don't need a reload)", function()
+    local a = { env_obj = {}, env_obj_joint = {}, ignores = { "version 15", "gamerule" }, trailer = {} }
+    local b = { env_obj = {}, env_obj_joint = {}, ignores = { "version 15", "gamerule" }, trailer = {} }
+    T.ok(MGE.History.sameObjects(a, b), "same lines in new tables: the same")
+    b.ignores = { "version 15", "gamerule", "   gravity 0 0 -10" }
+    T.ok(not MGE.History.sameObjects(a, b), "a changed rule: not the same")
+end)
+
+T.test("history: rules changed in the game's menu go into the step committed next", function()
+    setup({})
+    local synced = 0
+    local before = MGE.syncGamerules
+    MGE.syncGamerules = function()
+        synced = synced + 1
+        ModData.parsed.ignores = { "gamerule", "   gravity 0 0 -10" } -- what setGamerules swaps in
+    end
+    local ok, err = pcall(function()
+        MGE.History.commit()
+        T.eq(synced, 1, "synced on commit")
+        T.eq(MGE.History.states[MGE.History.index].ignores[2], "   gravity 0 0 -10", "in the stored step")
+    end)
+    MGE.syncGamerules = before
+    if not ok then error(err, 0) end
+end)
+
 -- Ghosts and exported atmos turn like the object. What the game draws an object with is get_obj_rot,
 -- measured in game (mge/tools/rotcheck.lua, 2026-11-14) for rot 10 -20 30:
 local MEASURED = { rot = { 10, -20, 30 },
@@ -258,6 +311,59 @@ T.test("atmo move, rotate and scale write what the objects' own would, without t
         T.eq(twin.props.pos, obj.props.pos, "scale " .. i .. ": pos line")
         T.eq(preview.props.sides, obj.props.sides, "scale " .. i .. ": the preview")
     end
+end)
+
+T.test("in place: Rotate and Scale keep every position, rot and sides as the group's", function()
+    local function pair()
+        local a = { kind = "atmo", id = 1, lines = {}, props = { pos = "1 2 3", rot = "10 -20 30", sides = "2 1 0.5" } }
+        local b = { kind = "atmo", id = 2, lines = {}, props = { pos = "-4 0.5 7", rot = "0 0 45", sides = "1 1 1" } }
+        ModData.parsed = { env_obj = {}, env_obj_joint = {}, atmo = { a, b }, ignores = {}, trailer = {} }
+        return { a, b }
+    end
+    world(99, { 1, 1, 1 }) -- nothing of theirs in the world
+    local rotation = Mat3.mul(Mat3.rotX(0.3), Mat3.rotZ(1.1))
+    local ok, err = pcall(function()
+        local group = pair()
+        Transforms.rotateByMatrix(group, rotation)
+        Transforms.inPlace = true
+        local list = pair()
+        local pivot = { Transforms.getSelectionPivot(list) }
+        local preview = { copyOf(list[1]), copyOf(list[2]) }
+        Transforms.rotateByMatrix(list, rotation)
+        AtmoLayer.rotateBy(preview, rotation, pivot)
+        for i = 1, 2 do
+            T.eq(list[i].props.pos, pair()[i].props.pos, "rotate " .. i .. ": the position stays")
+            T.eq(list[i].props.rot, group[i].props.rot, "rotate " .. i .. ": turned as in the group")
+            T.eq(preview[i].props.pos, list[i].props.pos, "rotate " .. i .. ": the preview's position too")
+            T.eq(preview[i].props.rot, list[i].props.rot, "rotate " .. i .. ": the preview's rot")
+        end
+
+        Transforms.inPlace = false
+        group = pair()
+        Transforms.scaleBy(group, { 2, 0.5, 1.5 })
+        Transforms.inPlace = true
+        list = pair()
+        pivot = { Transforms.getSelectionPivot(list) }
+        local frame = Transforms.groupFrame(list)
+        preview = { copyOf(list[1]), copyOf(list[2]) }
+        Transforms.scaleBy(list, { 2, 0.5, 1.5 })
+        AtmoLayer.scaleBy(preview, { 2, 0.5, 1.5 }, pivot, frame)
+        for i = 1, 2 do
+            T.eq(list[i].props.pos, pair()[i].props.pos, "scale " .. i .. ": the position stays")
+            T.eq(list[i].props.sides, group[i].props.sides, "scale " .. i .. ": sized as in the group")
+            T.eq(preview[i].props.pos, list[i].props.pos, "scale " .. i .. ": the preview's position too")
+        end
+
+        -- a drag's ghost (AtmoLayer.liveGhost) stays where it is too
+        local ghost = { shape = "box", pos = { 1, 2, 3 }, frame = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }, sides = { 1, 1, 1 }, radius = 1 }
+        local turned = AtmoLayer.liveGhost(ghost, { rotation = rotation, pivot = { 0, 0, 0 } })
+        T.nearList(turned.pos, { 1, 2, 3 }, 1e-12, "ghost: rotated in place")
+        local sized = AtmoLayer.liveGhost(ghost, { scale = { 2, 2, 2 }, pivot = { 0, 0, 0 }, frame = ghost.frame })
+        T.nearList(sized.pos, { 1, 2, 3 }, 1e-12, "ghost: scaled in place")
+        T.nearList(sized.sides, { 2, 2, 2 }, 1e-12, "ghost: its size still scaled")
+    end)
+    Transforms.inPlace = false
+    if not ok then error(err, 0) end
 end)
 
 T.test("atmo spheres and pills scale like the objects' shapes", function()

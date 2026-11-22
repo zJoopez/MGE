@@ -108,8 +108,12 @@ local targetCache = {}
 ---@return string
 local function selectionKey(objects)
     local History = MGE.History
+    -- every selected id in order, as one number (the first and last alone missed swaps in the middle: Shift-click
+    -- 3 off and 2 on kept the old pivot). Arithmetic only, the list is built every frame anyway
+    local hash = 0
+    for i = 1, #objects do hash = (hash * 31 + (objects[i].id or 0)) % 2147483629 end
     return tostring(History.states[History.index]) .. "|" .. tostring(MGE.ModData.parsed) .. "|" .. #objects ..
-        "|" .. tostring(objects[1]) .. "|" .. tostring(objects[#objects])
+        "|" .. hash .. "|" .. tostring(objects[1]) .. "|" .. tostring(objects[#objects])
 end
 
 ---A value of the target kept while selectionKey stays the same
@@ -287,7 +291,6 @@ local function layout(target, mode)
     end
     return center, handles, size, viewDir
 end
-Gizmo.layout = function(objects) return layout(objectTarget(objects), Gizmo.mode) end -- for the offline tests
 
 ---Nearest enabled handle hit by the ray through the screen position
 ---@param handles GizmoHandle[]
@@ -451,16 +454,6 @@ end
 ---@return boolean
 function Gizmo.isDragging()
     return drag ~= nil
-end
-
----@return GizmoHandle? the handle being dragged
-function Gizmo.draggedHandle()
-    return drag and drag.handle
-end
-
----@return any the drag's grab state (offline tests)
-function Gizmo.draggedGrab()
-    return drag and drag.grab
 end
 
 ---Left mouse down (from WorldSelect's hook): starts a drag when it's on a handle

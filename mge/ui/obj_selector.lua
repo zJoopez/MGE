@@ -142,13 +142,21 @@ local function create(view, fullList, mode)
         end,
     })
 
-    -- lit while everything the list shows is selected
+    -- lit while everything the list shows is selected. A long list (thousands of atmo objects) is checked every
+    -- few frames only: with all of them selected each check walks the whole list, and a light that follows a click
+    -- a moment later doesn't matter
+    local RECHECK_FRAMES, LONG_LIST = 10, 500
+    local lit, sinceCheck = false, RECHECK_FRAMES
     local function allSelected()
         if #fullList == 0 then return false end
+        sinceCheck = sinceCheck + 1
+        if #fullList > LONG_LIST and sinceCheck < RECHECK_FRAMES then return lit end
+        sinceCheck = 0
+        lit = true
         for _, obj in ipairs(fullList) do
-            if not obj.selected then return false end
+            if not obj.selected then lit = false break end
         end
-        return true
+        return lit
     end
 
     -- New adds the default object, Duplicate/Delete/Export act on selected objects, Import opens the

@@ -3,6 +3,7 @@
 --
 --   uiScale 1.3
 --   cameraFollow 1
+--   inPlace 0                 Rotate / Scale around each object itself (the top bar's toggle, Transforms.inPlace)
 --   wheelStep 0.5             the mouse wheel over a number field and the gizmo's move / scale snap (Ctrl),
 --                             wheelFineStep with Shift
 --   rotateStep 15             the wheel over a Rot field and the gizmo's ring snap (Ctrl), degrees
@@ -41,6 +42,8 @@ Config.ENTRIES = {
         set = function(v) if MGE_UI_SCALE == nil then MGE_UI_SCALE = v end end }, -- a restart's choice wins
     { key = "cameraFollow", kind = "boolean",
         get = function() return MGE.Camera.followMoves end, set = function(v) MGE.Camera.followMoves = v end },
+    { key = "inPlace", kind = "boolean",
+        get = function() return MGE.Transforms.inPlace end, set = function(v) MGE.Transforms.inPlace = v end },
     { key = "rotateStep", kind = "number", min = 1e-6, max = 180,
         get = function() return Config.rotateStep end, set = function(v) Config.rotateStep = v --[[@as number]] end },
     { key = "maxAtmo", kind = "number", min = 0, max = 100000, whole = true,

@@ -115,7 +115,7 @@ end
 ---@return integer how many kept boxes become objects: those past it go to the atmo (utils/atmo_layer.lua). The
 ---overlay's Budget (objectBudget), at most the object ids free in the mod
 local function objectCount()
-    local free = #MGE.ModData.freeIds.static + #MGE.ModData.freeIds.nonStatic
+    local free = MGE.ModData.freeCount()
     return math.min(free, session.options.objectBudget or free)
 end
 

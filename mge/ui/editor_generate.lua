@@ -309,8 +309,8 @@ local function replan()
 end
 
 ---@return boolean the Generate tab is open on the Objects or Atmo list in MGE's shown window, its preview is drawn.
----The shown list's own active tab (Main.activeTabs): Main.activeTab is only the Objects list's, the Atmo list's
----Generate showed no preview unless the Objects list was on Generate too
+---The shown list's own active tab (Main.activeTabs), so the Atmo list's Generate shows its preview whatever
+---tab the Objects list is on
 local function tabOpen()
     local Main = MGE.Main
     local list = Main.listTab
@@ -665,5 +665,5 @@ return {
         { name = "generateAmount", build = buildAmount, panel = "generate", row = 1, rows = 1 },
         { name = "generatePos", build = buildPosition, panel = "generate", row = 4, rows = 1 },
     },
-    inputs = { fixed = { "generate", "generateRot" }, rebuilt = { "generateAmount", "generatePos" } },
+    inputs = { rebuilt = { "generateAmount", "generatePos" } },
 }

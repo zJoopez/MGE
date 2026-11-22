@@ -7,8 +7,8 @@
 --     enter_frame are recorded one step late; moving objects during a replay crashed the game at its end
 --   * replays: nothing is moved. Back in a fight (replay view left, a replay edited), or when the frame went
 --     back, every pool object is set again
--- Flag and bounce are set only when they differ from what was last set; a reset forgets that (the game puts
--- objects back to their file values when a fight starts).
+-- Flag and bounce are never set: each pool object is written with its group's (Colliders.groupKey), as
+-- replays don't record them.
 
 local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY, MGE's MGE.AtmoPlay)
 
@@ -43,6 +43,7 @@ local function matrixTB(frame)
         r8 = frame[3][1], r9 = frame[3][2], r10 = frame[3][3], r11 = 0,
     }
 end
+Driver.matrixTB = matrixTB -- dynamics.lua's props too
 
 ---@return boolean the same value for the engine (written lines and engine floats differ in the last digits)
 local function near(a, b)

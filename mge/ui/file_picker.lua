@@ -1,7 +1,8 @@
 -- Popup that browses a folder for files of one type: title, a bar with the current folder and a back
 -- button, rows for subfolders and files, Cancel / confirm buttons. Folders keep things organized, so
 -- there's no search or paging.
--- Used by the asset import (ui/assets.lua) and the Model row (ui/editor.lua, data/mod_assets).
+-- Used by the asset and atmo imports (ui/assets.lua), the Model row (ui/editor_advanced.lua, data/mod_assets),
+-- the atmo's Shader row (ui/editor_misc.lua) and the Convert Map overlay's Map row (ui/map_overlay.lua).
 -- Click a folder to open it, click a file to select it, double click or the confirm button picks it
 
 ---@class FilePickerOptions

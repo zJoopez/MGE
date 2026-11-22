@@ -40,7 +40,7 @@ local inwuts = Rows.inputs
 ---@class EditorPanelModule
 ---@field fixed EditorBlock[]? built once
 ---@field blocks EditorBlock[]? rebuilt with the selection, in this order
----@field inputs { fixed: string[]?, rebuilt: string[]? }? Rows.inputs lists the module fills
+---@field inputs { rebuilt: string[]? }? Rows.inputs lists the module fills that keep typed text over a rebuild
 
 local Core = dofile(MGE.scriptPath .. "ui/editor_core.lua") ---@type EditorPanelModule
 local MODULES = {

@@ -39,7 +39,7 @@ local function toMatrixTB(m)
     })
 end
 
-Highlight.toMatrixTB = toMatrixTB -- also used by the gizmo
+Highlight.toMatrixTB = toMatrixTB -- also used by players.lua (body part rotations)
 
 -- drawBox's rotations by frame table: the boxes drawn every frame (the map placement view's up to
 -- MapPlace.maxDraws, atmo ghosts) keep their frames, so each is converted once instead of making two
@@ -258,7 +258,6 @@ local function highlightPlan(count, room)
     if count * 2 <= room then return false, count end
     return true, math.min(count, room)
 end
-Highlight.highlightPlan = highlightPlan -- tests
 
 -- player body part shapes (BodyInfo.shape): sphere x radius, box sides, cylinder (pill) x radius y length
 local BODY_SPHERE, BODY_CYLINDER = 0, 2 -- 1 is a box, the default branch

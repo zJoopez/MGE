@@ -93,14 +93,13 @@ end
 
 ---A number as a field shows it after a wheel step: no trailing zeros, "-0" as "0"
 ---@param value number
----@return string
 ---@param decimals integer? at most this many, default 4
+---@return string
 local function formatStep(value, decimals)
     local s = string.format("%." .. (decimals or 4) .. "f", value):gsub("0+$", ""):gsub("%.$", "")
     if s == "-0" then s = "0" end
     return s
 end
-Rows.formatWheelValue = formatStep -- for the tests
 Rows.formatNumberText = formatStep -- a number as a field's text: Generate's sizes and angles, the map overlay
 
 ---The value a wheel step starts from: the typed number, else the placeholder's (the selection's current

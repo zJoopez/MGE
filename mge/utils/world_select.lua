@@ -289,14 +289,14 @@ local function ghostShape(obj)
     local axes = { { f[1][1], f[2][1], f[3][1] }, { f[1][2], f[2][2], f[3][2] }, { f[1][3], f[2][3], f[3][3] } }
     local shape
     if g.shape == "sphere" then -- x radius
-        shape = { center = center, radius = s[1], hit = function(o, d) return hitSphere(o, d, center, s[1]) end }
+        shape = { center = center, radius = g.radius, hit = function(o, d) return hitSphere(o, d, center, s[1]) end }
     elseif g.shape == "cylinder" then -- a pill: x radius, y length of the straight part along local z
         local halfAxis = scale(axes[3], s[2] / 2)
         local a, b = sub(center, halfAxis), add(center, halfAxis)
-        shape = { center = center, radius = s[2] / 2 + s[1], hit = function(o, d) return hitCapsule(o, d, a, b, s[1]) end }
+        shape = { center = center, radius = g.radius, hit = function(o, d) return hitCapsule(o, d, a, b, s[1]) end }
     else
         local half = { s[1] / 2, s[2] / 2, s[3] / 2 }
-        shape = { center = center, radius = length(half), hit = function(o, d) return hitBox(o, d, center, axes, half) end }
+        shape = { center = center, radius = g.radius, hit = function(o, d) return hitBox(o, d, center, axes, half) end }
     end
     shape.obj = obj
     return shape

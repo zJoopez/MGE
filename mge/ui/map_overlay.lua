@@ -1,4 +1,4 @@
--- Convert Map overlay, opened by the Advanced tab's Map row (ui/editor_advanced.lua): the settings of
+-- Convert Map overlay, opened by the World list's Map row (ui/editor_misc.lua): the settings of
 -- a map conversion (.vmf, or a compiled Source .bsp from assets/maps; mapconv/*.lua). Place (or Enter
 -- in a field) goes on to the placement view (ui/map_place.lua), where the region to convert and where
 -- the map sits are picked with the gizmo, and its Convert adds the boxes like an import, in one undo
@@ -39,7 +39,7 @@ state.placements = state.placements or {}
 
 ---@return integer object ids free in the mod
 local function freeIds()
-    return #ModData.freeIds.static + #ModData.freeIds.nonStatic
+    return ModData.freeCount()
 end
 
 ---@class MapOverlayField

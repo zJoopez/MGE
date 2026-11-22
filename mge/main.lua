@@ -52,7 +52,7 @@
 ---@field MAX_NONSTATIC_OBJECTS integer
 ---@field MAX_ENV_JOINTS integer env_obj_joint ids 1-24
 ---@field MIN_SIDE number smallest object side written, zero sides crash physics
----@field MapConv table map converter (mapconv/*.lua), nil in game until MGE.loadMapConv: Advanced tab's Map row
+---@field MapConv table map converter (mapconv/*.lua), nil in game until MGE.loadMapConv: the World list's Map row (ui/editor_misc.lua)
 ---@field loadMapConv fun(): table loads the map converter the first time it's needed, returns MGE.MapConv
 ---@field isPlacing fun(): boolean the map placement view is open (it hides the window, gizmo and camera keep working)
 ---@field saveOverlay UIElement? open name prompt (ui/save_overlay.lua)
@@ -221,6 +221,7 @@ function MGE.syncGamerules()
     end
     if #names == 0 then return end
     FileHandler.setGamerules(ModData.parsed, changed, current)
+    MGE.loadedGamerules = current -- in the data now: the next sync finds nothing new (one message per change)
     table.sort(names)
     MGE.say("gamerules saved: " .. table.concat(names, ", "))
 end
@@ -591,14 +592,14 @@ function MGE.quit(fromWindow)
     end
     if MGE.cameraChanged then set_camera_mode(0) end -- look-at camera set by editor/object list
 
+    MGE.say("closed") -- before MGE goes: say is one of its functions
     MGE = nil
-    MGE.say("closed")
 end
 
 add_hook("match_begin", MGE.hookname, function()
     local path = MGE.modPath
     MGE.updateSource()
-    -- saves alternate between the two output files, that isn't a mod switch
+    -- applies load the one working copy (modmaker/mge-work.tbm) with two /lm spellings in turn, that isn't a mod switch
     local switchedMod = path ~= MGE.modPath and not (isSaveOutput(path) and isSaveOutput(MGE.modPath))
     if switchedMod then
         set_camera_mode(0)

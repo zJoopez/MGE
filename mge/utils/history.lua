@@ -23,15 +23,39 @@ local function copyObject(obj)
     return copy
 end
 
+---A stored atmo copy still matches the live object: same id, name, lines table and props. The selection doesn't
+---count (restore sets it from what's selected now)
+---@param stored FileParserEnvObj
+---@param obj FileParserEnvObj
+---@return boolean
+local function sameAtmo(stored, obj)
+    if stored.id ~= obj.id or stored.atmoName ~= obj.atmoName or stored.lines ~= obj.lines then return false end
+    local a, b = stored.props, obj.props
+    for key, value in pairs(b) do
+        if a[key] ~= value then return false end
+    end
+    for key in pairs(a) do
+        if b[key] == nil then return false end
+    end
+    return true
+end
+
 ---@param parsed FileParserResult
+---@param previous FileParserResult? the stored step before (commit): its atmo copies that still match are shared,
+---not copied again. Stored steps are never changed (restore copies them out), so sharing is safe; with thousands
+---of atmo objects every step copied all of them, also for an edit of one object
 ---@return FileParserResult
-local function copyParsed(parsed)
+local function copyParsed(parsed, previous)
     local copy = { ignores = parsed.ignores, trailer = parsed.trailer, env_obj = {}, env_obj_joint = {}, atmo = {},
         sharedPlayers = parsed.sharedPlayers, -- the file's way of writing player models (FileHandler.splitSharedPlayers)
         playable = parsed.playable } -- a playable atmo mod's params (utils/playable.lua), never changed in place
     for i, obj in ipairs(parsed.env_obj or {}) do copy.env_obj[i] = copyObject(obj) end
     for i, obj in ipairs(parsed.env_obj_joint or {}) do copy.env_obj_joint[i] = copyObject(obj) end
-    for i, obj in ipairs(parsed.atmo or {}) do copy.atmo[i] = copyObject(obj) end
+    local before = previous and previous.atmo or {}
+    for i, obj in ipairs(parsed.atmo or {}) do
+        local stored = before[i]
+        copy.atmo[i] = (stored and sameAtmo(stored, obj)) and stored or copyObject(obj)
+    end
     return copy
 end
 
@@ -65,6 +89,20 @@ local function sameProps(a, b, live)
     return true
 end
 
+---Line lists (the mod's lines before its objects, its trailer) the same: the same table, or the same lines. Every
+---reload parses new tables, so by table alone an undo after any reload rewrote and reloaded the mod
+---@param a string[]?
+---@param b string[]?
+---@return boolean
+local function sameLines(a, b)
+    if a == b then return true end
+    if not a or not b or #a ~= #b then return false end
+    for i = 1, #a do
+        if a[i] ~= b[i] then return false end
+    end
+    return true
+end
+
 ---True when only live-applicable changes differ, so undo can skip saving
 ---@param a FileParserResult
 ---@param b FileParserResult
@@ -72,7 +110,7 @@ end
 local function sameObjects(a, b)
     if #a.env_obj ~= #b.env_obj or #a.env_obj_joint ~= #b.env_obj_joint then return false end
     -- player model replaced (FileHandler.setPlayerLines swaps these tables), needs a reload
-    if a.ignores ~= b.ignores or a.trailer ~= b.trailer then return false end
+    if not sameLines(a.ignores, b.ignores) or not sameLines(a.trailer, b.trailer) then return false end
     for i, obj in ipairs(a.env_obj) do
         local other = b.env_obj[i]
         if obj.id ~= other.id or not sameProps(obj.props, other.props, LIVE_KEYS) then return false end
@@ -169,16 +207,19 @@ end
 
 ---Stores the current mod data as a new state, call after each change
 function History.commit()
+    -- rules changed in the game's menu go into this step: synced later (MGE.apply) they were in no undo state, and
+    -- an undo then redo wrote them away (MGE.syncGamerules makes them the baseline, so this is once per change)
+    if MGE.syncGamerules then MGE.syncGamerules() end
     local key = History.mergeKey
     if key and key == History.lastMerge and History.index == #History.states and History.index > 1 then
-        History.states[History.index] = copyParsed(ModData.parsed) -- the same step, its newest value
+        History.states[History.index] = copyParsed(ModData.parsed, History.states[History.index]) -- the same step, its newest value
         return
     end
     History.lastMerge = key
     for i = #History.states, History.index + 1, -1 do
         table.remove(History.states, i) -- new change drops redo states
     end
-    table.insert(History.states, copyParsed(ModData.parsed))
+    table.insert(History.states, copyParsed(ModData.parsed, History.states[History.index]))
     if #History.states > History.limit then
         table.remove(History.states, 1)
     end

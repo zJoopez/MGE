@@ -64,8 +64,8 @@ AtmoLayer.shapeOf = shapeOf
 ---@param rot number[]
 ---@return number[][]
 function AtmoLayer.frameOf(rot)
-    local r = math.rad
-    return Mat3.mul(Mat3.mul(Mat3.rotX(-r(rot[1] or 0)), Mat3.rotY(-r(rot[2] or 0))), Mat3.rotZ(-r(rot[3] or 0)))
+    -- Atmo Play's (the same math): looked up here, MGE.AtmoPlay loads after this file
+    return MGE.AtmoPlay.Colliders.frameOf(rot)
 end
 
 ---@class AtmoGhost: HighlightBox
@@ -285,7 +285,7 @@ end
 
 ---Unloads the atmo the game has loaded (main menu > Shaders & Atmos > Atmos, or its default atmo from
 ---data/atmospheres/atmo.cfg), back to the game's default look: MGE draws the mod's atmo itself, a
----loaded copy of it (MGE - <mod>.atmo, after a Save) would show every object twice, its old version
+---loaded copy of it (MGE - <mod>.atmo, World > Export) would show every object twice, its old version
 ---where the edited ones were. Called once, when MGE starts.
 ---Nothing loaded (_ATMO nil, the game manager's own flag): nothing happens, the shader stays as it is.
 ---The default in atmo.cfg stays: the player's choice for the next game start
@@ -370,15 +370,17 @@ function AtmoLayer.rotateBy(list, rotation, pivot, props)
         local target = props and props[obj] or obj
         local pos, rot = numbers(target.props.pos), numbers(target.props.rot)
         local r = math.rad
-        local outPos = RotatingOld.SetRotPos(pos[1] or 0, pos[2] or 0, pos[3] or 0, pivot[1], pivot[2], pivot[3], ox, oy, oz)
         local outRot = RotatingOld.SetRotOffset(r(rot[1] or 0), r(rot[2] or 0), r(rot[3] or 0), ox, oy, oz)
         MGE.Transforms.writeVector(target, "rot", outRot)
-        MGE.Transforms.writeVector(target, "pos", outPos)
+        if not MGE.Transforms.inPlace then -- in place: the position stays
+            local outPos = RotatingOld.SetRotPos(pos[1] or 0, pos[2] or 0, pos[3] or 0, pivot[1], pivot[2], pivot[3], ox, oy, oz)
+            MGE.Transforms.writeVector(target, "pos", outPos)
+        end
     end
 end
 
 ---Scales atmo objects by factors along frame's axes around pivot, like the objects' gizmo Scale
----(Transforms.planScale: positions through the group scale, sides by Transforms.scaleSidesFor with the
+---(transforms.lua's planScale: positions through the group scale, sides by Transforms.scaleSidesFor with the
 ---shape their shape line gives). Lines only, the caller commits
 ---@param list FileParserEnvObj[]
 ---@param factors number[]
@@ -394,7 +396,7 @@ function AtmoLayer.scaleBy(list, factors, pivot, frame, props)
         local rel = Mat3.apply(map, { (p[1] or 0) - pivot[1], (p[2] or 0) - pivot[2], (p[3] or 0) - pivot[3] })
         local s = numbers(target.props.sides)
         local sides = T.scaleSidesFor(target, { s[1] or 1, s[2] or 1, s[3] or 1 }, frame, factors, shapeOf(target))
-        T.writeVector(target, "pos", { pivot[1] + rel[1], pivot[2] + rel[2], pivot[3] + rel[3] })
+        if not T.inPlace then T.writeVector(target, "pos", { pivot[1] + rel[1], pivot[2] + rel[2], pivot[3] + rel[3] }) end
         T.writeVector(target, "sides", sides)
     end
 end
@@ -416,12 +418,15 @@ function AtmoLayer.liveGhost(g, live)
         local m = live.move
         x, y, z = x + m[1], y + m[2], z + m[3]
     end
+    local inPlace = MGE.Transforms.inPlace -- the positions stay (Transforms.inPlace)
     if live.rotation then
         local c, r = live.pivot, live.rotation
-        local dx, dy, dz = x - c[1], y - c[2], z - c[3]
-        x = c[1] + r[1][1] * dx + r[1][2] * dy + r[1][3] * dz
-        y = c[2] + r[2][1] * dx + r[2][2] * dy + r[2][3] * dz
-        z = c[3] + r[3][1] * dx + r[3][2] * dy + r[3][3] * dz
+        if not inPlace then
+            local dx, dy, dz = x - c[1], y - c[2], z - c[3]
+            x = c[1] + r[1][1] * dx + r[1][2] * dy + r[1][3] * dz
+            y = c[2] + r[2][1] * dx + r[2][2] * dy + r[2][3] * dz
+            z = c[3] + r[3][1] * dx + r[3][2] * dy + r[3][3] * dz
+        end
         -- each shared frame turned once for this drag step (AtmoLayer.live is new every step)
         live.turned = live.turned or {}
         local turned = live.turned[frame]
@@ -441,10 +446,12 @@ function AtmoLayer.liveGhost(g, live)
                 Mat3.transpose(gf))
             live.map = map
         end
-        local dx, dy, dz = x - c[1], y - c[2], z - c[3]
-        x = c[1] + map[1][1] * dx + map[1][2] * dy + map[1][3] * dz
-        y = c[2] + map[2][1] * dx + map[2][2] * dy + map[2][3] * dz
-        z = c[3] + map[3][1] * dx + map[3][2] * dy + map[3][3] * dz
+        if not inPlace then
+            local dx, dy, dz = x - c[1], y - c[2], z - c[3]
+            x = c[1] + map[1][1] * dx + map[1][2] * dy + map[1][3] * dz
+            y = c[2] + map[2][1] * dx + map[2][2] * dy + map[2][3] * dz
+            z = c[3] + map[3][1] * dx + map[3][2] * dy + map[3][3] * dz
+        end
         live.factorsBy = live.factorsBy or {}
         local f = live.factorsBy[frame]
         if not f then

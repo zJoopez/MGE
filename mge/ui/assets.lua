@@ -236,7 +236,7 @@ local function importObjects(parser, keepTab, inView, jointIds, atmoExcess)
     ---@type FileParserEnvObj[] the ones that go to the atmo, in order
     local excess = {}
     if atmoExcess and #linkedJoints == 0 then
-        local free = #ModData.freeIds.static + #ModData.freeIds.nonStatic
+        local free = ModData.freeCount()
         if type(atmoExcess) == "number" then free = math.max(0, math.min(free, atmoExcess)) end
         local over = #parser.env_obj - free
         if over > MGE.AtmoLayer.room() then
@@ -617,8 +617,6 @@ function assetsView.openImport()
         end,
     })
 end
-
-assetsView.placeInView = placeInView -- for the offline tests
 
 MGE.Assets = assetsView
 return assetsView

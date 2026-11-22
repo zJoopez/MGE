@@ -6,7 +6,7 @@
 -- A grid built once (colliders never move) limits each step to the colliders around the players' cells;
 -- the result is the same as looking at all of them (tests/test_pool.lua compares).
 --
--- Rule 1 (stable nearest), per group (shape, friction and hardness, see Colliders.groupKey): the colliders within `radius`
+-- Rule 1 (stable nearest), per group (shape|friction|hardness|bounce|flag bits, see Colliders.groupKey): the colliders within `radius`
 -- of any player's center (distance to the collider's surface), nearest first, ties by collider index,
 -- as many as the group has pool objects. A pool object keeps its collider while that collider is still
 -- among them; the others, in id order, take the wanted colliders nobody holds, nearest first; pool
@@ -22,10 +22,6 @@ local Colliders = NS.Colliders
 ---@field group string
 ---@field target AtmoPlayCollider? the collider it stands in for, nil when parked
 ---@field dirty boolean the next step reports it even when its target stays (after a reset)
----@field flag integer? the flag the runtime last gave the object, nil after a reset
----@field bounce number? the bounce the runtime last gave the object, nil after a reset
----@field baseFlag integer? the object's own flag (the file's), read by the runtime at load
----@field baseBounce number? the object's own bounce, read by the runtime at load
 
 ---@class AtmoPlayPoolChange
 ---@field entry AtmoPlayPoolEntry
@@ -63,6 +59,7 @@ end
 local function cellKey(x, y)
     return (x + 32768) * 65536 + (y + 32768)
 end
+Pool.cellKey = cellKey -- dynamics.lua's grid too
 
 ---@param objects AtmoPlayPoolObject[] the mod's pool objects (Format.read)
 ---@param colliders AtmoPlayCollider[]
@@ -293,8 +290,8 @@ end
 ---@field objects { id: integer, group: string }[] the pool objects to write, by id
 ---@field groups { group: string, colliders: integer, peak: integer, pool: integer }[] most needed first
 
----The pool a playable mod gets (MGE's Save, the offline builder): the free ids split by group (shape,
----friction and hardness: the game can't change those on an object), one per group first (most needed first), then in
+---The pool a playable mod gets (MGE's Save, the offline builder): the free ids split by group (Colliders.groupKey:
+---what a pool object can't change once loaded), one per group first (most needed first), then in
 ---proportion to each group's peak demand (always to the group with the highest peak / (pool + 1)), never
 ---more than a group has colliders. Splitting by collider count instead starves a group of few but big
 ---objects (a map's floors) that are near the players all the time. Deterministic: ties by group name

@@ -1,5 +1,5 @@
 -- Gizmo math (utils/gizmo.lua): handle layout and drag results from camera rays. Only vector math,
--- no game calls, so it's tested offline.
+-- no game calls, so it could be tested offline.
 --
 -- Drags are absolute: each frame the offset is worked out from where the handle was grabbed and where
 -- the mouse ray is now, never added up from mouse deltas (no drift, no dependence on mouse speed).

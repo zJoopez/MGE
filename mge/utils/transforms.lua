@@ -24,6 +24,11 @@ local pickGroupFrame
 ---Called after every change, set by the editor to refresh the rows showing current values
 Transforms.onChanged = function() end
 
+-- In place (the top bar's toggle left of the gizmo tools, saved in config.cfg): Rotate and Scale (the gizmo and the
+-- Rot / Scale rows) turn and size each object around its own position and leave the positions as they are. Off: the
+-- selection turns and scales as one group around its center, the positions too. Objects and atmo objects
+Transforms.inPlace = false
+
 -- Angle convention of the Rot and Rotate rows.
 --   true:  the numbers are the rot line's, Rot shows what the file says and Rotate z 30 from 0 writes
 --          "0 0 30". Positive angles turn clockwise when looking down the axis (the game's way).
@@ -129,18 +134,18 @@ local function applyFileRotation(obj)
     set_obj_rot(obj.id - 1, r[1], r[2], r[3])
 end
 
----Orientation from the rot line (degrees, no line is 0 0 0), columns are the object's axes in world
----space. The game reads rot x y z as (Rz(z) Ry(y) Rx(x))^T = Rx(-x) Ry(-y) Rz(-z): the convention in
----which rotating.lua's SetRotOffset turns objects the way SetRotPos moves them, and the one get_obj_rot
----matched in game (it gave the same axes as MGE's rotations)
----@param obj FileParserEnvObj
----@return number[][]
 -- orientations by rot line: thousands of objects (a converted map's atmo) mostly share a handful of rot
 -- lines, parsing and multiplying each one's was most of a release (Rotate / Scale) and of finding the group
 -- frame. Only read, never changed. Emptied when it grows big: every rotate writes new lines
 ---@type table<string, number[][]>
 local orientationByRot, orientationCount = {}, 0
 
+---Orientation from the rot line (degrees, no line is 0 0 0), columns are the object's axes in world
+---space. The game reads rot x y z as (Rz(z) Ry(y) Rx(x))^T = Rx(-x) Ry(-y) Rz(-z): the convention in
+---which rotating.lua's SetRotOffset turns objects the way SetRotPos moves them, and the one get_obj_rot
+---matched in game (it gave the same axes as MGE's rotations)
+---@param obj FileParserEnvObj
+---@return number[][]
 local function orientationOf(obj)
     local line = obj.props.rot or ""
     local m = orientationByRot[line]
@@ -289,10 +294,11 @@ local function rotBy(selectedObjects, offsets, pivot)
     end
     local rotByLine = {}
 
+    local inPlace = Transforms.inPlace
     for _, v in ipairs(selectedObjects) do
         local pos = positionOf(v)
         local dx, dy, dz = pos[1] - pivot[1], pos[2] - pivot[2], pos[3] - pivot[3]
-        local outPos = {
+        local outPos = inPlace and { pos[1], pos[2], pos[3] } or {
             pivot[1] + turn[1][1] * dx + turn[2][1] * dy + turn[3][1] * dz,
             pivot[2] + turn[1][2] * dx + turn[2][2] * dy + turn[3][2] * dz,
             pivot[3] + turn[1][3] * dx + turn[2][3] * dy + turn[3][3] * dz,
@@ -312,23 +318,24 @@ local function rotBy(selectedObjects, offsets, pivot)
         writeVectorProperty(v, "rot", outRot)
         writeVectorProperty(v, "pos", outPos)
     end
-    -- anchors rotate around the same pivot, axis directions get the same rotation without translation
-    finishTransform(selectedObjects, function(x, y, z)
+    -- anchors rotate around the same pivot (in place: they stay, like the positions), axis directions get the same
+    -- rotation without translation
+    finishTransform(selectedObjects, not inPlace and function(x, y, z)
         local p = RotatingOld.SetRotPos(x, y, z, pivot[1], pivot[2], pivot[3], offsets[1], offsets[2], offsets[3])
         return p[1], p[2], p[3]
-    end, function(x, y, z)
+    end or nil, function(x, y, z)
         local a = RotatingOld.SetRotPos(x, y, z, 0, 0, 0, offsets[1], offsets[2], offsets[3])
         return a[1], a[2], a[3]
     end)
     Transforms.onChanged()
 end
 
----World directions of an object's local x, y, z axes (columns of its orientation)
----@param obj FileParserEnvObj
----@return number[][]
 -- local axes by orientation (orientationOf shares one per rot line): built once, not per object. Read only
 local axesByOrientation = setmetatable({}, { __mode = "k" })
 
+---World directions of an object's local x, y, z axes (columns of its orientation)
+---@param obj FileParserEnvObj
+---@return number[][]
 local function getLocalAxes(obj)
     local m = orientationOf(obj)
     local axes = axesByOrientation[m]
@@ -347,6 +354,9 @@ local function groupScaleMatrix(frame, scale)
     return Mat3.mul(Mat3.mul(frame, { { scale[1], 0, 0 }, { 0, scale[2], 0 }, { 0, 0, scale[3] } }), Mat3.transpose(frame))
 end
 
+-- defined below sideFactors and applySideFactors, which it uses
+local scaleSidesAlong
+
 ---New sides for an object scaled along the group frame's axes. An object tilted against the group
 ---can't stretch along the group's axes and stay a box, so each local axis gets a weighted geometric
 ---mean of the factors: weight = how much that axis points along each group axis (squared, they add
@@ -360,21 +370,10 @@ end
 ---@param shapeName string? "box", "sphere" or "cylinder" (a pill): the shape line's, for objects not in
 ---the world (atmo objects); nil asks the game
 ---@return number[]
-local scaleSidesAlong
-
 local function scaleSides(obj, sides, frame, scale, shapeName)
     return scaleSidesAlong(getLocalAxes(obj), sides, frame, scale, shapeName or nil, obj)
 end
 
----scaleSides with the object's local axes given (columns of its orientation): an atmo object's ghost has
----them in its frame, a gizmo drag's preview scales it without reading its lines (utils/atmo_layer.lua)
----@param axes number[][] the local x, y, z axes in world space
----@param sides number[]
----@param frame number[][] group frame
----@param scale number[]
----@param shapeName string? see scaleSides
----@param obj FileParserEnvObj? for the game's shape when shapeName is nil
----@return number[]
 ---The factor each local axis' side gets (scaleSides' weighted geometric mean): it depends on the axes, the
 ---group frame and the factors only, so a drag preview works it out once per shared orientation
 ---(AtmoLayer.liveGhost) and applies it with Transforms.applySideFactors
@@ -419,6 +418,15 @@ end
 Transforms.sideFactors = sideFactors
 Transforms.applySideFactors = applySideFactors
 
+---scaleSides with the object's local axes given (columns of its orientation): an atmo object's ghost has
+---them in its frame, a gizmo drag's preview scales it without reading its lines (utils/atmo_layer.lua)
+---@param axes number[][] the local x, y, z axes in world space
+---@param sides number[]
+---@param frame number[][] group frame
+---@param scale number[]
+---@param shapeName string? see scaleSides
+---@param obj FileParserEnvObj? for the game's shape when shapeName is nil
+---@return number[]
 scaleSidesAlong = function(axes, sides, frame, scale, shapeName, obj)
     local f = sideFactors(axes, frame, scale)
     local sphere, capsule
@@ -520,6 +528,7 @@ local function planScale(selectedObjects, scale, pivot, frame)
     frame = frame or pickGroupFrame(selectedObjects)
     local map = groupScaleMatrix(frame, scale)
     local function scalePos(x, y, z)
+        if Transforms.inPlace then return x, y, z end -- each object sized around itself
         local rel = Mat3.apply(map, { x - pivot[1], y - pivot[2], z - pivot[3] })
         return pivot[1] + rel[1], pivot[2] + rel[2], pivot[3] + rel[3]
     end
@@ -570,7 +579,7 @@ local function scaleBy(selectedObjects, scale, pivot, frame)
     end
     -- same as moving: the camera follows, backing off only if the group no longer fits on screen
     if MGE.Camera.followMoves then MGE.Camera.focus(selectedObjects) end
-    finishTransform(selectedObjects, scalePos)
+    finishTransform(selectedObjects, not Transforms.inPlace and scalePos or nil)
     Transforms.onChanged()
 end
 
@@ -695,6 +704,18 @@ function Transforms.sizeTo(typed)
         end
         if done then break end
     end
+    -- a size it can't reach: In place keeps the positions, so the group never gets smaller than the space between
+    -- its objects; the factors ran to their limit (every object at the smallest size). Nothing changes then
+    local reached = groupExtents(selectedObjects, scale)
+    for i = 1, 3 do
+        if targets[i] and math.abs(reached[i] - targets[i]) > math.max(targets[i] * 0.01, 1e-4) then
+            MGE.say(string.format("can't scale the group to %g on %s: it gets to %.3g%s", targets[i],
+                ({ "x", "y", "z" })[i], reached[i], Transforms.inPlace and
+                " (In place keeps the positions: the space between the objects stays; turn it off to scale that too)"
+                or ""))
+            return
+        end
+    end
     scaleBy(selectedObjects, scale)
 end
 
@@ -756,9 +777,11 @@ function Transforms.previewRotate(selectedObjects, rotation, pivot)
     pivot = pivot or { getSelectionPivot(selectedObjects) }
     for _, v in ipairs(world) do
         if inWorld(v) then
-            local p = positionOf(v)
-            local rel = Mat3.apply(rotation, { p[1] - pivot[1], p[2] - pivot[2], p[3] - pivot[3] })
-            set_obj_pos(v.id - 1, pivot[1] + rel[1], pivot[2] + rel[2], pivot[3] + rel[3])
+            if not Transforms.inPlace then
+                local p = positionOf(v)
+                local rel = Mat3.apply(rotation, { p[1] - pivot[1], p[2] - pivot[2], p[3] - pivot[3] })
+                set_obj_pos(v.id - 1, pivot[1] + rel[1], pivot[2] + rel[2], pivot[3] + rel[3])
+            end
             -- rot line angles of the turned orientation: it's Rx(-x) Ry(-y) Rz(-z), see orientationOf
             local x, y, z = Mat3.toEulerXYZ(Mat3.mul(rotation, orientationOf(v)))
             set_obj_rot(v.id - 1, -x, -y, -z)

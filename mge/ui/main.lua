@@ -4,8 +4,6 @@ require("toriui.uielement")
 ---@field window UIElement
 ---@field page integer
 ---@field pageSize integer
----@field toggleAll boolean
----@field activeTab "core"|"advanced"|"thrust"|"generate" the objects' editor tab, kept while another list is shown
 ---@field activeTabs table<string, string> each list's active editor tab (panel id), by list
 ---@field listTab "objects"|"atmo"|"joints"|"players"|"misc" what the list area shows (misc: the whole mod's things)
 ---@field selectedPlayer integer last picked player: the players panel shows it (also when none is selected)
@@ -13,7 +11,7 @@ require("toriui.uielement")
 ---@field selectPlayer fun(id: integer, additive: boolean?) picks a player (list row, world click)
 ---@field selectedJoints table<integer, boolean> selected joint slots (Shift adds), never empty, empty slots too
 ---@field jointSlot integer the current joint slot (last clicked), always selected: the Link tab edits it
-local Main = { page = 1, pageSize = 64, toggleAll = false, activeTab = "core", listTab = "objects", selectedPlayer = 0,
+local Main = { page = 1, pageSize = 64, listTab = "objects", selectedPlayer = 0,
     selectedPlayers = { [0] = true }, selectedJoints = { [1] = true }, jointSlot = 1,
     activeTabs = { objects = "core", atmo = "core", players = "player", joints = "jointLink", misc = "misc" } }
 MGE.Main = Main -- registered before UI modules load so they can alias it
@@ -109,8 +107,8 @@ if closeButton.child and closeButton.child[1] then -- its cross loads again afte
     Widgets.trackImage(closeButton.child[1], "../textures/menu/general/buttons/crosswhite.tga")
 end
 
--- the tools, left of close: gizmo tool toggles, undo / redo, save, settings
-local ICON_COUNT = 7 -- move, rotate, scale, undo, redo, save, settings
+-- the tools, left of close: in place, gizmo tool toggles, undo / redo, save, settings
+local ICON_COUNT = 8 -- in place, move, rotate, scale, undo, redo, save, settings
 local toolsW = BAR_ICON * ICON_COUNT + BAR_GAP * (ICON_COUNT - 1)
 -- negative x: from the bar's right edge, so the groups follow it when the screen size changes (Main.fitScreen)
 local toolsX = -(BAR_H + BAR_SEP + toolsW)
@@ -141,6 +139,17 @@ local TOOLS = {
     { mode = "scale", label = "Scale (Alt + E)" },
 }
 local bar = {}
+-- In place (Transforms.inPlace): Rotate and Scale leave the positions, each object turns and sizes around itself.
+-- Lit while on, saved in config.cfg
+local IN_PLACE_LABEL = "In place: Rotate and Scale turn and size each object\naround itself, positions stay. " ..
+    "Off: the selection\nas one group around its center"
+table.insert(bar, { label = IN_PLACE_LABEL, icon = MGE.scriptPath .. "textures/inplace.tga", onClick = function()
+    MGE.Transforms.inPlace = not MGE.Transforms.inPlace
+    Main.updateInPlaceButton()
+    MGE.say(MGE.Transforms.inPlace and "Rotate / Scale: in place, each object around itself"
+        or "Rotate / Scale: the selection as one group")
+    if MGE.Config then MGE.Config.save() end
+end })
 for _, tool in ipairs(TOOLS) do
     table.insert(bar, { label = tool.label, icon = MGE.scriptPath .. "textures/" .. tool.mode .. ".tga",
         onClick = function() MGE.Gizmo.toggle(tool.mode) end })
@@ -157,10 +166,19 @@ table.insert(bar, { label = "Settings", icon = "../textures/menu/general/buttons
 for _, item in ipairs(bar) do item.popupLeft = true end -- near the screen's right edge
 local icons = Widgets.buttonRow(iconButtons, 0, BAR_ICON, bar, BAR_GAP, nil, BAR_STYLE)
 
----The active tool's button is highlighted
+---The in place toggle lit while on
+function Main.updateInPlaceButton()
+    local btn = icons[1]
+    if btn and not btn.destroyed then
+        btn.bgColor = MGE.Transforms.inPlace and Widgets.ACTIVE_COLOR or BAR_COLOR
+    end
+end
+Main.updateInPlaceButton()
+
+---The active tool's button is highlighted (the tools come after the in place toggle)
 local function updateToolButtons()
     for i, tool in ipairs(TOOLS) do
-        local btn = icons[i]
+        local btn = icons[i + 1]
         if btn and not btn.destroyed then
             btn.bgColor = MGE.Gizmo.mode == tool.mode and Widgets.ACTIVE_COLOR or BAR_COLOR
         end
@@ -225,7 +243,7 @@ Widgets.buttonRow(gameMenus, 0, BAR_H, {
 }, BAR_GAP, Widgets.TAB_TEXT_SCALE, BAR_STYLE)
 
 -- the list sits in a panel like the editor's: panel color, padding, the active list tab touches it.
--- listH (above): its rows, ScrollList.rowHeight (25) each
+-- listH (above): its rows, Widgets.LIST_ROW_H (px(20)) each
 local listPanel = content:addChild({
     pos = defaultPos,
     size = { content.size.w, listH + ACTIONS_GAP + ACTIONS_H + TAB_PADDING * 2 },
@@ -329,7 +347,7 @@ local editorContainer = tabPanel:addChild({
 })
 updateContentHeight(tabPanel.size.h)
 
--- Duplicate/Delete/Import/Export are the list's buttons on the top bar (Main.setListActions), Save is with the
+-- Duplicate/Delete/Import/Export are the list's buttons under the list (Main.setListActions), Save is with the
 -- tools (its name on World > Core), Reindex is in the Advanced panel
 
 -- footer: one row along the bottom of the screen over the game's view, no background, a child of the panel
@@ -435,11 +453,12 @@ local FOOTER_COLOR = { 0, 0, 0, 1 } -- black: the footer is over the game's (lig
 Widgets.addDrawBefore(fileRow, function()
     local parsed, state, saved = ModData.parsed, History.states[History.index], MGE.savedText
     local source = tostring(MGE.sourcePath) .. "|" .. tostring(MGE.saveName) -- the typed name changes the target too
-    -- the atmo file's saved text too: Export atmo writes it without saving the mod (utils/atmo.lua)
-    local atmo = tostring(MGE.Atmo.state.text) .. "#" .. MGE.Atmo.headerVersion -- a shader picked counts too
+    -- the atmo's saved text too (a save marks it saved, utils/atmo.lua), compared as it is: joined with anything it
+    -- was copied each frame, hundreds of KB with a big atmo. A shader picked counts too (headerVersion)
+    local atmo, header = MGE.Atmo.state.text, MGE.Atmo.headerVersion
     if shown.parsed == parsed and shown.state == state and shown.source == source and shown.saved == saved
-        and shown.atmo == atmo and shown.done then return end
-    shown = { parsed = parsed, state = state, source = source, saved = saved, atmo = atmo, done = true }
+        and shown.atmo == atmo and shown.header == header and shown.done then return end
+    shown = { parsed = parsed, state = state, source = source, saved = saved, atmo = atmo, header = header, done = true }
     local target = MGE.saveTarget()
     local unsaved = MGE.hasUnsavedChanges()
     -- where Save writes (a mod from outside modmaker/ is copied there, its original stays as it is)
@@ -451,7 +470,7 @@ end)
 
 dofile(MGE.scriptPath .. "ui/scroll_list.lua") -- MGE.ScrollList, used by the lists and the file picker
 MGE.ScrollList.bgColor = LIST_BG -- every list: the object grid, players, the file picker, assets
-dofile(MGE.scriptPath .. "ui/file_picker.lua") -- MGE.FilePicker, folder browser: asset import, Model row
+dofile(MGE.scriptPath .. "ui/file_picker.lua") -- MGE.FilePicker, folder browser: imports, Model, Shader and Map rows
 dofile(MGE.scriptPath .. "ui/color_picker.lua") -- MGE.ColorPicker, the Core tab's Color name
 dofile(MGE.scriptPath .. "ui/assets.lua") -- MGE.Assets, export / import overlay for the lists' buttons
 local obj_selector = dofile(MGE.scriptPath .. "ui/obj_selector.lua")
@@ -484,7 +503,6 @@ function Main.setTab(id)
     local list = listHasTab(Main.listTab, id) and Main.listTab or tabList[id]
     if not list then return end
     Main.activeTabs[list] = id
-    if list == "objects" then Main.activeTab = id --[[@as "core"|"advanced"|"thrust"|"generate"]] end
     Main.applyTab()
 end
 
@@ -496,7 +514,6 @@ function Main.leaveGenerate(list)
     list = list or Main.listTab
     if (list ~= "objects" and list ~= "atmo") or Main.activeTabs[list] ~= "generate" then return end
     Main.activeTabs[list] = "core"
-    if list == "objects" then Main.activeTab = "core" end
     if list == Main.listTab then Main.applyTab() end
 end
 
@@ -771,7 +788,6 @@ function Main.toggleSelectAll(value)
             if not obj.selected then value = true break end
         end
     end
-    Main.toggleAll = value
     for _, obj in ipairs(objects) do
         obj.selected = value or nil
     end
@@ -793,16 +809,9 @@ end
 
 function Main.resetWindow()
     Main.page = 1
-    Main.toggleAll = false
     Main.selectedJoints, Main.jointSlot = { [1] = true }, 1 -- another mod: its joints are other joints
     MGE.Joints.resetDraft() -- its slot belongs to the old mod
     Main.updateWindow()
-end
-
-function Main.resetEditor()
-    Widgets.clearChildren(editorContainer)
-    createEditor()
-    Main.applyTab() -- rebuilt children are visible by default
 end
 
 setDynamicStrings()

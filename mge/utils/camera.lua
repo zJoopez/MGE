@@ -84,10 +84,7 @@ function Camera.bounds(objects)
             -- an atmo object: its lines (its id isn't an object's), ghost-sized like it's drawn
             local g = MGE.AtmoLayer.ghost(obj)
             if g then
-                local s = g.sides
-                local r = g.shape == "sphere" and s[1] or g.shape == "cylinder" and s[2] / 2 + s[1]
-                    or math.sqrt(s[1] * s[1] + s[2] * s[2] + s[3] * s[3]) / 2
-                table.insert(positions, { pos = g.pos, radius = math.min(r, Camera.maxObjectRadius) })
+                table.insert(positions, { pos = g.pos, radius = math.min(g.radius, Camera.maxObjectRadius) })
             end
         elseif get_obj_pos(obj.id - 1) ~= nil then -- in the world, position as the file has it (like the pivot)
             local radius = math.min(objectRadius(obj.id - 1), Camera.maxObjectRadius)

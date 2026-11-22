@@ -22,7 +22,7 @@ local Mat3 = NS.Mat3
 ---@field sides number[] box: full sides; sphere: radius first; cylinder: radius, length (along local z)
 ---@field frame number[][] rotation, local to world
 ---@field radius number bounding sphere around pos
----@field group string pool group: shape, friction and hardness ("box|10000", "sphere|", "box||5"), Colliders.groupKey
+---@field group string pool group: shape|friction|hardness|bounce|flag bits (+mass for props), Colliders.groupKey ("box|10000")
 ---@field friction number?
 ---@field flag integer?
 ---@field bounce number?
@@ -52,6 +52,7 @@ local SKIP_KEYS = {
     parent = "parented",
 }
 
+---A line's numbers ("1 2 3" -> { 1, 2, 3 }), {} for nil
 ---@param text string?
 ---@return number[]
 local function numbers(text)
@@ -59,6 +60,7 @@ local function numbers(text)
     for n in tostring(text or ""):gmatch("%S+") do out[#out + 1] = tonumber(n) or 0 end
     return out
 end
+Colliders.numbers = numbers
 
 ---A shape line as a collider shape: nil for custom models
 ---@param value string?
@@ -198,7 +200,7 @@ function Colliders.build(lines)
     local frames = {}
     for index, entity in ipairs(entities) do
         local p = entity.props
-        local reason, shape = Colliders.classify(p)
+        local reason, shape, group, dynamic = Colliders.classify(p)
         if reason then
             skipped[reason] = (skipped[reason] or 0) + 1
         else
@@ -220,7 +222,6 @@ function Colliders.build(lines)
                 frame = Colliders.frameOf(numbers(p.rot))
                 frames[rotKey] = frame
             end
-            local dynamic = Colliders.isDynamicFlag(p.flag)
             local list = dynamic and props or colliders
             list[#list + 1] = {
                 index = index,
@@ -230,7 +231,7 @@ function Colliders.build(lines)
                 sides = sides,
                 frame = frame,
                 radius = radius,
-                group = Colliders.groupKey(shape --[[@as string]], p, Colliders.isDynamicFlag(p.flag)),
+                group = group,
                 friction = tonumber(p.friction),
                 flag = tonumber(p.flag),
                 bounce = tonumber(p.bounce),

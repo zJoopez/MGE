@@ -196,8 +196,6 @@ local function readLines(name)
     return lines
 end
 
----The layer from the mod's atmo file, replacing what's there (opening a mod). No file: an empty layer
----@param modPath string? under data/mod
 -- The atmo's shader shown live: the game loads a world shader with `lws <name>.inc` (its Shaders & Atmos
 -- menu does the same). The mod's atmo shader (a `shader` line) is loaded when the mod opens and when the World
 -- list sets it; without one, and when MGE closes, the player's own shader comes back: the one loaded when MGE
@@ -236,6 +234,8 @@ function Atmo.applyShader(restore)
     runCmd("lws " .. file)
 end
 
+---The layer from the mod's atmo file, replacing what's there (opening a mod). No file: an empty layer
+---@param modPath string? under data/mod
 ---@param embedded string[]? the atmo lines inside the mod (a playable or a drawn mod): read instead of the file
 function Atmo.load(modPath, embedded)
     local name = Atmo.fileName(modPath)

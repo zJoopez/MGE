@@ -72,14 +72,6 @@ function Joints.nextId()
     return Joints.freeIds()[1]
 end
 
----Number of joints that copyLinked would add (both ends in ids)
----@param joints FileParserEnvObjJoint[]
----@param ids table<integer, boolean>
----@return integer
-function Joints.countLinked(joints, ids)
-    return #Joints.getLinked(ids, joints)
-end
-
 ---Prints a message and returns false if `count` more joints don't fit the joint limit
 ---@param count integer
 ---@return boolean
@@ -449,31 +441,6 @@ function Joints.centerPos(joints)
         local m = Joints.jointMidpoint(joint)
         return m and formatVector(m[1], m[2], m[3]) or nil
     end)
-end
-
----Changes which objects a joint links. The anchor stays where it is (Joints.centerPos moves it)
----@param joint FileParserEnvObjJoint
----@param obj1 integer object id
----@param obj2 integer object id
----@return boolean changed
-function Joints.setObjects(joint, obj1, obj2)
-    if obj1 == obj2 then
-        MGE.say("a joint links two different objects")
-        return false
-    end
-    for _, id in ipairs({ obj1, obj2 }) do
-        if not Joints.objectById(id) then
-            MGE.say("this mod has no object " .. tostring(id))
-            return false
-        end
-    end
-    if joint.obj1 == obj1 and joint.obj2 == obj2 then return false end
-    joint.obj1, joint.obj2 = obj1, obj2
-    unstaticLinked(obj1, obj2)
-    fitLinkedIds(joint.id, obj1, obj2)
-    MGE.History.commit()
-    MGE.apply()
-    return true
 end
 
 -- Link tab of the Joints list (ui/editor_link.lua): the two objects of one joint slot are picked into a

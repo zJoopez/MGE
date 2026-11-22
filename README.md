@@ -33,6 +33,9 @@ The window has five lists, each with its own tabs.
 - Click objects in the world to select them. Shift + click adds to the selection.
 - The gizmo (Move, Rotate, Scale) works on everything selected. Hold Ctrl while dragging to snap
   (Ctrl + Shift: the fine step). The steps are in Settings > Snapping.
+- **In place** (the toggle left of the gizmo tools): Rotate and Scale, with the gizmo or the Rot / Scale rows, turn
+  and size each object around itself and leave the positions. Off: the selection turns and scales as one group
+  around its center. Objects and atmo objects; it stays as you left it (config.cfg).
 - **Export** saves the selected objects (or a player's model) as an asset. **Import** adds one in
   front of the camera. Assets live in `mge/mge/assets/obj` and `mge/mge/assets/player`, and a few
   examples come with the download.
