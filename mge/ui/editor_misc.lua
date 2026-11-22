@@ -1,4 +1,6 @@
 -- World list tab's panel: things about the whole mod, not the selected objects
+--   Name:    where Save writes (modmaker/<name>.tbm, MGE.renameProject's prompt), "mge" without a mod, never
+--            "exp_..." (the exports' prefix); the exports use it
 --   Message: the mod's `message` line (the game shows it in chat when the mod loads), one of the mod file's
 --            lines before its objects (ModData.parsed.ignores). Typed, Enter applies it, empty removes it
 --   Shader:  the atmo file's `shader` line (utils/atmo.lua: Atmo.state.header), a data/shader/<name>.inc. Loaded
@@ -8,7 +10,7 @@
 --   Mod:     Reset all: loads the classic mod (/lm classic), asks first with unsaved changes
 --   Atmo:    Playable / Default, a playable atmo mod (utils/playable.lua; it was on the Atmo list's Advanced tab, the
 --            only row there that wasn't about the selection)
---   Export:  Atmo (data/atmospheres/MGE - <mod>.atmo) and Mod (<mod>_clean.tbm, without its atmo): for
+--   Export:  Atmo (data/atmospheres/MGE - exp_<name>.atmo) and Mod (exp_<name>.tbm, without its atmo): for
 --            players without Atmo Play; Save keeps the atmo inside the mod
 --   Credits: the last row
 local Rows = MGE.EditorRows
@@ -105,11 +107,19 @@ local function createTextInput(container, text, placeholder, onEnter)
     return input
 end
 
----Message and Shader rows, rebuilt with the editor (another mod: its message and atmo)
+---Name, Message and Shader rows, rebuilt with the editor (another mod: its name, message and atmo)
 ---@param holder UIElement
 local function buildFileRows(holder)
     Rows.begin()
-    local row, contentX, contentW = createRow("Message", holder,
+    local row, contentX, contentW = createRow("Name", holder,
+        "The mod's name: Save writes mod/" .. MGE.saveFolder .. "<name>.tbm\n(asks before replacing another file), " ..
+        "the\nexports are named after it. Click to change it.\nWithout a mod: " .. MGE.DEFAULT_NAME ..
+        ". Never starts with " .. MGE.EXPORT_PREFIX .. "\n(the exports' prefix).")
+    local inset = Widgets.INSET
+    Widgets.button(row, { x = contentX + inset, y = inset, w = contentW - inset * 2, h = row.size.h - inset * 2 },
+        MGE.saveTargetName(), function() MGE.renameProject() end, nil, Widgets.PANEL_STYLE)
+
+    row, contentX, contentW = createRow("Message", holder,
         "Shown in chat when the mod loads (its message line).\nEnter applies it, empty removes it.")
     local container = row:addChild({ pos = { contentX, 0 }, size = { contentW, row.size.h } })
     local _, message = findMessage()
@@ -208,7 +218,7 @@ end
 
 ---Export row: "clean" copies for players without Atmo Play. Save keeps the atmo inside the mod (Atmo Play draws it,
 ---or makes it solid); Atmo writes it as data/atmospheres/MGE - <mod>.atmo for the game's own atmo menu, Mod
----writes the mod without it as <mod>_clean.tbm
+---writes the mod without it as exp_<name>.tbm (MGE.askExportName)
 ---@param holder UIElement
 local function buildExportRow(holder)
     Rows.begin()
@@ -216,20 +226,21 @@ local function buildExportRow(holder)
         { label = "Atmo", active = false, onClick = function() MGE.AtmoLayer.exportAtmo() end },
         { label = "Mod", active = false, onClick = function() MGE.exportCleanMod() end },
     }, "Save keeps the atmo inside the mod: Atmo Play\ndraws it. For players without Atmo Play:\n" ..
-        "Atmo: data/atmospheres/MGE - <mod>.atmo, loaded\nin Shaders & Atmos > Atmos.\n" ..
-        "Mod: <mod>_clean.tbm, the mod without its atmo.")
+        "Atmo: data/atmospheres/MGE - exp_<name>.atmo,\nloaded in Shaders & Atmos > Atmos.\n" ..
+        "Mod: modmaker/exp_<name>.tbm, the mod without\nits atmo. Both ask the name (the mod's name stays)\n" ..
+        "and replace an earlier export of that name\n(a mod's name never starts with exp_).")
 end
 
 ---@type EditorPanelModule
 return {
     fixed = {
-        { build = buildMapRow, panel = "misc", row = 2, rows = 1 },
-        { build = buildModRow, panel = "misc", row = 3, rows = 1 },
-        { build = buildExportRow, panel = "misc", row = 5, rows = 1 },
+        { build = buildMapRow, panel = "misc", row = 3, rows = 1 },
+        { build = buildModRow, panel = "misc", row = 4, rows = 1 },
+        { build = buildExportRow, panel = "misc", row = 6, rows = 1 },
         { build = buildCredits, panel = "misc", row = 8, rows = 1 },
     },
     blocks = {
-        { name = "miscFile", build = buildFileRows, panel = "misc", row = 0, rows = 2 },
-        { name = "playable", build = buildPlayableRow, panel = "misc", row = 4, rows = 1 },
+        { name = "miscFile", build = buildFileRows, panel = "misc", row = 0, rows = 3 },
+        { name = "playable", build = buildPlayableRow, panel = "misc", row = 5, rows = 1 },
     },
 }

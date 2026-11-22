@@ -123,9 +123,15 @@ local function fakeGame()
     return game
 end
 
-local function startRuntime()
+---@param withLog boolean? the dev build: debuglog.lua loaded too (the releases don't have it)
+local function startRuntime(withLog)
+    ATMOPLAY.DebugLog = nil
     ATMOPLAY_LOADING = ATMOPLAY -- a fresh module state per test, loaded like atmoplay.lua does
     dofile(ATMOPLAY.scriptPath .. "runtime.lua")
+    if withLog then
+        ATMOPLAY_LOADING = ATMOPLAY
+        dofile(ATMOPLAY.scriptPath .. "debuglog.lua")
+    end
     ATMOPLAY_LOADING = nil
     ATMOPLAY.Runtime.start()
     return ATMOPLAY.Runtime
@@ -267,24 +273,28 @@ run("the player's atmo comes back; quit unwraps the manager", function(game)
     T.eq(next(game.hooks), nil, "no hooks left")
 end)
 
-run("commands, show, debug log and hold", function(game)
+run("commands: a release has status, reload and quit, no log", function(game)
     startRuntime()
     T.eq(game.fire("command", "atmoplay"), 1, "/atmoplay handled")
     T.eq(game.fire("command", "ping"), nil, "other commands left alone")
     game.lm("arena.tbm")
-    game.fire("command", "atmoplay show")
-    game.play(2, false, 1)
-    T.ok(T.find(game.log, "^vis %d+ ", true) ~= nil, "show sets visibility")
+    T.eq(game.fire("command", "atmoplay log"), 1, "log: handled (the command list)")
+    game.play(3, false, 1)
+    T.eq(game.files["atmoplay_debug.log"], nil, "no log without debuglog.lua")
+    T.ok(game.said[#game.said]:find("reload", 1, true) ~= nil, "the command list")
+    T.eq(game.hooks["end_game/atmoplay"], nil, "no hooks that only log")
+end)
+
+run("dev build: the debug log logs frames and hooks", function(game)
+    startRuntime(true)
+    game.lm("arena.tbm")
     game.fire("command", "atmoplay log")
     game.play(3, false, 3)
     local log = game.files["atmoplay_debug.log"]
     T.ok(log and log:find("drive: frame 3", 1, true) ~= nil, "frames logged")
     game.fire("leave_game")
     T.ok(game.files["atmoplay_debug.log"]:find("leave_game", 1, true) ~= nil, "hooks logged")
-    game.fire("command", "atmoplay hold")
-    T.eq(#game.play(5, false, 10), 0, "held: no object calls")
-    game.fire("command", "atmoplay hold")
-    T.ok(#game.play(5, false, 15) > 0, "moving again")
+    game.fire("command", "atmoplay log")
 end)
 
 run("unload (the menu, the save overlay, other scripts) doesn't stop it", function(game)
@@ -351,7 +361,7 @@ run("R before any move: nothing moved, in the fight or the replay", function(gam
 end)
 
 run("debug log: every object call and a summary per frame, the setters back after", function(game)
-    startRuntime()
+    startRuntime(true)
     local original = set_obj_pos
     game.fire("command", "atmoplay log")
     T.ok(set_obj_pos ~= original, "traced while logging")

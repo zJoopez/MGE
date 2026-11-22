@@ -77,7 +77,7 @@ local ATMO_INFO = "How many objects the atmo holds. MGE draws every one,\n" ..
 local SHORTCUTS = table.concat({
     "F1: show / hide window",
     "Esc: close the open prompt / popup / settings",
-    "Ctrl + S: save   Ctrl + Shift + S: rename",
+    "Ctrl + S: save (its name: World > Core > Name)",
     "Ctrl + A: select / deselect all (of the shown list)",
     "Click object, id, joint or player: select it, Shift + click: add / remove",
     "Ctrl + N / D: new / duplicate selected (of the shown list)",

@@ -41,7 +41,7 @@ $repo = Split-Path -Parent $PSScriptRoot # mge/ (the repo), tools/ is in it
 if (-not $Out) { $Out = Join-Path (Split-Path -Parent $repo) "mge.zip" } # next to the repo, in data/script
 
 # tracked, but only for working on MGE
-$DevOnly = @("^\.gitignore$", "^docs/", "^tests/", "^tools/")
+$DevOnly = @("^\.gitignore$", "^docs/", "^tests/", "^tools/", "^atmoplay/debuglog\.lua$")
 # examples shipped with the release (assets/ isn't tracked)
 $SampleAssets = @(
     "mge/assets/obj/katana.tbm", "mge/assets/obj/paddle.tbm", "mge/assets/obj/scooter.tbm",

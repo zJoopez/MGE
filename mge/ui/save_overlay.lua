@@ -3,7 +3,8 @@ if (MGE.saveOverlay ~= nil) then
     return
 end
 
--- name prompt for MGE.saveAs (the mod's first Save) and asset Export, MGE.saveOverlayContext says
+-- name prompt for asset Export, the mod's name and World > Export (MGE.renameProject, MGE.askExportName),
+-- MGE.saveOverlayContext says
 -- what saving does (onSave), the title, placeholder and default name
 local saveContext = MGE.saveOverlayContext or {}
 
@@ -88,7 +89,7 @@ local function save(newname)
             "Mod name must be alphanumeric and can only contain underscores, spaces or dashes as special characters")
         return
     end
-    -- the opener decides what saving means: the mod's Save (MGE.saveAs) or an asset Export
+    -- the opener decides what saving means (an asset, the mod's name or World > Export)
     local ok = saveContext.onSave and saveContext.onSave(name)
     if ok ~= false then
         closeOverlay()

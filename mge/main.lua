@@ -10,9 +10,8 @@
 ---@field modName string
 ---@field modPath string?
 ---@field modFolder string
----@field outputName string
----@field secondaryOutputName string
----@field activeOutputName string
+---@field workPath string the working copy, under data/mod
+---@field workSpellings string[] the /lm texts MGE.apply takes turns with
 ---@field hookname string
 ---@field say fun(text: any) a message: chat and the footer (MGE.onMessage)
 ---@field onMessage fun(text: string)? set by ui/main.lua: flashes it in the footer
@@ -71,9 +70,13 @@
 ---@field overlayOpen fun(): boolean one of the overlays above, or a game overlay, is open
 ---@field apply fun() writes the working copy and reloads it (shows edits), not a save of the mod
 ---@field save fun() Save button / Ctrl + S: writes the mod to saveTarget()
----@field saveAs fun() Rename: asks the name to save the mod as
+---@field renameProject fun() World > Core's Name: asks where Save writes from now on
+---@field saveName string? the name set there, until a save or another mod
+---@field askExportName fun(title: string, write: fun(name: string)) World > Export's name prompt
+---@field EXPORT_PREFIX string every export's name starts with it ("exp_")
+---@field DEFAULT_NAME string Save's name without a source ("mge")
 ---@field setSource fun(path: string?, text: string?) the data belongs to that file now
----@field saveTarget fun(): string? where Save writes, under data/mod, always in saveFolder
+---@field saveTarget fun(): string where Save writes, under data/mod, always in saveFolder
 ---@field hasUnsavedChanges fun(): boolean
 ---@field saveFolder string Save only writes here (under data/mod), "modmaker/" like the game's modmaker
 ---@field sourcePath string? file the data belongs to (loaded or last written), path under data/mod
@@ -92,8 +95,12 @@ function MGE.say(text)
     echo("^04[MGE] " .. text)
     if MGE.onMessage then pcall(MGE.onMessage, text) end
 end
-MGE.outputName = "mge-modmaker.tbm"
-MGE.secondaryOutputName = "mge-modmaker1.tbm"
+-- the working copy (MGE.apply): one file next to the user's mods. The game keeps the loaded mod by the text typed
+-- after /lm: the same text again (with or without .tbm) gives the old file, any other spelling reads it again
+-- (tools/reload_probe.lua, 2026-11-22: letter case, a double slash, and the first text again once another came
+-- between). So apply takes turns with two spellings of the one file; "//" is the same file on every system
+MGE.workPath = "modmaker/mge-work.tbm"
+MGE.workSpellings = { "modmaker/mge-work.tbm", "modmaker//mge-work.tbm" }
 MGE.modName = get_game_rules().mod
 MGE.modPath = find_mod(get_game_rules().mod)
 MGE.modFolder = "../data/mod/"
@@ -183,8 +190,8 @@ function MGE.updateSource()
     ModData.reloadObjects()
 end
 
-function MGE.loadMod(outputName)
-    runCmd("lm " .. outputName)
+function MGE.loadMod(name)
+    runCmd("lm " .. name)
 end
 
 ---@return table<string, string> current gamerule values by name, as the game would write them
@@ -218,16 +225,16 @@ function MGE.syncGamerules()
     MGE.say("gamerules saved: " .. table.concat(names, ", "))
 end
 
--- Saving. Edits are applied to a working copy that the game loads (MGE.apply: mge-modmaker.tbm and
--- mge-modmaker1.tbm, alternating so lm reloads it), many edits do that to show their result. The
--- mod itself is only written by Save and Rename, always into data/mod/modmaker/ (MGE.saveFolder) so
+-- Saving. Edits are applied to a working copy that the game loads (MGE.apply: modmaker/mge-work.tbm,
+-- loaded with two spellings in turn so lm reads it again), many edits do that to show their result. The
+-- mod itself is only written by Save, always into data/mod/modmaker/ (MGE.saveFolder) so
 -- other mods are never replaced.
 --   MGE.sourcePath: the file the data belongs to, the loaded mod or the last one written
 --   MGE.savedText:  that file's text, the footer compares it with the data for "unsaved changes"
---   Save (MGE.save, Ctrl + S): writes MGE.saveTarget(): the source itself when it's in modmaker/,
---                   otherwise a copy there with its name. Asks the name only when there's no source,
---                   or that copy would replace an existing file
---   Rename (MGE.saveAs, Ctrl + Shift + S): asks the name, the written file becomes the source
+--   Save (MGE.save, Ctrl + S): writes MGE.saveTarget(): the name typed on World > Core (MGE.saveName), else
+--                   the source itself when it's in modmaker/, otherwise a copy there with its name, and
+--                   modmaker/mge.tbm without a source (the classic mod). Always possible: replacing a file
+--                   that isn't ours asks first. The written file becomes the source
 -- A file counts as ours (overwritten without asking) only when it's the source.
 
 ---@type { path: string, text: string }? the source, kept over a script restart (MGE is rebuilt, this
@@ -257,22 +264,24 @@ end
 ---@return boolean
 local function isSaveOutput(path)
     local name = tostring(path):gsub("^.*[/\\]", "")
-    return name == MGE.outputName or name == MGE.secondaryOutputName
+    return name == (MGE.workPath:gsub("^.*[/\\]", ""))
 end
 
 ---Writes the working copy and reloads it, so the game shows the edits. Not a save of the mod (MGE.save)
 function MGE.apply()
-    local outputName = MGE.modName == MGE.outputName and MGE.secondaryOutputName or MGE.outputName  --bypass for lm not loaading updates without mod swap
+    -- the other spelling than the loaded one: /lm reads the file again (MGE.workSpellings)
+    local spelling = MGE.modName == MGE.workSpellings[1] and MGE.workSpellings[2] or MGE.workSpellings[1]
     MGE.syncGamerules()
+    local parsed = ModData.parsedFor(MGE.workPath) -- models from modmaker/ (the data has them for data/mod)
     if MGE.Playable.isOn() then
         -- a playable mod: the working copy carries the pool, MGE moves it in fights (utils/playable.lua)
-        local file = Files.Open(MGE.modFolder .. outputName, FILES_MODE_WRITE)
+        local file = Files.Open(MGE.modFolder .. MGE.workPath, FILES_MODE_WRITE)
         if file and file.data then
-            file:writeLine(MGE.Playable.workingText(ModData.parsed))
+            file:writeLine(MGE.Playable.workingText(parsed))
             file:close()
         end
     else
-        FileHandler.WriteMod(ModData.parsed, MGE.modFolder .. outputName)
+        FileHandler.WriteMod(parsed, MGE.modFolder .. MGE.workPath)
     end
     MGE.reloadPending = true -- keeps undo history and selection over the reload caused by our own save
     MGE.keptSelection = {}
@@ -282,7 +291,7 @@ function MGE.apply()
     for i, obj in ipairs(ModData.parsed.atmo) do -- atmo objects by their place in the list, negative
         if obj.selected then MGE.keptSelection[-i] = true end
     end
-    MGE.loadMod(outputName)
+    MGE.loadMod(spelling)
 end
 
 ---Folder part of a path under data/mod ("" or "folder/") and the file name without .tbm
@@ -297,20 +306,104 @@ end
 -- downloaded ones) are never replaced, saving one makes a copy there
 MGE.saveFolder = "modmaker/"
 
----Where Save writes: the source itself when it's in the save folder, otherwise a file with its name
----there, nil without a source
----@return string?
+-- Save's name without a source (the built-in classic mod): saving is always possible, and the exports have a name
+MGE.DEFAULT_NAME = "mge"
+
+-- every export's name starts with it (World > Export: exp_<name>.tbm, MGE - exp_<name>.atmo), and a project's name
+-- never does (MGE.projectName): an export only ever replaces an earlier export, so it overwrites without asking
+MGE.EXPORT_PREFIX = "exp_"
+
+---A name as a project's: without EXPORT_PREFIX at its start (a loaded export saves as <name>.tbm)
+---@param name string
+---@return string
+function MGE.projectName(name)
+    local prefix = MGE.EXPORT_PREFIX
+    while name:sub(1, #prefix) == prefix do name = name:sub(#prefix + 1) end
+    return name
+end
+
+---Where Save writes: the name set on World > Core, else the source itself when it's in the save folder, otherwise
+---a file with its name there; modmaker/mge.tbm without a source. Never an export's name (MGE.projectName)
+---@return string
 function MGE.saveTarget()
+    if MGE.saveName then return MGE.saveFolder .. MGE.saveName .. ".tbm" end
     local path = MGE.sourcePath
-    if not path then return nil end
-    if path:sub(1, #MGE.saveFolder) == MGE.saveFolder then return path end
-    local _, name = splitModPath(path)
-    return MGE.saveFolder .. name .. ".tbm"
+    if not path then return MGE.saveFolder .. MGE.DEFAULT_NAME .. ".tbm" end
+    local folder, name = splitModPath(path)
+    local project = MGE.projectName(name)
+    if project == "" then project = MGE.DEFAULT_NAME end
+    if folder == MGE.saveFolder and project == name then return path end
+    return MGE.saveFolder .. project .. ".tbm"
+end
+
+---The name Save writes (World > Core's Name), without folder and .tbm
+---@return string
+function MGE.saveTargetName()
+    local _, name = splitModPath(MGE.saveTarget())
+    return name
+end
+
+---A typed name as the name prompts take it: no spaces around it, no .tbm, no EXPORT_PREFIX (exports add it)
+---@param name string
+---@return string
+function MGE.cleanModName(name)
+    name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%.tbm$", "")
+    return (MGE.projectName(name):gsub("^%s+", ""))
+end
+
+---Checks a cleaned name (MGE.cleanModName): letters, digits, spaces, dashes and underscores, at least one letter
+---or digit
+---@param name string
+---@return boolean ok
+---@return string? why not
+function MGE.checkModName(name)
+    if name:find("[^%w%-_ ]") or not name:find("[%w]") then
+        return false, "letters, digits, spaces, dashes and underscores only"
+    end
+    if (name .. ".tbm"):lower() == (MGE.workPath:gsub("^.*[/\\]", "")):lower() then
+        return false, name .. " is MGE's working copy, pick another name"
+    end
+    return true, nil
+end
+
+---Opens the name prompt (ui/save_overlay.lua) shared by the project's name and World > Export: typed names are
+---cleaned (MGE.cleanModName) and checked (MGE.checkModName) there, onName gets the result
+---@param title string
+---@param placeholder string
+---@param defaultName string
+---@param onName fun(name: string)
+local function askName(title, placeholder, defaultName, onName)
+    if MGE.overlayOpen() then return end
+    MGE.saveOverlayContext = {
+        title = title,
+        placeholder = placeholder,
+        defaultName = defaultName,
+        sanitize = MGE.cleanModName,
+        validate = MGE.checkModName,
+        onSave = function(name)
+            onName(name)
+            return true -- the prompt closes (a confirmation may follow)
+        end,
+    }
+    dofile(MGE.scriptPath .. "ui/save_overlay.lua")
+end
+
+---World > Core's Name: asks the project's name, Save writes modmaker/<name>.tbm from then on (nothing is written
+---yet). Loading another mod drops it
+function MGE.renameProject()
+    askName("Mod name (" .. MGE.saveFolder .. "<name>)", "Mod name", MGE.saveTargetName(), function(name)
+        if name ~= MGE.saveTargetName() then
+            MGE.saveName = name
+            MGE.say("Save writes " .. MGE.saveTarget() ..
+                (Files.Exists(MGE.modFolder .. MGE.saveTarget()) and " (it exists: Save asks before replacing it)" or ""))
+        end
+        if MGE.EditorRows then MGE.EditorRows.refreshBlocks({ "miscFile" }) end -- the Name row shows it
+    end)
 end
 
 ---The data belongs to the file at path now (loaded, or just written): Save goes there (or to its copy
 ---in modmaker/), and the data counts as saved
----@param path string? under data/mod, nil: no file (Save asks the name)
+---@param path string? under data/mod, nil: no file (Save writes MGE.DEFAULT_NAME)
 ---@param text string? the file's text, default the current data's
 function MGE.setSource(path, text)
     MGE.sourcePath = path
@@ -358,6 +451,7 @@ local function writeMod(path)
         return
     end
     MGE.setSource(path)
+    MGE.saveName = nil -- the source is that file now
     MGE.savedPlayable = plan ~= nil
     if plan then
         MGE.say(string.format("saved %s: playable, %d atmo objects (%d solid), %d pool objects", path, plan.atmo,
@@ -373,31 +467,33 @@ local function writeMod(path)
     MGE.apply()
 end
 
----World > Export > Clean mod: the mod as the game reads it, without its atmo and pools (what Save puts inside it
----for Atmo Play), written next to where Save writes as <name>_clean.tbm. A playable mod's static objects are in its
----atmo, so its clean copy has only what stayed objects. Asks before replacing that file
+---World > Export's name prompt, shared by both exports: prefilled with the mod's name, the typed name (cleaned and
+---checked like the project's) gets EXPORT_PREFIX, then write runs with it. Doesn't change the mod's name: a wip or
+---final copy under any name, replacing only an earlier export of that name
+---@param title string
+---@param write fun(name: string) name with the prefix
+function MGE.askExportName(title, write)
+    askName(title, "File name (" .. MGE.EXPORT_PREFIX .. " is added)", MGE.saveTargetName(), function(name)
+        write(MGE.EXPORT_PREFIX .. name)
+    end)
+end
+
+---World > Export > Mod: the mod as the game reads it, without its atmo and pools (what Save puts inside it for
+---Atmo Play), written as modmaker/exp_<name>.tbm (MGE.askExportName). A playable mod's static objects are in its
+---atmo, so its clean copy has only what stayed objects
 function MGE.exportCleanMod()
-    local target = MGE.saveTarget()
-    if not target then
-        MGE.say("save the mod first: the clean copy is named after it")
-        return
-    end
-    local folder, name = splitModPath(target)
-    local path = folder .. name .. "_clean.tbm"
-    local function write()
-        MGE.syncGamerules()
-        if FileHandler.WriteMod(ModData.parsedFor(path), MGE.modFolder .. path) then
-            MGE.say("exported " .. path .. ": the mod without its atmo" ..
-                (MGE.Playable.isOn() and " (playable: its static objects are in the atmo, not in this copy)" or ""))
-        else
-            MGE.say("couldn't write " .. path)
-        end
-    end
-    if Files.Exists(MGE.modFolder .. path) then
-        MGE.confirm(name .. "_clean.tbm already exists. Overwrite it?", write)
-    else
-        write()
-    end
+    local function pathOf(name) return MGE.saveFolder .. name .. ".tbm" end
+    MGE.askExportName("Export mod without atmo (" .. MGE.saveFolder .. MGE.EXPORT_PREFIX .. "<name>)",
+        function(name)
+            local path = pathOf(name)
+            MGE.syncGamerules()
+            if FileHandler.WriteMod(ModData.parsedFor(path), MGE.modFolder .. path) then
+                MGE.say("exported " .. path .. ": the mod without its atmo" ..
+                    (MGE.Playable.isOn() and " (playable: its static objects are in the atmo, not in this copy)" or ""))
+            else
+                MGE.say("couldn't write " .. path)
+            end
+        end)
 end
 
 ---True when writing path would replace a file that isn't ours (the source): an earlier copy or
@@ -435,35 +531,20 @@ function MGE.confirm(message, onConfirm, onCancel)
     return true
 end
 
----Rename (Ctrl + Shift + S), and Save when it can't write directly: asks the name (prefilled with
----where Save writes), saves into the save folder. Replacing a file that isn't ours asks first. The
----old file stays
-function MGE.saveAs()
-    local folder = MGE.saveFolder
-    local _, defaultName = splitModPath(MGE.saveTarget())
-    MGE.saveOverlayContext = {
-        title = "Save mod (" .. folder .. ")",
-        placeholder = "Mod name",
-        defaultName = defaultName,
-        onSave = function(name)
-            local path = folder .. name .. ".tbm"
-            if wouldReplace(path) then
-                MGE.confirm(name .. ".tbm already exists. Overwrite it?", function() writeMod(path) end)
-            else
-                writeMod(path)
-            end
-            return true -- the prompt closes
-        end,
-    }
-    dofile(MGE.scriptPath .. "ui/save_overlay.lua")
-end
-
----Save button / Ctrl + S: writes the mod where MGE.saveTarget says. Asks the name instead when
----there's no source, or the copy would replace a file that isn't ours
+---Save button / Ctrl + S: writes the mod where MGE.saveTarget says. Asks first when that would replace a file that
+---isn't ours (another mod, an earlier copy): World > Core's Name gives it another name
 function MGE.save()
     local target = MGE.saveTarget()
-    if not target or wouldReplace(target) then
-        MGE.saveAs()
+    if wouldReplace(target) then
+        local _, name = splitModPath(target)
+        local _, sourceName = splitModPath(MGE.sourcePath)
+        -- a loaded export (exp_<name>) saves as <name>: most likely its own project, which has the atmo the export
+        -- doesn't (an Export > Mod copy)
+        local fromExport = sourceName ~= MGE.projectName(sourceName)
+        MGE.confirm(name .. ".tbm already exists in " .. MGE.saveFolder .. ". Overwrite it?\n" ..
+            (fromExport and ("You loaded the export " .. sourceName .. ".tbm: this replaces the project " ..
+                "with it.\n") or "") ..
+            "(World > Core > Name saves under another name)", function() writeMod(target) end)
     else
         writeMod(target)
     end
@@ -524,6 +605,7 @@ add_hook("match_begin", MGE.hookname, function()
         MGE.Playable.loadedKey = nil -- its pools are its own (Playable.onMatchBegin reads them)
         -- a mod file was loaded (not our working copy): the data belongs to it now, with its atmo
         if not isSaveOutput(MGE.modPath) then
+            MGE.saveName = nil -- Save writes the new mod's name
             MGE.setSource(MGE.modPath)
             loadSourceAtmo()
             Atmo.applyShader() -- the new mod's atmo shader, or the player's own
@@ -692,9 +774,6 @@ add_hook("key_down", MGE.hookname, function(key)
         end
     elseif ctrl and not shift and key == string.byte("s") then
         MGE.save() -- writes the mod into modmaker/, then reloads
-        return 1
-    elseif ctrl and shift and key == string.byte("s") then
-        if not overlayOpen() then MGE.saveAs() end -- save under another name
         return 1
     elseif ctrl and not shift and key == string.byte("a") then
         -- same as the list's select all icon. On the Players / Joints list: those, not the objects

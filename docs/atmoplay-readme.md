@@ -19,9 +19,7 @@ Play draws those too, without making anything solid.
 3. `/lm` a playable mod: its atmo is drawn and the map is solid. A drawn mod: its atmo is drawn.
 4. Loading a normal mod gives you your own atmo back.
 
-Commands: `/atmoplay` (status), `/atmoplay show` (the pool objects in green), `/atmoplay reload` (read the
-mod again), `/atmoplay log` (a debug log of every frame, slow), `/atmoplay hold` (the pool stops moving),
-`/atmoplay quit`.
+Commands: `/atmoplay` (status), `/atmoplay reload` (read the mod again), `/atmoplay quit`.
 
 ## Replays
 

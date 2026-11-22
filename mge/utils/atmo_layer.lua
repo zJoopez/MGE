@@ -517,24 +517,25 @@ end
 
 table.insert(MGE.onQuit, function() AtmoLayer.setObjectsSeeThrough(false) end)
 
----Export atmo (World > Export): writes the atmo as it is now to its own file, data/atmospheres/MGE - <mod>.atmo,
----for players without Atmo Play (main menu > Shaders & Atmos > Atmos). Save keeps the atmo inside the mod
+---Export atmo (World > Export): asks a name (MGE.askExportName, default the mod's), then writes the atmo as it is now
+---to its own file, data/atmospheres/MGE - exp_<name>.atmo, for players without Atmo Play (main menu > Shaders &
+---Atmos > Atmos). Save keeps the atmo inside the mod
 function AtmoLayer.exportAtmo()
-    if not MGE.sourcePath then
-        MGE.say("save the mod first: its atmo is named after it")
-        return
-    end
-    if MGE.Atmo.contentCount() == 0 then
+    local Atmo = MGE.Atmo
+    if Atmo.contentCount() == 0 then
         MGE.say("the atmo is empty: To atmo (Objects > Core) or New add to it")
         return
     end
-    local name = MGE.Atmo.export(MGE.sourcePath)
-    if name then
-        MGE.say("exported data/atmospheres/" .. name .. " (" .. #ModData.parsed.atmo .. " atmo objects; load it in" ..
-            " Shaders & Atmos > Atmos)")
-    else
-        MGE.say("couldn't write data/atmospheres/" .. tostring(MGE.Atmo.fileName(MGE.sourcePath)))
-    end
+    MGE.askExportName("Export atmo (atmospheres/" .. Atmo.prefix .. MGE.EXPORT_PREFIX .. "<name>)",
+        function(name)
+            local file = Atmo.fileName(name)
+            if Atmo.export(name) then
+                MGE.say("exported data/atmospheres/" .. file .. " (" .. #ModData.parsed.atmo .. " atmo objects; load" ..
+                    " it in Shaders & Atmos > Atmos)")
+            else
+                MGE.say("couldn't write data/atmospheres/" .. tostring(file))
+            end
+        end)
 end
 
 return AtmoLayer

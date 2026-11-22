@@ -2,7 +2,8 @@
 -- atmo object is a prop when its flag line lacks the static bit (colliders.lua). A playable mod with props
 -- has a second pool: DYNAMIC objects on free ids 1-48 (the game shows no predictions above 48 and such
 -- objects misbehave in replays), "visible 1" so they get move predictions (faint, POOL_ALPHA, until one
--- carries a prop), parked on a hidden static platform far below the map.
+-- carries a prop), parked on a hidden static platform high above the map (PARK_Z: a dynamic body parked
+-- below the ground is pushed out of it at once and flies through the map).
 --
 -- In fights (draw2d, once per new match frame, like the static pool):
 --   * wanted: props within `radius` of a player's center or of one of the mod's own dynamic objects
@@ -210,7 +211,6 @@ local function sameSides(a, b)
     return same(a[1], b[1]) and same(a[2], b[2]) and same(a[3], b[3])
 end
 
-local clock = os and os.clock or function() return 0 end
 
 ---------------------------------------------------------------------------------------------------- the grid
 
@@ -299,7 +299,6 @@ function Dynamics.new(objects, props, params)
         follow = params.follow, followSizes = {}, -- the mod's own dynamic objects (0-based ids) want props too
         -- no takes or releases before this frame (Driver.FIRST_FRAME: moves before the first one crashed R)
         fromFrame = params.fromFrame or Driver.FIRST_FRAME,
-        steps = 0, stepTime = 0, worstStep = 0, -- ms, fights and replays alike (/atmoplay status)
     }
     s.cellSize = math.max(s.radius * 2, 1)
     for _, object in ipairs(objects) do
@@ -873,13 +872,6 @@ end
 
 ---------------------------------------------------------------------------------------------------- hooks
 
----Times a frame's work (step or watch, and drawing) for /atmoplay status
-local function timed(s, start)
-    local took = (clock() - start) * 1000
-    s.steps, s.stepTime = s.steps + 1, s.stepTime + took
-    if took > s.worstStep then s.worstStep = took end
-end
-
 ---match_begin: a new fight or replay starts from the atmo's poses; a fight places what's near now
 ---@param ws table get_world_state()
 function Dynamics.matchBegin(s, ws)
@@ -900,7 +892,6 @@ function Dynamics.draw(s, ws)
         drawCopies(s) -- nothing new (a paused fight, a still replay)
         return
     end
-    local start = clock()
     if ws.replay_mode > 0 then
         if s.lastFrame and frame < s.lastFrame then Dynamics.rebuild(s, frame) end
         s.wasReplay = true
@@ -918,7 +909,6 @@ function Dynamics.draw(s, ws)
     end
     s.lastFrame = frame
     drawCopies(s)
-    timed(s, start)
 end
 
 ---The carried props' centers: the static pool covers them too (a pushed prop keeps a floor under it)

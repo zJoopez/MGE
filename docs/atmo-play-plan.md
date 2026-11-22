@@ -523,9 +523,10 @@ flagged) while watching, and going back to a fight from a replay puts back the o
 - **Drawn mods (2026-11-21, user):** MGE's Default (not playable) Save keeps the atmo inside the mod too, behind
   `#atmoplay v1 mode=draw` (`Format.isDrawOnly`, `Atmo.bundledText`): one file to share, Atmo Play draws it (no
   pools). The game skips the lines, so without Atmo Play the map just isn't drawn. World > Export writes the
-  clean copies for players without Atmo Play: Atmo (`data/atmospheres/MGE - <mod>.atmo`) and Mod
-  (`<mod>_clean.tbm`, without its atmo). Save atmo left the Atmo list's Core row; the save-time `.atmo` logic
+  clean copies for players without Atmo Play: Atmo (`data/atmospheres/MGE - exp_<name>.atmo`) and Mod
+  (`modmaker/exp_<name>.tbm`, without its atmo), both named in a prompt (2026-11-22: the `exp_` prefix keeps exports from replacing mods, so they overwrite earlier exports without asking; the mod's own file is refused). Save atmo left the Atmo list's Core row; the save-time `.atmo` logic
   (`saveFor`, `saveAction`) went. Mods saved before still open with their separate `.atmo`.
+- **Debug tools trimmed (2026-11-22, user):** `/atmoplay show`, `hold` and the status timings are gone (unused). `/atmoplay log` moved to `atmoplay/debuglog.lua`, dev only: neither zip ships it (`$DevOnly` in tools/package.ps1), atmoplay.lua loads it when the file is there and runtime.lua calls it through `NS.DebugLog`. Releases: `/atmoplay` (status), `reload`, `quit`.
 - **Default undoes Playable's move (2026-11-22, user):** Playable writes `mge_was_object <id>`
   (`AtmoLayer.FROM_KEY`) on the objects it moves into the atmo; it's saved with the atmo, so it survives
   reopening, and the game's atmo loader skips it. Default moves the marked ones back

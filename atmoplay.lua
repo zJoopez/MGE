@@ -47,6 +47,13 @@ local ok, err = pcall(function()
         ATMOPLAY_LOADING = ATMOPLAY
         dofile(ATMOPLAY.scriptPath .. module)
     end
+    -- the debug log (/atmoplay log): dev only, the releases don't have the file
+    local file = io.open(ATMOPLAY.scriptPath .. "debuglog.lua", "r")
+    if file then
+        file:close()
+        ATMOPLAY_LOADING = ATMOPLAY
+        dofile(ATMOPLAY.scriptPath .. "debuglog.lua")
+    end
 end)
 ATMOPLAY_LOADING = nil
 if not ok then

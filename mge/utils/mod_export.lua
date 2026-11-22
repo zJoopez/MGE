@@ -331,8 +331,8 @@ local function splitPath(path)
     return parts
 end
 
----model_name for a model: MGE's data keeps them for a file in data/mod itself (the working copies are
----there), whose model folder is mod_assets/<mod name>/, so models are one folder up from it. With
+---model_name for a model: MGE's data keeps them for a file in data/mod itself (whatever folder the mod
+---came from), whose model folder is mod_assets/<mod name>/, so models are one folder up from it. With
 ---modPath, for a mod file there instead: one more folder up per folder it's in
 ---@param model string model path in mod_assets without .obj, e.g. "Noki/PinTori"
 ---@param modPath string? mod file path relative to data/mod, default a file in data/mod itself
@@ -352,7 +352,7 @@ function ModData.parsedFor(path)
     for k, v in pairs(ModData.parsed) do copy[k] = v end
     copy.env_obj = {}
     for i, obj in ipairs(ModData.parsed.env_obj) do
-        local model = obj.props.use_model == "1" and ModData.fromModelName(obj.props.model_name, MGE.outputName)
+        local model = obj.props.use_model == "1" and ModData.fromModelName(obj.props.model_name, "mod.tbm") -- data/mod's
         if model then
             local o = {}
             for k, v in pairs(obj) do o[k] = v end
@@ -387,9 +387,9 @@ function ModData.fromModelName(modelName, modPath)
     return table.concat(parts, "/")
 end
 
----MGE's working copies are in data/mod itself, so models of a mod loaded from a subfolder would point
----to the wrong folder after the first apply: rewrite them relative to data/mod (Save into a subfolder
----writes them back for its folder, ModData.parsedFor)
+---MGE's data keeps models relative to data/mod, whatever folder the loaded file is in (a mod from a subfolder,
+---or the working copy in modmaker/): rewrite them that way. Every write (Save, the working copy, Export) puts
+---them back for its file's folder (ModData.parsedFor)
 local function rebaseModels()
     if not tostring(MGE.modPath or ""):find("[/\\]") then return end
     for _, obj in ipairs(ModData.parsed.env_obj) do

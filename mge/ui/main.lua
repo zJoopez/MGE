@@ -109,8 +109,8 @@ if closeButton.child and closeButton.child[1] then -- its cross loads again afte
     Widgets.trackImage(closeButton.child[1], "../textures/menu/general/buttons/crosswhite.tga")
 end
 
--- the tools, left of close: gizmo tool toggles, undo / redo, save / rename, settings
-local ICON_COUNT = 8 -- move, rotate, scale, undo, redo, save, rename, settings
+-- the tools, left of close: gizmo tool toggles, undo / redo, save, settings
+local ICON_COUNT = 7 -- move, rotate, scale, undo, redo, save, settings
 local toolsW = BAR_ICON * ICON_COUNT + BAR_GAP * (ICON_COUNT - 1)
 -- negative x: from the bar's right edge, so the groups follow it when the screen size changes (Main.fitScreen)
 local toolsX = -(BAR_H + BAR_SEP + toolsW)
@@ -148,11 +148,9 @@ end
 -- game's undo icon, redo is the same icon mirrored (mge/textures/redo.tga)
 table.insert(bar, { label = "Undo (Shift + Z)", icon = "../textures/menu/general/buttons/undo.tga", onClick = function() History.undo() end })
 table.insert(bar, { label = "Redo (Shift + Y)", icon = MGE.scriptPath .. "textures/redo.tga", onClick = function() History.redo() end })
--- Save and Rename (the game's save and edit icons), the footer's right end names the file they write
-table.insert(bar, { label = "Save (Ctrl + S): the mod into mod/" .. MGE.saveFolder .. ",\na mod from elsewhere is copied there",
-    icon = "../textures/menu/general/buttons/savewhite.tga", onClick = function() MGE.save() end })
-table.insert(bar, { label = "Rename (Ctrl + Shift + S): saves under a new name,\nSave writes there from then on. The old file stays",
-    icon = "../textures/menu/general/buttons/edit.tga", onClick = function() MGE.saveAs() end })
+-- Save (the game's save icon), the footer's right end names the file it writes; World > Core's Name changes it
+table.insert(bar, { label = "Save (Ctrl + S): the mod into mod/" .. MGE.saveFolder .. ",\na mod from elsewhere is copied there.\n" ..
+    "Its name: World > Core > Name", icon = "../textures/menu/general/buttons/savewhite.tga", onClick = function() MGE.save() end })
 -- camera follow, gizmo snapping, shortcuts (ui/settings_overlay.lua), game's settings icon
 table.insert(bar, { label = "Settings", icon = "../textures/menu/general/buttons/settingswhite.tga",
     onClick = function() dofile(MGE.scriptPath .. "ui/settings_overlay.lua") end })
@@ -331,8 +329,8 @@ local editorContainer = tabPanel:addChild({
 })
 updateContentHeight(tabPanel.size.h)
 
--- Duplicate/Delete/Import/Export are the list's buttons on the top bar (Main.setListActions), Save and
--- Rename are with the tools, Reindex is in the Advanced panel
+-- Duplicate/Delete/Import/Export are the list's buttons on the top bar (Main.setListActions), Save is with the
+-- tools (its name on World > Core), Reindex is in the Advanced panel
 
 -- footer: one row along the bottom of the screen over the game's view, no background, a child of the panel
 -- reaching past its edges like the top bar. Left: the counters, middle: the latest message (MGE.say: chat
@@ -435,7 +433,8 @@ local FOOTER_COLOR = { 0, 0, 0, 1 } -- black: the footer is over the game's (lig
 -- commits a new undo state, a reload parses new data) or the source changed (load, save). Lua
 -- strings are interned, comparing savedText is cheap
 Widgets.addDrawBefore(fileRow, function()
-    local parsed, state, source, saved = ModData.parsed, History.states[History.index], MGE.sourcePath, MGE.savedText
+    local parsed, state, saved = ModData.parsed, History.states[History.index], MGE.savedText
+    local source = tostring(MGE.sourcePath) .. "|" .. tostring(MGE.saveName) -- the typed name changes the target too
     -- the atmo file's saved text too: Export atmo writes it without saving the mod (utils/atmo.lua)
     local atmo = tostring(MGE.Atmo.state.text) .. "#" .. MGE.Atmo.headerVersion -- a shader picked counts too
     if shown.parsed == parsed and shown.state == state and shown.source == source and shown.saved == saved
@@ -444,9 +443,8 @@ Widgets.addDrawBefore(fileRow, function()
     local target = MGE.saveTarget()
     local unsaved = MGE.hasUnsavedChanges()
     -- where Save writes (a mod from outside modmaker/ is copied there, its original stays as it is)
-    local text = target and "Mod: " .. target .. (unsaved and "  (unsaved changes)" or "")
-        or "Not saved to a mod yet, Save asks the name"
-    fileRow.uiColor = target and not unsaved and FOOTER_COLOR or WARNING_COLOR
+    local text = "Mod: " .. target .. (unsaved and "  (unsaved changes)" or "")
+    fileRow.uiColor = unsaved and WARNING_COLOR or FOOTER_COLOR
     Widgets.infoText(fileRow, text, RIGHTMID)
 end)
 

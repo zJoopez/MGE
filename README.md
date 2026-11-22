@@ -25,7 +25,7 @@ The window has five lists, each with its own tabs.
 | **Atmo** | **Core**: as on Objects, with To objects. **Advanced**: friction, bounce, hardness, flags (as on Objects, for Atmo Play), depth, graphics levels, kept lines. **Generate**: as on Objects. |
 | **Joints** | **Link**: the two objects a joint connects, picked in the list or, with Pick from world on, in the world. **Properties**: position, axis, range, strength, velocity, type. |
 | **Players** | Start position, rotation, scale and body parts of each player. |
-| **World** | The mod's message, the atmo's shader, map import, Reset all (loads the classic mod), Atmo: Playable / Default (a playable atmo mod, or the atmo only drawn), Export (Atmo, Mod). |
+| **World** | The mod's name (where Save writes), its message, the atmo's shader, map import, Reset all (loads the classic mod), Atmo: Playable / Default (a playable atmo mod, or the atmo only drawn), Export (Atmo, Mod). |
 
 - Number fields apply what you type when you leave them (click elsewhere) or press Enter, then show the
   new value as their placeholder. Esc while typing drops it. The Generate tab's fields keep their text:
@@ -38,8 +38,8 @@ The window has five lists, each with its own tabs.
   examples come with the download.
 - **Settings** (UI size, camera follow, snapping steps, max atmo objects) and the color picker's saved colors
   are kept in `mge/mge/config.cfg`, so they stay between game sessions and over updates.
-- **Save** writes the mod to `data/mod/modmaker/`. While you edit, MGE reloads a working copy
-  (`mge-modmaker.tbm` / `mge-modmaker1.tbm`) so changes show in the game straight away.
+- **Save** writes the mod to `data/mod/modmaker/<name>.tbm`, the name on **World → Core → Name** (the loaded mod's, `mge` for the classic mod; click it to change it). Saving over a file that isn't this mod's asks first. While you edit, MGE reloads a working copy
+  (`modmaker/mge-work.tbm`) so changes show in the game straight away.
 
 ### Map import (experimental)
 
@@ -71,8 +71,11 @@ the mod.
 - **Saving:** Save keeps the atmo **inside the mod**, as `#@` comment lines the game skips (one file to
   share), and opening the mod reads it back. **Atmo Play** draws it when the mod is loaded (a playable mod: also
   solid). For players without Atmo Play, **World → Export**: **Atmo** writes
-  `data/atmospheres/MGE - <mod>.atmo` (loaded in the game's Shaders & Atmos > Atmos), **Mod** writes
-  `<mod>_clean.tbm`, the mod without its atmo. Mods saved before atmos went inside them still open with their
+  `data/atmospheres/MGE - exp_<name>.atmo` (loaded in the game's Shaders & Atmos > Atmos), **Mod** writes
+  `modmaker/exp_<name>.tbm`, the mod without its atmo. Both ask the name first (default: the mod's), so wip and
+  final copies don't change the mod's own name. The `exp_` prefix keeps exports apart from your mods: a mod's name
+  never starts with it (loading `exp_foo.tbm` and saving writes `foo.tbm`), so an export replaces only an earlier
+  export of the same name, without asking. Mods saved before atmos went inside them still open with their
   `MGE - <mod>.atmo`.
 - **The game's own atmo** is unloaded when MGE starts, so the saved copy loaded in game doesn't show on
   top of the one you're editing. Your default atmo setting isn't changed.
@@ -122,7 +125,6 @@ each player, in fights, and the game records those moves, so replays need nothin
 | Alt + Q / W / E | Move / Rotate / Scale tool (press again to turn it off) |
 | Shift + Z / Shift + Y | Undo / redo |
 | Ctrl + S | Save |
-| Ctrl + Shift + S | Save under another name |
 | Ctrl + A | Select / deselect all (objects, atmo objects, players or joints, whichever list is shown) |
 | Ctrl + N / Ctrl + D | New / duplicate (an object, atmo object, player or joint, on the shown list) |
 | Delete | Delete the selection on the shown list (asks first) |

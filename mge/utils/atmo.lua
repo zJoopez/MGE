@@ -267,9 +267,9 @@ function Atmo.bundledText(modText)
     return table.concat(out, "\n")
 end
 
----Writes data/atmospheres/MGE - <mod>.atmo now: the atmo for the game's own atmo menu, no script needed (World >
+---Writes data/atmospheres/MGE - <name>.atmo now: the atmo for the game's own atmo menu, no script needed (World >
 ---Export). It doesn't change what Save does
----@param modPath string the mod, under data/mod
+---@param modPath string a name, or a mod path under data/mod (its name is used)
 ---@return string? name the file written, nil when it couldn't be
 function Atmo.export(modPath)
     local name = Atmo.fileName(modPath)

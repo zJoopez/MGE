@@ -18,15 +18,10 @@ local Pool = NS.Pool
 ---@field pool AtmoPlayPoolState
 ---@field lastFrame integer? the match frame the pool was last moved for, nil after a reset
 ---@field wasReplay boolean the last draw was in a replay: back in a fight, the pool is set again
----@field show boolean debug: pool objects visible (green) where they stand in for an atmo object
----@field hold boolean debug: the pool isn't moved at all
----@field onDrive (fun(changes: AtmoPlayPoolChange[], ws: table))? called before a step's moves are made (debug log)
+---@field onDrive (fun(changes: AtmoPlayPoolChange[], ws: table))? called before a step's moves are made (the dev debug log)
 ---@field moreCenters (fun(): number[][])? more points to cover than the players' centers (carried props)
 ---@field follow integer[]? 0-based ids of the mod's own dynamic objects: the pool covers them too
 ---@field fromFrame integer nothing is moved before this match frame (Driver.FIRST_FRAME)
----@field steps integer frames driven, for the status
----@field stepTime number ms in all
----@field worstStep number ms, the slowest frame
 
 ---@class AtmoPlayDriverModule
 local Driver = {
@@ -38,8 +33,6 @@ local Driver = {
     -- crashed (owo, 2026-11-21; RPH saw the same teleport). Frame 0 -> 1 is one physics step without them
     FIRST_FRAME = 1,
 }
-
-local clock = os and os.clock or function() return 0 end
 
 ---@param frame number[][]
 ---@return table MatrixTB (set_obj_rot_m), as MGE's Highlight.toMatrixTB / Utils3D.MatrixToMatrixTB build it
@@ -90,10 +83,6 @@ local function place(d, entry, c)
     if not (ok and near(x, c.sides[1]) and near(y, c.sides[2]) and near(z, c.sides[3])) then
         set_obj_sides(id, c.sides[1], c.sides[2], c.sides[3])
     end
-    if d.show then
-        set_obj_color(id, 0.3, 1, 0.4, 0.6)
-        set_obj_vis(id, 1)
-    end
 end
 
 ---@param d AtmoPlayDriver
@@ -101,7 +90,6 @@ end
 local function park(d, entry)
     local id = entry.id - 1
     set_obj_pos(id, entry.id, 0, Driver.PARK_Z)
-    if d.show then set_obj_vis(id, 0) end
 end
 
 ---Every player's center (the average of its body parts), the pool rule's input
@@ -126,8 +114,7 @@ end
 ---@param pool AtmoPlayPoolState
 ---@return AtmoPlayDriver
 function Driver.new(pool)
-    return { pool = pool, lastFrame = nil, wasReplay = false, show = false, hold = false, steps = 0, stepTime = 0,
-        worstStep = 0, fromFrame = Driver.FIRST_FRAME }
+    return { pool = pool, lastFrame = nil, wasReplay = false, fromFrame = Driver.FIRST_FRAME }
 end
 
 ---The mod's own dynamic objects in the world now (right after /lm): every object without the static bit
@@ -166,11 +153,6 @@ function Driver.drive(d, ws)
     -- the frame went back (a replay edited and played on from earlier): assign from scratch
     if d.lastFrame ~= nil and frame < d.lastFrame then Driver.reset(d) end
     d.lastFrame = frame
-    if d.hold then
-        if d.onDrive then d.onDrive({}, ws) end
-        return
-    end
-    local start = clock()
     local centers = playerCenters()
     -- more points the pool covers, so they keep a floor under them: the mod's own dynamic objects
     -- (Driver.dynamicIds) and the props being pushed (dynamics.lua)
@@ -186,9 +168,6 @@ function Driver.drive(d, ws)
     for _, change in ipairs(changes) do
         if change.collider then place(d, change.entry, change.collider) else park(d, change.entry) end
     end
-    local took = (clock() - start) * 1000
-    d.steps, d.stepTime = d.steps + 1, d.stepTime + took
-    if took > d.worstStep then d.worstStep = took end
 end
 
 ---match_begin (inside /lm and open_replay): a fight places the pool from FIRST_FRAME on (drive waits), a
@@ -218,15 +197,6 @@ function Driver.draw(d, ws)
         Driver.reset(d) -- back in a fight: set every pool object again
     end
     if ws.match_frame ~= d.lastFrame then Driver.drive(d, ws) end
-end
-
----Debug: pool objects visible (green) where they stand in for an atmo object, or hidden again
----@param d AtmoPlayDriver
----@param on boolean
-function Driver.setShow(d, on)
-    d.show = on
-    for _, entry in ipairs(d.pool.entries) do set_obj_vis(entry.id - 1, 0) end
-    Driver.reset(d) -- every pool object is set again, now (in)visible
 end
 
 ---@param d AtmoPlayDriver
