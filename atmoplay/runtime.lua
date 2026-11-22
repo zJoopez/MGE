@@ -73,6 +73,32 @@ local function writeLines(path, lines)
     return true
 end
 
+---------------------------------------------------------------------------------------------------- settings
+
+-- The player's settings, kept in atmoplay.cfg next to atmoplay.lua (not in the release zip: an update keeps it).
+-- One "key value" a line:
+--   flight shapes      how drawn props fly (Dynamics.LEVELS): simple (spheres, cheapest), shapes (their real
+--                      shapes), full (real shapes that hit each other: the most work a frame)
+Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL }
+
+---@return string the settings file, a data/script path
+function Runtime.settingsPath()
+    return tostring(NS.scriptPath or "atmoplay/"):gsub("atmoplay/$", "") .. "atmoplay.cfg"
+end
+
+function Runtime.loadSettings()
+    for _, line in ipairs(readLines(Runtime.settingsPath()) or {}) do
+        local key, value = tostring(line):match("^%s*(%S+)%s+(%S+)")
+        if key == "flight" then Runtime.settings.flight = Dynamics.level(value) end
+    end
+end
+
+function Runtime.saveSettings()
+    if not writeLines(Runtime.settingsPath(), { "flight " .. Runtime.settings.flight }) then
+        say("couldn't save the settings to " .. Runtime.settingsPath())
+    end
+end
+
 ---The mod gamerule as a file under data/mod: it keeps the /lm folder ("modmaker/x.tbm"); find_mod for
 ---names the game found elsewhere. nil for the built-in classic (no .tbm, no file)
 ---@param name string?
@@ -226,7 +252,7 @@ local function loadPlayable(path)
     if #file.dynamic > 0 and #props > 0 then
         -- follow: the mod's own dynamic objects push props too
         dynamics = Dynamics.new(file.dynamic, props, { dradius = file.header.dradius, follow = driver.follow,
-            statics = colliders })
+            statics = colliders, level = Runtime.settings.flight })
         driver.moreCenters = function() return Dynamics.centers(dynamics) end
     elseif #props > 0 then
         say(name .. ": " .. #props .. " props without a dynamic pool (not solid)")
@@ -356,9 +382,31 @@ function Runtime.status()
         Driver.active(loaded.driver), #loaded.pool.entries, loaded.stats.collidable))
     if loaded.dynamics then
         local carried, props, flying = Dynamics.counts(loaded.dynamics)
-        say(string.format("props: %d of %d carried by %d dynamic pool objects, %d flying drawn", carried, props,
-            #loaded.dynamics.entries, flying))
+        say(string.format("props: %d of %d carried by %d dynamic pool objects, %d flying drawn (flight %s)", carried,
+            props, #loaded.dynamics.entries, flying, Runtime.settings.flight))
     end
+end
+
+local FLIGHT_HELP = "simple: spheres, cheapest. shapes: real shapes. full: real shapes that hit each other (most work)"
+
+---/atmoplay flight [level]: shows or sets how drawn props fly, kept in atmoplay.cfg; a playable mod running
+---takes it from its next fight
+---@param value string
+local function flightCommand(value)
+    if value == "" then
+        say("flight " .. Runtime.settings.flight .. " (" .. FLIGHT_HELP .. ")")
+        return
+    end
+    local level = Dynamics.level(value)
+    if level ~= value then
+        say("/atmoplay flight [simple | shapes | full]: " .. FLIGHT_HELP)
+        return
+    end
+    Runtime.settings.flight = level
+    Runtime.saveSettings()
+    local loaded = state.loaded
+    if loaded and loaded.dynamics then Dynamics.setLevel(loaded.dynamics, level) end
+    say("flight " .. level .. (loaded and loaded.dynamics and ", from the next fight" or ""))
 end
 
 local function onCommand(text)
@@ -369,12 +417,14 @@ local function onCommand(text)
     elseif rest == "reload" then
         switchMod(get_game_rules().mod)
         resetPool()
+    elseif rest == "flight" or rest:match("^flight%s") then
+        flightCommand(rest:match("^flight%s*(.-)$") or "")
     elseif rest == "log" and NS.DebugLog then
         NS.DebugLog.toggle()
     elseif rest == "quit" then
         if ATMOPLAY and ATMOPLAY.quit then ATMOPLAY.quit() end
     else
-        say("/atmoplay [status | reload | quit" .. (NS.DebugLog and " | log" or "") .. "]")
+        say("/atmoplay [status | reload | flight [level] | quit" .. (NS.DebugLog and " | log" or "") .. "]")
     end
     return 1
 end
@@ -383,6 +433,7 @@ end
 
 function Runtime.start()
     remove_hooks(Runtime.HOOKS)
+    Runtime.loadSettings()
     state.playerAtmo = defaultAtmo() -- a restart quits first, which gives the player's atmo back
     wrapAtmoLoading()
 

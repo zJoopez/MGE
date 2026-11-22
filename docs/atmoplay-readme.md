@@ -19,7 +19,10 @@ Play draws those too, without making anything solid.
 3. `/lm` a playable mod: its atmo is drawn and the map is solid. A drawn mod: its atmo is drawn.
 4. Loading a normal mod gives you your own atmo back.
 
-Commands: `/atmoplay` (status), `/atmoplay reload` (read the mod again), `/atmoplay quit`.
+Commands: `/atmoplay` (status), `/atmoplay reload` (read the mod again), `/atmoplay quit`, and
+`/atmoplay flight [simple | shapes | full]`: how props fly while no pool object carries them, for your
+computer. `simple` flies them as spheres (the least work), `shapes` (default) with their real shapes, `full`
+with real shapes that also hit each other (the most work). Kept in `atmoplay.cfg`, used from the next fight.
 
 ## Replays
 

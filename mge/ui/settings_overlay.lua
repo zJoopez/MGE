@@ -6,6 +6,7 @@
 --                   invalid one goes back to the current step
 --   Atmo objects:   the atmo's size (AtmoLayer.maxAtmo), every one is drawn: the game's graphics
 --                   settings set how many shapes it draws a frame. Typed like the steps
+--   Prop flight:    how drawn props fly in a playable mod (Playable.flightLevel): Simple, Shapes, Full
 --   Shortcuts:      heading with a "?", hovering it lists the keyboard and mouse shortcuts
 -- Every row explains itself on the "?" at its end, like the editor rows
 --   UI size:        MGE's overall size (Widgets.UI_SCALE), restarts MGE to apply it
@@ -101,10 +102,11 @@ local SETTING_H = ROW_H + ROW_GAP -- a row, its explanation is its "?" (like the
 local SECTION_H = px(26) -- section heading
 local SNAP_H = SECTION_H + #SNAP_STEPS * SETTING_H
 local ATMO_H = SECTION_H + #ATMO_FIELDS * SETTING_H
+local FLIGHT_H = SETTING_H -- Prop flight
 local SHORTCUTS_H = SECTION_H + px(4)
 local CLOSE_H = Widgets.ROW_H
 local LABEL_W = px(150)
-local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + ATMO_H + SHORTCUTS_H + CLOSE_H + PAD * 2 -- + UI size
+local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + ATMO_H + FLIGHT_H + SHORTCUTS_H + CLOSE_H + PAD * 2 -- + UI size
 
 local overlay = TBMenu:spawnWindowOverlay(true) -- true: a click on the dark background closes it
 MGE.settingsOverlay = overlay
@@ -295,6 +297,36 @@ end
 
 addNumberSection("Snapping", SNAP_STEPS, SNAP_INFO) -- three steps, one explanation: on the heading
 addNumberSection("Atmo objects", ATMO_FIELDS, ATMO_INFO)
+
+-- Prop flight (utils/playable.lua, Atmo Play's flight.lua): how props fly while no object carries them, by how
+-- much work this computer can take. Atmo Play keeps its own (/atmoplay flight)
+do
+    local content = addRow(y, "Prop flight", "How props fly drawn in a playable mod:\n" ..
+        "Simple: as spheres, the least work.\nShapes: their real shapes, they tip and roll.\n" ..
+        "Full: real shapes that hit each other and\npush the props they run into: the most work.\n" ..
+        "From the next fight. Atmo Play: /atmoplay flight")
+    local Dynamics = MGE.AtmoPlay.Dynamics
+    local labels = { simple = "Simple", shapes = "Shapes", full = "Full" }
+    local buttons
+    local function show()
+        for i, level in ipairs(Dynamics.LEVELS) do
+            local btn = buttons[i]
+            if btn and not btn.destroyed then
+                btn.bgColor = MGE.Playable.flightLevel == level and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
+            end
+        end
+    end
+    local items = {}
+    for i, level in ipairs(Dynamics.LEVELS) do
+        items[i] = { label = labels[level] or level, onClick = function()
+            MGE.Playable.setFlightLevel(level)
+            show()
+        end }
+    end
+    buttons = Widgets.buttonRow(content, 0, ROW_H, items, Widgets.GAP)
+    show()
+    y = y + FLIGHT_H
+end
 
 -- Shortcuts heading with the "?" right after the text, hovering it lists them
 addHelpHeading(y, "Shortcuts", SHORTCUTS)

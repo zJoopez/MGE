@@ -1,3 +1,4 @@
 mge/assets/*
 !mge/assets/.gitkeep
 mge/config.cfg
+atmoplay.cfg

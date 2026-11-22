@@ -869,3 +869,101 @@ T.test("flight: a prop let go spinning spins on drawn; taken again, its object g
     T.nearList(world.objects[0].ang, { 0, 0, 4 }, 1e-9, "its object spins on")
     T.ok(world.objects[0].lin[1] > 4.9, "and moves on")
 end)
+
+T.test("collide: the rocket wakes a crate in its way; a rewind and the replay fly them the same", function()
+    local atmo = ROCKET_ATMO .. [[
+
+env_obj crate
+   shape box
+   pos -2 0 0.7
+   sides 0.4 0.4 0.4
+   flag 0]]
+    local function make()
+        stubEngine()
+        world.players = { { 100, 100, 1 }, { 120, 120, 1 } } -- nobody near: all drawn
+        local colliders, _, props = Colliders.build(T.lines(atmo))
+        local s = Dynamics.new({ { id = 1, shape = "box" } }, props,
+            { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 }, level = "full" })
+        set_obj_pos(0, Dynamics.parkPos(1))
+        return s
+    end
+    local s = make()
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local fight = {}
+    for f = 1, 160 do
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        fight[f] = { s.props[1].pos, s.props[2].pos }
+    end
+    T.ok(fight[160][2][1] > -1.9, "the crate was hit and moved")
+    -- a rewind to 40, then on again
+    local worst = 0
+    for f = 120, 160 do -- past the snapshots at 50 and 100
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        for k = 1, 2 do
+            local a, b = s.props[k].pos, fight[f][k]
+            worst = math.max(worst, math.abs(a[1] - b[1]) + math.abs(a[2] - b[2]) + math.abs(a[3] - b[3]))
+        end
+    end
+    T.near(worst, 0, 1e-9, "the rewind flies the same")
+    -- its replay
+    local r = make()
+    Dynamics.matchBegin(r, { replay_mode = 1, match_frame = 0 })
+    worst = 0
+    for f = 0, 160 do
+        Dynamics.draw(r, { replay_mode = 1, match_frame = f })
+        if f > 0 then
+            for k = 1, 2 do
+                local a, b = r.props[k].pos, fight[f][k]
+                worst = math.max(worst, math.abs(a[1] - b[1]) + math.abs(a[2] - b[2]) + math.abs(a[3] - b[3]))
+            end
+        end
+    end
+    T.near(worst, 0, 1e-9, "the replay flies the same")
+end)
+
+T.test("snapshots: a rewind steps on from the nearest one, the same as from frame 0", function()
+    local every = Dynamics.SNAPSHOT_EVERY
+    Dynamics.SNAPSHOT_EVERY = 10
+    local ok, err = pcall(function()
+        -- the rocket fight (taken, spun, let go) watched as a replay, then rewound past several snapshots
+        local _, rec, poses = rocketFight(60)
+        local s = setupRocket()
+        world.players = { { 0, 0, 1 }, { 50, 50, 1 } }
+        Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+        local function watch(f)
+            world.objects[0].pos, world.objects[0].lin, world.objects[0].ang = rec[f].pos, rec[f].lin, rec[f].ang
+            Dynamics.draw(s, { replay_mode = 1, match_frame = f })
+        end
+        for f = 0, 60 do watch(f) end
+        T.ok(next(s.snapshots) ~= nil, "snapshots kept")
+        local worst = 0
+        for _, back in ipairs({ 45, 31, 12 }) do
+            for f = back, 60 do
+                watch(f)
+                local a, b = s.props[1], poses[f]
+                local d = math.abs(a.pos[1] - b.pos[1]) + math.abs(a.pos[2] - b.pos[2]) + math.abs(a.pos[3] - b.pos[3])
+                for k = 0, 10 do d = d + math.abs(a.rot["r" .. k] - b.rot["r" .. k]) end
+                worst = math.max(worst, d)
+            end
+        end
+        T.near(worst, 0, 1e-9, "every rewind flies as the fight did")
+    end)
+    Dynamics.SNAPSHOT_EVERY = every
+    assert(ok, err)
+end)
+
+T.test("levels: a new level waits for the next fight (a fight and its rewinds keep one)", function()
+    local s = setupRocket()
+    T.eq(s.level, "shapes", "the default")
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    for f = 1, 5 do Dynamics.draw(s, { replay_mode = 0, match_frame = f }) end
+    Dynamics.setLevel(s, "simple")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 6 })
+    T.eq(s.level, "shapes", "not mid-fight")
+    T.ok(s.flightOpts and not s.flightOpts.simple, "still flying with shapes")
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(s.level, "simple", "from the next fight")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.ok(s.flightOpts.simple, "flying simple")
+    T.eq(s.props[1].body.shape, "sphere", "as a sphere")
+end)

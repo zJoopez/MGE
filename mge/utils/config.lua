@@ -7,6 +7,8 @@
 --   wheelStep 0.5             the mouse wheel over a number field and the gizmo's move / scale snap (Ctrl),
 --                             wheelFineStep with Shift
 --   rotateStep 15             the wheel over a Rot field and the gizmo's ring snap (Ctrl), degrees
+--   propFlight 2              how drawn props fly in a playable mod (Playable.flightLevel): 1 simple, 2 shapes,
+--                             3 full (Atmo Play's Dynamics.LEVELS)
 --   palette 255 128 0 255     one line a color, r g b a 0-255
 --
 -- Read when MGE starts (Config.load, before the window is built: the UI size is needed then), put on the
@@ -52,6 +54,14 @@ Config.ENTRIES = {
         get = function() return Config.wheelStep end, set = function(v) Config.wheelStep = v --[[@as number]] end },
     { key = "wheelFineStep", kind = "number", min = 1e-6, max = 1000,
         get = function() return Config.wheelFineStep end, set = function(v) Config.wheelFineStep = v --[[@as number]] end },
+    { key = "propFlight", kind = "number", min = 1, max = 3, whole = true,
+        get = function()
+            for i, level in ipairs(MGE.AtmoPlay.Dynamics.LEVELS) do
+                if level == MGE.Playable.flightLevel then return i end
+            end
+            return 2
+        end,
+        set = function(v) MGE.Playable.setFlightLevel(MGE.AtmoPlay.Dynamics.LEVELS[v]) end },
 }
 
 ---@type table<string, number|boolean> values read from the file, by key

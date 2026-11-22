@@ -82,11 +82,10 @@ T.test("flight: bounce and friction as measured", function()
     T.near(Flight.restitution(50), 4.754, 0.005, "bounce 50")
     T.eq(Flight.restitution(0), 0, "bounce 0: none")
     T.eq(Flight.restitution(nil), 0, "no line")
-    T.eq(Flight.frictionLoss(5, -10000, nil, 1), 0, "-10000 frictionless")
-    T.eq(Flight.frictionLoss(5, 10000, -10000, 1), 0, "the lower side wins")
-    T.near(Flight.frictionLoss(5, -9999, nil, 1), 0.012, 1e-12, "-9999: 0.012 a frame")
-    T.near(Flight.frictionLoss(5, nil, nil, 1), 0.55, 1e-12, "grip: 11% a frame")
-    T.near(Flight.frictionLoss(0.01, -9999, nil, 1), 0.0011, 1e-12, "never more than grip")
+    T.eq(Flight.frictionLimit(-10000, nil), 0, "-10000 frictionless")
+    T.eq(Flight.frictionLimit(10000, -10000), 0, "the lower side wins")
+    T.near(Flight.frictionLimit(-9999, nil) * 4 / Flight.DT, 2, 1e-9, "-9999: ~2 N on a flat box's 4 corners")
+    T.ok(Flight.frictionLimit(nil, nil) > 10, "grip: no limit to speak of (the cone decides)")
     T.near(Flight.parseGravity("0.00 0.00 -30.00")[3], -30, 1e-12, "gravity line")
     T.eq(Flight.parseGravity("x"), nil, "not a gravity")
 end)
@@ -128,9 +127,9 @@ T.test("flight: hits the static atmo; slides on a frictionless platform, stops o
     local a, b = prop({ -15, 0, 1.75 }), prop({ -15, 10, 1.75 })
     a.flight.vel, b.flight.vel = { 5, 0, 0 }, { 5, 0, 0 }
     Flight.advance(w, a, 100)
-    Flight.advance(w, b, 100)
+    Flight.advance(w, b, 400)
     T.near(a.flight.vel[1], 5, 1e-9, "frictionless: as fast")
-    T.ok(b.flight == nil or b.flight.vel[1] < 0.01, "grip: stopped")
+    T.ok(b.flight == nil, "grip: it tumbled and came to rest (the game's cube tipped and stopped by ~150 too)")
     T.ok(b.pos[1] < -13, "within a short way")
 end)
 
@@ -153,7 +152,7 @@ T.test("flight: a spinning prop turns at its angular velocity (world axes, rad/s
     T.near(p.rot.r0, math.cos(1.2), 1e-9, "x axis, x")
     T.near(p.rot.r4, math.sin(1.2), 1e-9, "x axis, y")
     T.near(p.rot.r10, 1, 1e-9, "z axis kept")
-    T.eq(Flight.start(nil, 0, { 0, 0, 0 }).ang, nil, "no spin: none kept")
+    T.nearList(Flight.start(nil, 0).ang, { 0, 0, 0 }, 0, "no spin given: still")
 end)
 
 T.test("flight: a thrust on its own axes turns with the spin", function()
@@ -183,4 +182,116 @@ T.test("flight: spin slows on a gripping contact, then the flight rests", functi
     slick.flight = Flight.start(nil, 0, { 0, 0, 10 })
     Flight.advance(w, slick, 50)
     T.near(slick.flight.ang[3], 10, 1e-12, "frictionless: spins on")
+end)
+
+---------------------------------------------------------------------------------------------------- shapes, each other
+
+---Steps props together (collide: they meet; still: props they may wake) for n frames from frame 0
+local function run(w, list, n, collide, still)
+    local opts = { collide = collide }
+    if still then
+        opts.neighbors = function(prop)
+            local out = {}
+            for _, s in ipairs(still) do
+                if s ~= prop and not s.flight then out[#out + 1] = s end
+            end
+            return out
+        end
+        opts.wake = function(s, frame)
+            s.pos = { s.pos[1], s.pos[2], s.pos[3] }
+            s.flight = Flight.start(nil, frame)
+            list[#list + 1] = s
+        end
+    end
+    for f = 0, n - 1 do
+        local live = {}
+        for _, p in ipairs(list) do if p.flight then live[#live + 1] = p end end
+        if #live == 0 then break end
+        for i = #list, 1, -1 do list[i] = nil end
+        for i, p in ipairs(live) do list[i] = p end
+        Flight.step(w, list, f, opts)
+    end
+end
+
+T.test("shapes: a box lands on its face at its half height", function()
+    local w = Flight.newWorld({}, { 0, 0, -9.82 })
+    local p = prop({ 0, 0, 3 })
+    Flight.advance(w, p, 600)
+    T.eq(p.flight, nil, "at rest")
+    T.near(p.pos[3], 0.25, 0.01, "half its side above the ground")
+end)
+
+T.test("shapes: a box dropped turned tips over onto a face", function()
+    local w = Flight.newWorld({}, { 0, 0, -9.82 })
+    local rot = Driver.matrixTB(Colliders.frameOf({ 30, 20, 0 }))
+    local p = prop({ 0, 0, 2 }, { rot = rot })
+    Flight.advance(w, p, 1500)
+    T.eq(p.flight, nil, "at rest")
+    local r = p.rot
+    T.ok(math.max(math.abs(r.r8), math.abs(r.r9), math.abs(r.r10)) > 0.99, "one of its axes upright")
+    T.near(p.pos[3], 0.25, 0.01, "on a face")
+end)
+
+T.test("shapes: a static's corner holds a wide flat prop (its corners miss the post)", function()
+    local post = box({ 0, 0, 1 }, { 0.1, 0.1, 2 })
+    local w = Flight.newWorld({ post }, { 0, 0, -9.82 })
+    local plate = prop({ 0, 0, 2.5 }, { sides = { 2, 2, 0.1 }, radius = 1.42 })
+    Flight.advance(w, plate, 60)
+    T.ok(plate.pos[3] > 2, "resting on the post's top, not through it")
+end)
+
+T.test("shapes: a sphere rolling on grip spins", function()
+    local w = Flight.newWorld({}, { 0, 0, -9.82 })
+    local ball = prop({ 0, 0, 0.3 }, { shape = "sphere", sides = { 0.3, 0.3, 0.3 }, radius = 0.3 })
+    ball.flight.vel = { 3, 0, 0 }
+    Flight.advance(w, ball, 50)
+    T.ok(ball.flight.ang[2] > 1, "rolling about +y while moving along +x")
+end)
+
+T.test("collide: two props flying at each other meet; without it they pass", function()
+    local w = Flight.newWorld({}, { 0, 0, 0 })
+    local a, b = prop({ -2, 0, 5 }), prop({ 2, 0, 5 })
+    a.index, b.index = 1, 2
+    a.flight.vel, b.flight.vel = { 5, 0, 0 }, { -5, 0, 0 }
+    run(w, { a, b }, 200, true)
+    T.ok(a.pos[1] < b.pos[1], "they bounced off each other")
+    local c, d = prop({ -2, 0, 5 }), prop({ 2, 0, 5 })
+    c.flight.vel, d.flight.vel = { 5, 0, 0 }, { -5, 0, 0 }
+    run(w, { c, d }, 200, false)
+    T.ok(c.pos[1] > d.pos[1], "collide off: through each other")
+end)
+
+T.test("collide: a flying prop wakes the still one it runs into", function()
+    local w = Flight.newWorld({}, { 0, 0, -9.82 })
+    local still = { shape = "box", sides = { 0.5, 0.5, 0.5 }, pos = { 2, 0, 0.25 }, rot = IDENTITY, radius = 0.433,
+        index = 2 }
+    local a = prop({ 1, 0, 0.4 }) -- just above the ground (sliding on it, grip slows it fast)
+    a.index = 1
+    a.flight.vel = { 6, 0, 0 }
+    run(w, { a }, 100, true, { still })
+    T.ok(still.body ~= nil, "woken (it got a body)")
+    T.ok(still.pos[1] > 2.1, "pushed along")
+end)
+
+T.test("simple level: a sphere of its smallest half side, hits don't turn it, its spin slows", function()
+    local w = Flight.newWorld({}, { 0, 0, -9.82 })
+    local simple = { simple = true }
+    local plate = prop({ 0, 0, 2 }, { sides = { 2, 2, 0.2 }, radius = 1.42,
+        rot = Driver.matrixTB(Colliders.frameOf({ 30, 0, 0 })) })
+    Flight.advance(w, plate, 600, simple)
+    T.eq(plate.flight, nil, "at rest")
+    T.near(plate.pos[3], 0.1, 0.01, "resting on its sphere (0.1)")
+    T.near(plate.rot.r10, math.cos(math.rad(30)), 1e-9, "never turned by the landing")
+    local spun = prop({ 0, 0, 0.25 })
+    spun.flight = Flight.start(nil, 0, { 0, 0, 10 })
+    Flight.advance(w, spun, 5, simple)
+    T.ok(spun.flight.ang[3] < 10 * 0.9 ^ 4, "its spin slows on a gripping ground")
+end)
+
+T.test("levels: known ones kept, anything else the default", function()
+    local Dynamics = ATMOPLAY.Dynamics
+    T.eq(Dynamics.level("simple"), "simple", "simple")
+    T.eq(Dynamics.level("full"), "full", "full")
+    T.eq(Dynamics.level("fast"), Dynamics.DEFAULT_LEVEL, "unknown")
+    T.eq(Dynamics.level(nil), "shapes", "default: shapes")
 end)

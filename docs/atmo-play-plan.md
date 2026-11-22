@@ -595,6 +595,34 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
   gripping contact slows it by GRIP a frame, rest needs it below REST_SPIN. A take sets it on the object with
   set_obj_angular_vel (no torque setter for objects; RPH does the same). Releases, replays (seen.ang) and
   rewinds (events' ang) keep it. The sphere doesn't roll from it.
+- **Shapes and prop hits (2026-11-22, user):** flight.lua is a small rigid-body step now. A box touches by its 8
+  corners, a sphere by its center, a pill by its end spheres, each pair both ways (a static's corner holds a
+  wide prop); box against box (props and static boxes) by separating axes, as flush faces of equal boxes
+  have their corners on edges. Impulses (8 rounds: normal, bounce over BOUNCE_MIN, friction as a cone of MU = 2
+  capped by `(friction + 10000) x 0.5` N per contact) turn props: a sliding cube tips and tumbles to rest in
+  ~180 frames (the game's tipped and stopped by ~150), a dropped turned box settles on a face, a ball rolls.
+  - **Flight levels** (2026-11-22, user: a player's setting, by their computer, not the mod's): `simple`
+    (a sphere of the smallest half side, hits don't turn it, spin slows on grip: the old model), `shapes`
+    (default, real shapes), `full` (real shapes that hit each other and wake the still props they run into).
+    Atmo Play: `/atmoplay flight <level>`, kept in atmoplay.cfg next to atmoplay.lua (gitignored). MGE:
+    Settings > Prop flight (config.cfg `propFlight` 1-3). A change applies from the next match_begin
+    (Dynamics.setLevel), so a fight and its rewinds keep one level. Replays watched at another level than
+    the fight draw props differently (takes are matched by the flown pose). A header option (`collide=1`,
+    World tab) came first and was dropped the same day.
+    Speed (30 / 100 flying props, 5,000 static boxes): simple 0.15 / 0.48 ms a frame, shapes 0.68 / 2.1,
+    full 0.80 / 2.7.
+  - All flights step together a frame at a time (Flight.step, atmo order), after the carried objects are read
+    (step and observe in the same order). A flying prop near a carried one is wanted (chain tier): drawn
+    flights don't meet carried props, the game does once it's real.
+  - Rebuilds step the timeline again from the nearest snapshot (every SNAPSHOT_EVERY = 50 frames: the moved
+    free props' poses and flights) with the events in between, as flights touch each other.
+  - Speed (plain Lua 5.1, 5,000 static boxes): ~0.04 ms per flying prop a frame, collide ~25% more (30 flying:
+    ~0.8 ms a frame); a rewind steps at most 49 frames again.
+  - Tests: free flight still equals the probe; landing height, tipping onto a face, a post's corner holding a
+    plate, rolling, head-on hits (and passing with collide off), waking, and fights equal to their replays
+    and rewinds (across snapshots, with takes, releases, spin and wakes).
+  - Not in it: edge against edge between a sphere / pill and a box is approximate; thin walls can be passed
+    by fast props (no sweep); flying props never hit carried ones or players (they become real near them).
 
 ## Still open (checked during Phases 1-2, in game)
 

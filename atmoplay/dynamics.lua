@@ -105,10 +105,26 @@ local Dynamics = {
     -- the pool objects' color alpha as MGE writes them, "visible 1" (hidden objects get no move predictions).
     -- Only seen parked, far above the map: a carrying object is painted the prop's color (dress)
     POOL_ALPHA = 0.1,
+    -- flights are kept every this many frames (snapshots): a rebuild steps on from the nearest one, not frame 0
+    SNAPSHOT_EVERY = 50,
+    -- how drawn props fly (a player's setting, by how fast their computer is; flight.lua): simple, spheres hits
+    -- don't turn; shapes, their real shapes; full, real shapes that hit each other and the still props they meet
+    LEVELS = { "simple", "shapes", "full" },
+    DEFAULT_LEVEL = "shapes",
 }
+
+---@param level string?
+---@return string a known level (the default for anything else)
+function Dynamics.level(level)
+    for _, known in ipairs(Dynamics.LEVELS) do
+        if level == known then return level end
+    end
+    return Dynamics.DEFAULT_LEVEL
+end
 
 local IDENTITY = { r0 = 1, r1 = 0, r2 = 0, r3 = 0, r4 = 0, r5 = 1, r6 = 0, r7 = 0, r8 = 0, r9 = 0, r10 = 1, r11 = 0 }
 local NONE = { tier = math.huge, distance = math.huge } -- the rank of a carried prop nothing wants (step)
+local ZERO = { 0, 0, 0 }
 
 ---Where a pool object parks: on the platform, one spot per id
 ---@param id integer the file id
@@ -288,6 +304,9 @@ function Dynamics.new(objects, props, params)
         entries = {}, groups = {}, groupKeys = {}, props = {}, byGroup = {}, byIndex = {},
         noCopies = params.noCopies, -- MGE: it draws the atmo itself, the game's atmo copies aren't moved
         noGrid = params.noGrid,
+        level = Dynamics.level(params.level), -- how props fly (Dynamics.LEVELS); a new one waits for match_begin
+        simFrame = 0, -- the frame every flight is at (they step together, flight.lua)
+        snapshots = {}, -- by frame: the moved props' poses and flights then (rebuild)
         grouped = {}, cells = {}, maxRadius = 0,
         dirty = {}, dirtyAll = true, -- drawn copies to update: props whose pose changed (or all of them)
         events = {}, lastFrame = nil, wasReplay = false, holder = nil,
@@ -426,7 +445,7 @@ end
 
 ---Everything back to the atmo's poses, every object free (the world's objects aren't touched)
 local function clear(s)
-    s.flying = {}
+    s.flying, s.simFrame = {}, 0
     for _, prop in ipairs(s.props) do
         prop.pos, prop.rot, prop.entry = prop.home.pos, prop.home.rot, nil
         prop.flight, prop.flying = nil, nil
@@ -463,22 +482,89 @@ end
 
 ---The flying props moved on to `frame` (their copies follow); those that came to rest or are carried now
 ---leave the list
-local function fly(s, frame)
-    local kept = {}
-    for _, prop in ipairs(s.flying) do
-        if prop.flight and not prop.entry then
-            local before, beforeRot = prop.pos, prop.rot
-            local still = Flight.advance(s.world, prop, frame)
-            if prop.pos ~= before or prop.rot ~= beforeRot then
-                gridPlace(s, prop)
-                s.dirty[#s.dirty + 1] = prop
-            end
-            if still then kept[#kept + 1] = prop else prop.flying = nil end
-        else
-            prop.flying = nil
+local function byIndex(a, b) return a.index < b.index end
+
+---The still props near a flying one (collide: it may wake them), in atmo order
+local function stillNear(s, prop, reach)
+    local found, out = {}, {}
+    gather(s, prop.pos, reach + s.maxRadius, found, {})
+    for _, other in ipairs(found) do
+        if other ~= prop and not other.flight and not other.entry then out[#out + 1] = other end
+    end
+    table.sort(out, byIndex)
+    return out
+end
+
+local function copyFlight(fl)
+    local m = fl.rows
+    return { vel = { fl.vel[1], fl.vel[2], fl.vel[3] }, ang = { fl.ang[1], fl.ang[2], fl.ang[3] }, frame = fl.frame,
+        still = fl.still, rows = m and { { m[1][1], m[1][2], m[1][3] }, { m[2][1], m[2][2], m[2][3] },
+            { m[3][1], m[3][2], m[3][3] } } or nil }
+end
+
+---Keeps the free props that aren't at the atmo's pose (moved, resting or flying) as they are at the sim's frame
+local function snapshot(s)
+    local list = {}
+    for _, prop in ipairs(s.props) do
+        if not prop.entry and (prop.flight or prop.pos ~= prop.home.pos or prop.rot ~= prop.home.rot) then
+            list[#list + 1] = { prop = prop, pos = prop.pos, rot = prop.rot, flight = prop.flight and copyFlight(prop.flight) }
         end
     end
+    s.snapshots[s.simFrame] = list
+end
+
+---Every flight stepped together, one frame at a time, from the sim's frame to `frame` (flight.lua: the same steps
+---in a fight, its replay and a rebuild give the same numbers). Their copies follow; those that came to rest, fell
+---or are carried now leave the list
+local function fly(s, frame)
+    if s.simFrame >= frame then return end
+    local moved, list = {}, nil
+    if not s.flightOpts then
+        s.flightOpts = {
+            collide = s.level == "full",
+            simple = s.level == "simple",
+            neighbors = function(prop, reach) return stillNear(s, prop, reach) end,
+            wake = function(prop, at)
+                prop.pos = { prop.pos[1], prop.pos[2], prop.pos[3] } -- its own table: steps change it in place
+                prop.flight = Flight.start(nil, at)
+                prop.flying = true
+                local stepping = s.stepping
+                stepping[#stepping + 1] = prop
+            end,
+        }
+    end
+    while s.simFrame < frame do
+        list = {}
+        for _, prop in ipairs(s.flying) do
+            if prop.flight and not prop.entry then list[#list + 1] = prop else prop.flying = nil end
+        end
+        if #list == 0 then
+            s.flying = list
+            s.simFrame = frame
+            break
+        end
+        table.sort(list, byIndex)
+        s.stepping = list
+        Flight.step(s.world, list, s.simFrame, s.flightOpts)
+        s.simFrame = s.simFrame + 1
+        for _, prop in ipairs(list) do moved[prop] = true end
+        s.flying = list
+        if s.simFrame % Dynamics.SNAPSHOT_EVERY == 0 then snapshot(s) end
+    end
+    s.stepping = nil
+    local kept = {}
+    for _, prop in ipairs(s.flying) do
+        if prop.flight and not prop.entry then kept[#kept + 1] = prop else prop.flying = nil end
+    end
     s.flying = kept
+    -- the moved ones listed where they are now, their copies redrawn (atmo order: the same every time)
+    local changed = {}
+    for prop in pairs(moved) do changed[#changed + 1] = prop end
+    table.sort(changed, byIndex)
+    for _, prop in ipairs(changed) do
+        gridPlace(s, prop)
+        s.dirty[#s.dirty + 1] = prop
+    end
 end
 
 ---A take or release, kept by frame for rebuilds; its prop's copy is hidden or shown by the next draw. A release
@@ -505,9 +591,21 @@ end
 ---@param frame integer
 function Dynamics.rebuild(s, frame)
     clear(s)
-    local kept = {}
-    for _, ev in ipairs(s.events) do
-        if ev.frame <= frame then
+    local kept, events, k = {}, s.events, 1
+    -- the nearest snapshot before the frame (later ones are of a timeline that's dropped now)
+    local from = 0
+    for at in pairs(s.snapshots) do
+        if at > frame - 1 then
+            s.snapshots[at] = nil
+        elseif at > from then
+            from = at
+        end
+    end
+    ---The events up to frame t, as they happened (an event tagged t is in place before the step into t)
+    local function applyUpTo(t)
+        while events[k] and events[k].frame <= t do
+            local ev = events[k]
+            k = k + 1
             kept[#kept + 1] = ev
             local prop, e = ev.prop, ev.entry
             prop.pos, prop.rot = ev.pos, ev.rot
@@ -521,11 +619,33 @@ function Dynamics.rebuild(s, frame)
             end
         end
     end
+    -- the flights flown again with the events between, up to the frame before (step and observe fly on to the
+    -- frame itself; observe matches an object that appears with where its prop was the frame before). Flights
+    -- touch each other (collide), so they're stepped again from frame 0, not each from its own start
+    if from > 0 then
+        -- the events up to it (who carries what), then the free props as they were there
+        applyUpTo(from)
+        for _, prop in ipairs(s.props) do
+            if not prop.entry then prop.flight, prop.flying = nil, nil end
+        end
+        s.flying = {}
+        for _, kept in ipairs(s.snapshots[from]) do
+            local prop = kept.prop
+            prop.pos, prop.rot = kept.pos, kept.rot
+            if kept.flight then
+                prop.flight, prop.flying = copyFlight(kept.flight), true
+                s.flying[#s.flying + 1] = prop
+            end
+        end
+        s.simFrame = from
+    end
+    for f = from, frame - 2 do
+        applyUpTo(f + 1)
+        fly(s, f + 1)
+    end
+    applyUpTo(frame)
     s.events = kept
-    -- the flights flown again up to the frame before (step and observe fly on to the frame itself; observe
-    -- matches an object that appears with where its prop was the frame before)
-    fly(s, frame - 1)
-    for _, ev in ipairs(kept) do gridPlace(s, ev.prop) end
+    for _, prop in ipairs(s.props) do gridPlace(s, prop) end
     for _, e in ipairs(s.entries) do
         if e.prop then dress(e, e.prop) end
     end
@@ -722,7 +842,6 @@ end
 ---@param tag integer? the events' frame (match_begin: 0)
 function Dynamics.step(s, frame, tag)
     tag = tag or frame + 1
-    fly(s, frame)
     local movers, moverVel = {}, {} -- moverVel: a mover released this step (another group) keeps it
     for _, e in ipairs(s.entries) do
         if e.prop then
@@ -741,6 +860,8 @@ function Dynamics.step(s, frame, tag)
             end
         end
     end
+    -- the flights on to this frame, after the objects were read (as a replay's observe does: the same order)
+    fly(s, frame)
     local sources, parts = sourcePoints(s)
     -- the props that can be wanted: around the players, the mod's dynamic objects and the pushed props (the
     -- grid), and the carried ones. A flying prop may close in by itself: MAX_LEAD farther
@@ -751,6 +872,16 @@ function Dynamics.step(s, frame, tag)
     end
     for _, m in ipairs(movers) do
         gather(s, m.pos, m.radius + s.maxRadius + Dynamics.CHAIN + leadReach(moverVel[m]), candidates, seen)
+    end
+    -- a flying prop about to hit a carried one (drawn flights don't meet carried props: it must be real)
+    local carriedProps = {}
+    for _, e in ipairs(s.entries) do
+        if e.prop then carriedProps[#carriedProps + 1] = e.prop end
+    end
+    if #s.flying > 0 then
+        for _, c in ipairs(carriedProps) do
+            gather(s, c.pos, c.radius + s.maxRadius + Dynamics.CHAIN + Dynamics.MAX_LEAD, candidates, seen)
+        end
     end
     for _, e in ipairs(s.entries) do
         if e.prop and not seen[e.prop] then
@@ -796,6 +927,13 @@ function Dynamics.step(s, frame, tag)
                             d = gapAhead(m.pos, moverVel[m], m.radius, prop)
                             if not best or d < best then best = d end
                         end
+                    end
+                end
+                if prop.flight then
+                    -- flying at a carried prop (its own velocity closes the gap)
+                    for _, c in ipairs(carriedProps) do
+                        local d = gapAhead(c.pos, ZERO, c.radius, prop)
+                        if d <= Dynamics.CHAIN and (not best or d < best) then best = d end
                     end
                 end
                 tier = Dynamics.TIER_CHAIN
@@ -938,6 +1076,14 @@ end
 
 ---------------------------------------------------------------------------------------------------- hooks
 
+---A new level for drawn props' flight (Dynamics.LEVELS), used from the next match_begin: a fight and its rewinds
+---keep the one they started with
+---@param level string
+function Dynamics.setLevel(s, level)
+    level = Dynamics.level(level)
+    s.nextLevel = level ~= s.level and level or nil
+end
+
 ---match_begin: a new fight or replay starts from the atmo's poses; a fight places what's near now
 ---@param ws table get_world_state()
 function Dynamics.matchBegin(s, ws)
@@ -946,8 +1092,12 @@ function Dynamics.matchBegin(s, ws)
         local ok, rules = pcall(getRules)
         s.world.gravity = ok and type(rules) == "table" and Flight.parseGravity(rules.gravity) or Flight.GRAVITY
     end
+    -- a new level from here: a fight and its rewinds fly at one level
+    if s.nextLevel then
+        s.level, s.nextLevel, s.flightOpts = s.nextLevel, nil, nil
+    end
     clear(s)
-    s.events = {}
+    s.events, s.snapshots = {}, {}
     s.wasReplay = ws.replay_mode > 0
     -- a replay's first frame is watched by the next draw; a fight's is stepped now
     s.lastFrame = not s.wasReplay and ws.match_frame or nil

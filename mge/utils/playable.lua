@@ -408,7 +408,12 @@ function Playable.setPlayable(on)
     return changed
 end
 
+
 ---------------------------------------------------------------------------------------------------- playing in the editor
+
+-- how drawn props fly while testing in the editor (Atmo Play's Dynamics.LEVELS), Settings > Prop flight (config.cfg):
+-- the player's computer, not the mod. Atmo Play has its own (/atmoplay flight)
+Playable.flightLevel = Dynamics.DEFAULT_LEVEL
 
 local PLAY_HOOKS = MGE.hookname .. "_playable"
 ---@type AtmoPlayDriver?
@@ -417,6 +422,13 @@ local driver = nil
 local dynamics = nil
 ---@type number? the player's replaycache while props have it off (cached replays misplace them, as in Atmo Play)
 local cacheBefore = nil
+
+---Settings > Prop flight: how drawn props fly (Dynamics.LEVELS); the props playing now take it from the next fight
+---@param level string
+function Playable.setFlightLevel(level)
+    Playable.flightLevel = Dynamics.level(level)
+    if dynamics then Dynamics.setLevel(dynamics, Playable.flightLevel) end
+end
 
 local function setReplayCache(withProps)
     if withProps and cacheBefore == nil then
@@ -475,7 +487,7 @@ function Playable.onMatchBegin()
     if loaded.dynamicObjects and #loaded.dynamicObjects > 0 and #props > 0 then
         -- follow: the mod's own dynamic objects push props too
         local params = { dradius = ModData.parsed.playable.dradius, noCopies = true, follow = driver.follow,
-            statics = colliders }
+            statics = colliders, level = Playable.flightLevel }
         dynamics = Dynamics.new(loaded.dynamicObjects, props, params)
         local d = dynamics
         driver.moreCenters = function() return Dynamics.centers(d) end
