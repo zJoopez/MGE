@@ -43,7 +43,7 @@ ATMOPLAY = { scriptPath = findRoot() .. "atmoplay/", running = false }
 -- the modules register on the namespace they're given (ATMOPLAY_LOADING while they load), so MGE can load
 -- the same ones into its own table while Atmo Play runs
 local ok, err = pcall(function()
-    for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "dynamics.lua", "runtime.lua" }) do
+    for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "flight.lua", "dynamics.lua", "runtime.lua" }) do
         ATMOPLAY_LOADING = ATMOPLAY
         dofile(ATMOPLAY.scriptPath .. module)
     end

@@ -505,6 +505,97 @@ flagged) while watching, and going back to a fight from a replay puts back the o
 - Not in it: the offline builder, patched replays. Unknown until tried: whether set_obj_mass and set_obj_sides on dynamic objects are recorded in
   replays and change their physics; how cached replays look (objects misplaced, the drawn props follow).
 
+### 7. Thrust props and drawn flight (planned, 2026-11-22)
+The idea (user): atmo props may have thrust. A drawn prop flies (its copy moves); one that comes near enough
+to be wanted takes a pool object with its drawn velocity and keeps its thrust (the script pushes it). With a
+small flight sim for drawn props, a full pool can also let a prop go on flying drawn instead of freezing it.
+The sim is simple on purpose: gravity, thrust, sphere against the static atmo and the ground, bounce and
+friction from the measured curves below; no spin, no prop against prop. It starts only from states replays
+also have (frame 0, a release's pose and velocity), so a fight and its replay draw the same flight.
+
+#### Probe (2026-11-22, tools/atmoplay/probe_thrust.lua + data/mod/mge_tests/atmoplay_probe.tbm, test.rpl)
+- **Step:** dt = 0.006 s exactly, semi-implicit Euler: `v += a*dt`, then `pos += v*dt` (obj 1: vz -0.05892
+  a frame = 9.82 x 0.006). No air drag.
+- **Thrust `<frames> x y z`** is a force for one step: `dv = F / mass * dt` on push frames (0.1, mass 1:
+  0.0006; mass 2: 0.0003). Gravity just adds. `thrust 5` pushes on the steps into frames 1, 6, 11 ...
+- **set_obj_force** is the same force, for one step (applied once: dv 0.0006 once, nothing after). Called in
+  draw2d at frame f it shows from f + 1; pushing when `f % N == 0` gives exactly `thrust N`'s pushes (frames
+  6, 11 ...; the game's first push, into frame 1, can't be matched: nothing moves before frame 1).
+- **Object axes** (`thrust 1 0.1 0 0 1`, rot 0 0 90): pushed along -y. Which way the rotation matrix maps it
+  still has to be checked against get_obj_rot when it's coded.
+- **Replays:** the replay (cache 0) matched the fight exactly (0.00000) for every object: script forces and
+  set_obj_linear_vel are recorded. (draw2d skipped frame 501 once: step by frame difference, not per draw.)
+- **Bounce** (box dropped at 11.08 onto a block): the rebound is proportional to the impact speed,
+  e = 0.096 x (bounce - 0.48): bounce 0 -> 0.04, 1 -> 0.05, 5 -> 0.43, 10 -> 0.91, 20 -> 1.87 (gains energy),
+  50 -> 4.75. Bounce 10 on the falling box acts as bounce 10 on the block.
+- **Friction** (box given vx 5 on a platform): friction 0, 10, 100, 1000, 10000 on the platform, and 0 on the
+  box, all identical: it grips (dv 0.77 in 5 frames, ~26 m/s^2) and tips over, stopped by frame ~150.
+  -10000 is frictionless (vx 5 kept). Between -10000 and 0 not measured.
+- Friction probe 2 (`atmoplay_probe_friction.tbm`, flat 1 x 1 x 0.2 boxes that slide instead of tipping):
+  platform friction 0, -1, -10, -100, -1000, -5000, -9999, -10000; box friction -100, -1000; box 10000 on
+  platform -10000 and the reverse (which side wins). Results (2026-11-22):
+  - -10000 on either side: frictionless (10000 against -10000 too: the LOWER value wins, as a min).
+  - -9999: a steady 0.012 a frame (2.0 m/s^2 for mass 1): a friction force of ~2 N, i.e. friction looks like
+    ODE's per-contact force limit `mu = friction + 10000` (1 N) on ~2 contacts, not a coefficient. So a
+    heavier prop would slide farther (not measured).
+  - 0, -1, -10, -100, -1000, -5000 (platform or box): identical grip; after landing the speed falls by a
+    factor ~0.89 a frame (0.94 for a few frames) to 0: the solver's grip, not the friction limit.
+  - Sim model: tangential speed loses `min(2 * (min(fa, fb) + 10000) / mass * dt, 0.11 * v)` a frame on contact
+    (default friction: grip). Between -9999 and -5000 not measured.
+  - The ground is always at z = 0 (user). Sphere proxies are fine to start with; a closer shape later.
+
+#### Build plan
+1. **Flight** (dynamics.lua, pure Lua, offline tests first). A prop gets `flight = { pos, vel, frame }` while
+   drawn and moving; `Dynamics.fly(s, prop, toFrame)` steps it 0.006 s at a time, by frame difference (draw2d
+   can skip a frame), as the game does: `v += (g + push) * dt`, then `pos += v * dt`; g from the gamerules.
+   - Push: a thrust prop's `F / mass` on the steps into frames 1, 1 + N, 1 + 2N ... (world axes, or the
+     prop's own: the sign from the probe's obj 8 checked against its rotation).
+   - Hits: the prop as a sphere (radius: its smallest half side, so flat props sit low; open) against the
+     static atmo colliders near it (a cell grid like the pool's) and the ground (z = 0, to be checked). New
+     `Colliders.closest(c, p)` gives the normal. Normal speed reflected with `e = 0.096 x (bounce - 0.48)`
+     (clamped at 0; the larger of the two bounces, unverified), tangential speed kept when either side is
+     frictionless, else slowed at ~26 m/s^2 (probe 1); refined by probe 2.
+   - Rest: on contact and below REST_SPEED for a few frames, the flight ends: an ordinary still prop.
+   - No spin, no prop against prop (a flying prop passes through still ones), no players (a prop near one
+     is real by then).
+2. **Where flights start** (all states replays have too, so fights and replays fly the same):
+   - a thrust prop: at frame 0 from the atmo pose, speed 0;
+   - a release while moving: from the object's last pose and velocity. Fights: read in step; replays:
+     observe also keeps the last seen velocity (EOBJ has it).
+   - Releases: a carried prop nobody wants is let go when it's untouched, at rest OR not (it flies on drawn);
+     a full pool's eviction lets the prop fly on instead of freezing it.
+3. **Takes**: a flying prop is put at its flown pose WITH its velocity (placeAt gets a velocity). Ranking
+   counts its own velocity in the closing speed (a prop flying at a player is wanted sooner).
+4. **Carried thrust**: the script pushes the object with set_obj_force when `frame % N == 0` (draw2d, fights
+   only; recorded in replays).
+5. **Rewinds**: rebuild replays the events; each flight is simulated from its start event to the frame
+   (snapshots every ~100 frames if that's slow). Replays match takes by the flown pose (MATCH 0.5).
+6. **Drawing**: flying props are dirty every frame (their copies move); `/atmoplay` status counts flying props.
+7. **Format / MGE**: props keep their `thrust` lines on the atmo lines (the game's atmo loader skips them);
+   Colliders reads them into the prop; MGE's Thrust tab opens for props (it's off for atmo objects now).
+8. **Tests** (tests/test_atmoplay_dynamics.lua): free flight equals the probe's numbers (obj 1 z 148.21472 at
+   frame 100, obj 2 x 0.64908 at frame 600), thrust N and mass, bounce e, rest, a fight's flights equal its
+   replay's (observe), a rewind's rebuild equals flying forward, evicted props fly on.
+9. In game (user): thrust props in a playable mod, fights and replays (cache 0), R mid-fight, rewinds.
+
+**Built 2026-11-22 (steps 1-8, offline tests only; step 9 pending):** atmoplay/flight.lua (loaded after
+pool.lua: atmoplay.lua, mge/main.lua, tests/run.lua, package.ps1); dynamics.lua flies `s.flying`; the runtime
+and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gravity` at match_begin.
+- One change from step 2: a carried prop nobody wants is still kept until it rests, except a thrust prop
+  (it never rests) and a full pool's eviction; those fly on drawn. Kept that way so a kicked crate stays real
+  as long as the pool has room.
+- tests/test_atmoplay_flight.lua matches the probe's numbers (free fall, thrust 1 / 5 / mass 2, object axes);
+  test_atmoplay_dynamics.lua: a thrust prop flies from frame 0, is taken moving and pushed, is let go moving,
+  and its replay and a rewind fly every frame the same as the fight (fake world, exact).
+- MGE: the Atmo list has the Thrust tab (its lines only, Rows.afterAtmoEdit). `/atmoplay` counts flying props.
+- **Spin (2026-11-22, user saw rotations freeze):** a prop let go spinning kept its last rotation (flights had
+  no spin) and a take zeroed the object's angular velocity. Now flights carry the angular velocity
+  (get_obj_angular_vel, read as ODE's: world axes, rad/s; unverified in game: a copy that turns the other way
+  at the let-go means the sign is wrong): the drawn copy turns, a thrust on its own axes turns with it, a
+  gripping contact slows it by GRIP a frame, rest needs it below REST_SPIN. A take sets it on the object with
+  set_obj_angular_vel (no torque setter for objects; RPH does the same). Releases, replays (seen.ang) and
+  rewinds (events' ang) keep it. The sphere doesn't roll from it.
+
 ## Still open (checked during Phases 1-2, in game)
 
 - **R2:** do `set_obj_flag` / `set_obj_bounce` take effect on a static object, and can static objects use

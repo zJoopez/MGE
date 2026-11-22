@@ -333,7 +333,7 @@ converter's **Parked** budget becomes **Atmo**.
 | Export | selected → `assets/obj` | selected → `assets/atmo` |
 | Core tab | Move / Rotate / Resize, Pos / Rot / Scale, Color, Shape, Visible, … | the same transform rows, Color, Shape (Box / Sphere / Pill) |
 | Advanced tab | Flags, Model, Ids, Map, (Parked) | an **Atmo** panel: Depth (`no_depth`), Shown at graphics (min / max level), "N lines kept" (the unedited extras), **To objects** |
-| Thrust | yes | not shown |
+| Thrust | yes | yes (2026-11-22): props (not Static) with thrust fly in Atmo Play (atmo-play-plan.md section 7) |
 | Generate | yes | later: Generate into atmo (Phase 5) |
 | World click / Shift + drag | objects (ghosts of atmo objects too) | atmo objects. A click on an object switches to Objects, as other lists do now |
 

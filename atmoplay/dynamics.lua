@@ -25,6 +25,12 @@
 -- predictions; the drawn copy (its atmo item) is hidden, and shown again at the prop's pose once released
 -- (both drawn flickered). MGE likewise skips drawing a carried prop (Dynamics.isCarried).
 --
+-- Drawn flight (flight.lua; plan, section 7): a prop with a thrust line flies from frame 0 while no object
+-- carries it (its copy moves); taken, its object gets the flight's velocity, and the script pushes it with
+-- set_obj_force on the thrust's frames (recorded in replays). A carried prop let go while moving (a full pool's
+-- eviction, a thrust prop nobody wants) flies on drawn from the object's pose and velocity instead of hanging
+-- where it was. Flights start only from states replays have too (frame 0; a release's pose and velocity), so a
+-- fight and its replay fly the same.
 -- Replays move nothing: the game replays the pool objects (EOBJ lines). The script WATCHES them to know
 -- where the props are: an object leaving its parking spot took the free prop of its group nearest to where
 -- it appeared; an object going back left its prop where it was last seen. Everything that happened is kept
@@ -38,9 +44,13 @@ local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOP
 local Colliders = NS.Colliders
 local Pool = NS.Pool
 local Driver = NS.Driver -- loaded first: Driver.FIRST_FRAME
+local Flight = NS.Flight
 
 ---@class AtmoPlayProp : AtmoPlayCollider
 ---@field mass number?
+---@field thrust AtmoPlayThrust? from its thrust line
+---@field flight AtmoPlayFlight? flying drawn (no object carries it)
+---@field flying boolean? listed in s.flying
 ---@field home { pos: number[], rot: table } the atmo's pose (rot: MatrixTB)
 ---@field rot table MatrixTB now
 ---@field entry AtmoPlayDynEntry? the pool object carrying it
@@ -58,7 +68,8 @@ local Driver = NS.Driver -- loaded first: Driver.FIRST_FRAME
 ---@field spin number
 ---@field home { pos: number[], sides: number[] } its parking spot and own size, as the file has them
 ---@field sides number[] its size now (fitObject sets a size only when it differs)
----@field seen { pos: number[], rot: table }? replays: where it was last seen carrying its prop
+---@field seen { pos: number[], rot: table, vel: number[]?, frame: integer? }? replays: where it was last seen
+---carrying its prop (and how fast, at which frame: a prop let go moving flies on from there)
 
 ---@class AtmoPlayDynamics
 local Dynamics = {
@@ -265,9 +276,10 @@ end
 
 ---@param objects AtmoPlayPoolObject[] the mod's dynamic pool (Format.read's `dynamic`)
 ---@param props AtmoPlayCollider[] Colliders.build's third result
----@param params { dradius: number?, noCopies: boolean?, noGrid: boolean?, follow: integer[]?, fromFrame: integer? }?
+---@param params { dradius: number?, noCopies: boolean?, noGrid: boolean?, follow: integer[]?, fromFrame: integer?, statics: AtmoPlayCollider[]?, gravity: number[]? }?
 ---the mod header's (noCopies: MGE's own; noGrid: tests; follow: the mod's own dynamic objects, Driver.dynamicIds;
----fromFrame: tests, default Driver.FIRST_FRAME)
+---fromFrame: tests, default Driver.FIRST_FRAME; statics: the static colliders flights hit; gravity: tests,
+---else the gamerule's, read at match_begin)
 ---@return table? state, string? error
 function Dynamics.new(objects, props, params)
     params = params or {}
@@ -282,6 +294,8 @@ function Dynamics.new(objects, props, params)
         follow = params.follow, followSizes = {}, -- the mod's own dynamic objects (0-based ids) want props too
         -- no takes or releases before this frame (Driver.FIRST_FRAME: moves before the first one crashed R)
         fromFrame = params.fromFrame or Driver.FIRST_FRAME,
+        world = Flight.newWorld(params.statics, params.gravity), fixedGravity = params.gravity ~= nil,
+        flying = {}, -- props with a flight (drawn, moving)
     }
     s.cellSize = math.max(s.radius * 2, 1)
     for _, object in ipairs(objects) do
@@ -310,6 +324,7 @@ function Dynamics.new(objects, props, params)
         prop.pos = { c.pos[1], c.pos[2], c.pos[3] }
         prop.rot = prop.home.rot
         prop.drawnPos, prop.drawnRot = prop.home.pos, prop.home.rot
+        prop.thrust = Flight.parseThrust(c.thrust)
         s.props[#s.props + 1] = prop
         s.byIndex[prop.index] = prop
         -- a carried prop this far below every prop's start fell off the map: released where it is
@@ -411,17 +426,67 @@ end
 
 ---Everything back to the atmo's poses, every object free (the world's objects aren't touched)
 local function clear(s)
+    s.flying = {}
     for _, prop in ipairs(s.props) do
         prop.pos, prop.rot, prop.entry = prop.home.pos, prop.home.rot, nil
+        prop.flight, prop.flying = nil, nil
+        -- a thrust prop flies from frame 0, from the atmo's pose
+        if prop.thrust then
+            prop.flight, prop.flying = Flight.start(nil, 0), true
+            s.flying[#s.flying + 1] = prop
+        end
         gridPlace(s, prop)
     end
-    for _, e in ipairs(s.entries) do e.prop, e.seen, e.speed, e.spin, e.vel = nil, nil, 0, 0, nil end
+    for _, e in ipairs(s.entries) do e.prop, e.seen, e.speed, e.spin, e.vel, e.angVel = nil, nil, 0, 0, nil, nil end
     s.dirtyAll = true
 end
 
----A take or release, kept by frame for rebuilds; its prop's copy is hidden or shown by the next draw
+---A prop starts flying drawn from its pose now (at `frame`) with velocity `vel` and angular velocity `ang`
+local function startFlight(s, prop, vel, frame, ang)
+    prop.flight = Flight.start(vel, frame, ang)
+    if not prop.flying then
+        prop.flying = true
+        s.flying[#s.flying + 1] = prop
+    end
+end
+
+---Whether a prop let go with velocity `vel` and angular velocity `ang` flies on: it moves, spins, or has thrust
+local function fliesOn(prop, vel, ang)
+    return prop.thrust ~= nil or (vel ~= nil and length(vel[1], vel[2], vel[3]) > Dynamics.REST_SPEED)
+        or (ang ~= nil and length(ang[1], ang[2], ang[3]) > Dynamics.REST_SPIN)
+end
+
+---A velocity list copied (nil stays nil)
+local function copy3(v)
+    return v and { v[1], v[2], v[3] } or nil
+end
+
+---The flying props moved on to `frame` (their copies follow); those that came to rest or are carried now
+---leave the list
+local function fly(s, frame)
+    local kept = {}
+    for _, prop in ipairs(s.flying) do
+        if prop.flight and not prop.entry then
+            local before, beforeRot = prop.pos, prop.rot
+            local still = Flight.advance(s.world, prop, frame)
+            if prop.pos ~= before or prop.rot ~= beforeRot then
+                gridPlace(s, prop)
+                s.dirty[#s.dirty + 1] = prop
+            end
+            if still then kept[#kept + 1] = prop else prop.flying = nil end
+        else
+            prop.flying = nil
+        end
+    end
+    s.flying = kept
+end
+
+---A take or release, kept by frame for rebuilds; its prop's copy is hidden or shown by the next draw. A release
+---that starts a flight keeps its velocity and frame (rebuilds fly it again from there)
 local function event(s, frame, kind, e, prop)
-    s.events[#s.events + 1] = { frame = frame, kind = kind, entry = e, prop = prop, pos = prop.pos, rot = prop.rot }
+    local fl = kind == "release" and prop.flight or nil
+    s.events[#s.events + 1] = { frame = frame, kind = kind, entry = e, prop = prop, pos = prop.pos, rot = prop.rot,
+        vel = fl and copy3(fl.vel) or nil, ang = fl and copy3(fl.ang) or nil, flightFrame = fl and fl.frame or nil }
     s.dirty[#s.dirty + 1] = prop
 end
 
@@ -449,12 +514,17 @@ function Dynamics.rebuild(s, frame)
             if ev.kind == "take" then
                 e.prop, prop.entry = prop, e
                 e.seen = { pos = ev.pos, rot = ev.rot }
+                prop.flight = nil
             else
                 e.prop, prop.entry, e.seen = nil, nil, nil
+                if ev.vel then startFlight(s, prop, ev.vel, ev.flightFrame, ev.ang) else prop.flight = nil end
             end
         end
     end
     s.events = kept
+    -- the flights flown again up to the frame before (step and observe fly on to the frame itself; observe
+    -- matches an object that appears with where its prop was the frame before)
+    fly(s, frame - 1)
     for _, ev in ipairs(kept) do gridPlace(s, ev.prop) end
     for _, e in ipairs(s.entries) do
         if e.prop then dress(e, e.prop) end
@@ -525,14 +595,15 @@ end
 
 ---The gap between something moving (at `pos` with velocity `vel`, radius `size`) and a prop, less how far it
 ---closes in LOOKAHEAD seconds (MAX_LEAD at most either way): a prop ahead of a fast object comes before
----one beside it, one it moves away from after. A carried prop's own velocity counts (it may flee as fast)
+---one beside it, one it moves away from after. A carried or flying prop's own velocity counts (it may flee as
+---fast, or fly at it)
 local function gapAhead(pos, vel, size, prop)
     local dx, dy, dz = prop.pos[1] - pos[1], prop.pos[2] - pos[2], prop.pos[3] - pos[3]
     local d = math.sqrt(dx * dx + dy * dy + dz * dz)
     local gap = d - prop.radius - size
     if d < 1e-9 then return gap end
     local vx, vy, vz = vel[1], vel[2], vel[3]
-    local own = prop.entry and prop.entry.vel
+    local own = (prop.entry and prop.entry.vel) or (prop.flight and prop.flight.vel)
     if own then vx, vy, vz = vx - own[1], vy - own[2], vz - own[3] end
     local closing = (vx * dx + vy * dy + vz * dz) / d
     local lead = math.max(-Dynamics.MAX_LEAD, math.min(Dynamics.MAX_LEAD, closing * Dynamics.LOOKAHEAD))
@@ -562,22 +633,35 @@ local function fitObject(e, sides)
     end
 end
 
----Puts an object at a pose, still
-local function placeAt(e, pos, rot)
+---Puts an object at a pose, still or moving at `vel` and spinning at `ang` (the game has no torque for objects:
+---the spin is set as RPH sets it, recorded in replays as the velocity is)
+local function placeAt(e, pos, rot, vel, ang)
     local id = e.id - 1
     set_obj_rot_m(id, rot)
     set_obj_pos(id, pos[1], pos[2], pos[3])
-    set_obj_linear_vel(id, 0, 0, 0)
-    set_obj_angular_vel(id, 0, 0, 0)
+    if vel then
+        set_obj_linear_vel(id, vel[1], vel[2], vel[3])
+    else
+        set_obj_linear_vel(id, 0, 0, 0)
+    end
+    if ang then
+        set_obj_angular_vel(id, ang[1], ang[2], ang[3])
+    else
+        set_obj_angular_vel(id, 0, 0, 0)
+    end
 end
 
----A free object takes a prop: put at its pose and size, still
+---A free object takes a prop: put at its pose and size, still, or moving and spinning on as its flight was
 local function take(s, e, prop, frame)
     fitObject(e, prop.sides)
     dress(e, prop)
-    placeAt(e, prop.pos, prop.rot)
+    local fl = prop.flight
+    local vel, ang = fl and copy3(fl.vel) or nil, fl and copy3(fl.ang) or nil
+    placeAt(e, prop.pos, prop.rot, vel, ang)
+    prop.flight = nil -- fly() drops it from the list
     e.prop, prop.entry = prop, e
-    e.speed, e.spin, e.vel = 0, 0, nil
+    e.speed, e.spin, e.vel, e.angVel = vel and length(vel[1], vel[2], vel[3]) or 0,
+        ang and length(ang[1], ang[2], ang[3]) or 0, vel, ang
     event(s, frame, "take", e, prop)
 end
 
@@ -587,10 +671,14 @@ local function park(e)
     placeAt(e, e.home.pos, IDENTITY)
 end
 
----A carried prop stays where it is; its object goes back to its parking spot
-local function release(s, e, frame)
+---A carried prop stays where it is, or flies on drawn when it moves or has thrust (from its pose and velocity
+---at `poseFrame`, the fight frame they were read at); its object goes back to its parking spot
+---@param tag integer the event's frame
+---@param poseFrame integer
+local function release(s, e, tag, poseFrame)
     local prop = e.prop
-    event(s, frame, "release", e, prop)
+    if fliesOn(prop, e.vel, e.angVel) then startFlight(s, prop, e.vel, poseFrame, e.angVel) end
+    event(s, tag, "release", e, prop)
     park(e)
     e.prop, prop.entry = nil, nil
     gridPlace(s, prop) -- listed where it stays
@@ -634,6 +722,7 @@ end
 ---@param tag integer? the events' frame (match_begin: 0)
 function Dynamics.step(s, frame, tag)
     tag = tag or frame + 1
+    fly(s, frame)
     local movers, moverVel = {}, {} -- moverVel: a mover released this step (another group) keeps it
     for _, e in ipairs(s.entries) do
         if e.prop then
@@ -643,7 +732,9 @@ function Dynamics.step(s, frame, tag)
             local vx, vy, vz = get_obj_linear_vel(id)
             e.vel = { vx or 0, vy or 0, vz or 0 }
             e.speed = length(vx, vy, vz)
-            e.spin = length(get_obj_angular_vel(id))
+            local ax, ay, az = get_obj_angular_vel(id)
+            e.angVel = { ax or 0, ay or 0, az or 0 }
+            e.spin = length(ax, ay, az)
             if e.speed > Dynamics.MOVING then
                 movers[#movers + 1] = e.prop
                 moverVel[e.prop] = e.vel
@@ -652,10 +743,11 @@ function Dynamics.step(s, frame, tag)
     end
     local sources, parts = sourcePoints(s)
     -- the props that can be wanted: around the players, the mod's dynamic objects and the pushed props (the
-    -- grid), and the carried ones
+    -- grid), and the carried ones. A flying prop may close in by itself: MAX_LEAD farther
     local candidates, seen = {}, {}
+    local flyLead = #s.flying > 0 and Dynamics.MAX_LEAD or 0
     for _, src in ipairs(sources) do
-        gather(s, src.pos, s.radius + s.maxRadius + src.size + leadReach(src.vel), candidates, seen)
+        gather(s, src.pos, s.radius + s.maxRadius + src.size + leadReach(src.vel) + flyLead, candidates, seen)
     end
     for _, m in ipairs(movers) do
         gather(s, m.pos, m.radius + s.maxRadius + Dynamics.CHAIN + leadReach(moverVel[m]), candidates, seen)
@@ -722,9 +814,11 @@ function Dynamics.step(s, frame, tag)
         for _, e in ipairs(entries) do
             if e.prop then
                 local fell = s.fallen and e.prop.pos[3] < s.fallen
-                if fell or (not isWanted[e.prop] and e.speed < Dynamics.REST_SPEED and e.spin < Dynamics.REST_SPIN
-                    and not touched(e.prop, parts)) then
-                    release(s, e, tag) -- free from the next frame
+                -- let go when nobody wants it, nothing touches it and it's at rest; a thrust prop never rests:
+                -- it goes on flying drawn
+                local atRest = e.prop.thrust or (e.speed < Dynamics.REST_SPEED and e.spin < Dynamics.REST_SPIN)
+                if fell or (not isWanted[e.prop] and atRest and not touched(e.prop, parts)) then
+                    release(s, e, tag, frame) -- free from the next frame
                 else
                     kept[#kept + 1] = e
                 end
@@ -747,9 +841,10 @@ function Dynamics.step(s, frame, tag)
         end
         if #waiting > 0 then
             -- the pool is full: the carried props wanted least (a lower tier, farther, or not wanted at all)
-            -- are frozen where they are, for the best waiting props first; their objects are free from the
-            -- next frame. Within a tier only when farther by more than EVICT_MARGIN; a waiting prop near a
-            -- player freezes one near a dynamic object or pushed along however near
+            -- are let go, for the best waiting props first (a moving one flies on drawn, a still one stays);
+            -- their objects are free from the next frame. Within a tier only when farther by more than
+            -- EVICT_MARGIN; a waiting prop near a player frees one near a dynamic object or pushed along
+            -- however near
             local victims = {}
             for _, e in ipairs(kept) do
                 if not isWanted[e.prop] and not touched(e.prop, parts) then victims[#victims + 1] = e end
@@ -767,8 +862,16 @@ function Dynamics.step(s, frame, tag)
                 if r.tier < w.tier or (r.tier == w.tier and r.distance <= w.distance + Dynamics.EVICT_MARGIN) then
                     break
                 end
-                release(s, e, tag)
+                release(s, e, tag, frame)
             end
+        end
+    end
+    -- carried thrust props: pushed as the game's thrust pushes (into frames 1, N + 1 ...: a force set now acts
+    -- on the step to the next frame; recorded in replays)
+    for _, e in ipairs(s.entries) do
+        local prop = e.prop
+        if prop and prop.thrust and Flight.pushes(prop.thrust, frame) then
+            pcall(set_obj_force, e.id - 1, Flight.thrustWorld(prop.thrust, prop.rot))
         end
     end
 end
@@ -786,13 +889,21 @@ function Dynamics.observe(s, frame)
             if e.prop then
                 local prop = e.prop
                 if isParked(e, z) then
-                    if e.seen then prop.pos, prop.rot = e.seen.pos, e.seen.rot end
+                    local seen = e.seen
+                    if seen then prop.pos, prop.rot = seen.pos, seen.rot end
+                    -- as the fight let it go: flying on from its last seen pose and velocity
+                    if seen and seen.frame and fliesOn(prop, seen.vel, seen.ang) then
+                        startFlight(s, prop, seen.vel, seen.frame, seen.ang)
+                    end
                     event(s, frame, "release", e, prop)
                     e.prop, prop.entry, e.seen = nil, nil, nil
                     gridPlace(s, prop) -- listed where it stays
                 else
                     updatePose(prop, x, y, z, copyTB(get_obj_rot(id)))
-                    e.seen = { pos = prop.pos, rot = prop.rot }
+                    local vx, vy, vz = get_obj_linear_vel(id)
+                    local ax, ay, az = get_obj_angular_vel(id)
+                    e.seen = { pos = prop.pos, rot = prop.rot, vel = { vx or 0, vy or 0, vz or 0 },
+                        ang = { ax or 0, ay or 0, az or 0 }, frame = frame }
                 end
             elseif not isParked(e, z) then
                 -- the free prop of its group nearest to where it appeared (ties: the lower atmo index)
@@ -810,13 +921,19 @@ function Dynamics.observe(s, frame)
                 if best and bestD <= Dynamics.MATCH then
                     e.prop, best.entry = best, e
                     best.pos, best.rot = pos, copyTB(get_obj_rot(id))
-                    e.seen = { pos = best.pos, rot = best.rot }
+                    best.flight = nil -- fly() drops it from the list
+                    local vx, vy, vz = get_obj_linear_vel(id)
+                    local ax, ay, az = get_obj_angular_vel(id)
+                    e.seen = { pos = best.pos, rot = best.rot, vel = { vx or 0, vy or 0, vz or 0 },
+                        ang = { ax or 0, ay or 0, az or 0 }, frame = frame }
                     event(s, frame, "take", e, best)
                     dress(e, best)
                 end
             end
         end
     end
+    -- after the matching (an object that appeared took its prop from where it flew to the frame before)
+    fly(s, frame)
 end
 
 ---------------------------------------------------------------------------------------------------- hooks
@@ -824,6 +941,11 @@ end
 ---match_begin: a new fight or replay starts from the atmo's poses; a fight places what's near now
 ---@param ws table get_world_state()
 function Dynamics.matchBegin(s, ws)
+    if not s.fixedGravity then
+        local getRules = rawget(_G, "get_game_rules")
+        local ok, rules = pcall(getRules)
+        s.world.gravity = ok and type(rules) == "table" and Flight.parseGravity(rules.gravity) or Flight.GRAVITY
+    end
     clear(s)
     s.events = {}
     s.wasReplay = ws.replay_mode > 0
@@ -898,12 +1020,17 @@ end
 
 ---@return integer carried props carried now
 ---@return integer props all props
+---@return integer flying props flying drawn now
 function Dynamics.counts(s)
     local carried = 0
     for _, e in ipairs(s.entries) do
         if e.prop then carried = carried + 1 end
     end
-    return carried, #s.props
+    local flying = 0
+    for _, prop in ipairs(s.flying) do
+        if prop.flight and not prop.entry then flying = flying + 1 end -- the list drops taken ones next frame
+    end
+    return carried, #s.props, flying
 end
 
 ---Every drawn copy back at the atmo's pose and shown (Atmo Play leaving the mod)

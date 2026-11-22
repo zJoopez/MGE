@@ -11,7 +11,7 @@ require("toriui.uielement")
 ---@field selectPlayer fun(id: integer, additive: boolean?) picks a player (list row, world click)
 ---@field selectedJoints table<integer, boolean> selected joint slots (Shift adds), never empty, empty slots too
 ---@field jointSlot integer the current joint slot (last clicked), always selected: the Link tab edits it
-local Main = { page = 1, pageSize = 64, listTab = "objects", selectedPlayer = 0,
+local Main = { page = 1, pageSize = 66, listTab = "objects", selectedPlayer = 0,
     selectedPlayers = { [0] = true }, selectedJoints = { [1] = true }, jointSlot = 1,
     activeTabs = { objects = "core", atmo = "core", players = "player", joints = "jointLink", misc = "misc" } }
 MGE.Main = Main -- registered before UI modules load so they can alias it
@@ -283,12 +283,13 @@ local TAB_SETS = {
         { id = "thrust", label = "Thrust" },
         { id = "generate", label = "Generate" },
     },
-    -- the same Core, Advanced and Generate panels as objects, their rows on the atmo objects' lines there
-    -- (Advanced with the atmo's own rows instead of Model and Ids: ui/editor_atmo.lua; Generate's pieces go
-    -- to the atmo, without joints: ui/editor_generate.lua)
+    -- the same Core, Advanced, Thrust and Generate panels as objects, their rows on the atmo objects' lines
+    -- there (Advanced with the atmo's own rows instead of Model and Ids: ui/editor_atmo.lua; Thrust flies props
+    -- in Atmo Play; Generate's pieces go to the atmo, without joints: ui/editor_generate.lua)
     atmo = {
         { id = "core", label = "Core" },
         { id = "advanced", label = "Advanced" },
+        { id = "thrust", label = "Thrust" },
         { id = "generate", label = "Generate" },
     },
     players = { { id = "player", label = "Core" } },

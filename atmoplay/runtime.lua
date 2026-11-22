@@ -225,7 +225,8 @@ local function loadPlayable(path)
     local dynamics
     if #file.dynamic > 0 and #props > 0 then
         -- follow: the mod's own dynamic objects push props too
-        dynamics = Dynamics.new(file.dynamic, props, { dradius = file.header.dradius, follow = driver.follow })
+        dynamics = Dynamics.new(file.dynamic, props, { dradius = file.header.dradius, follow = driver.follow,
+            statics = colliders })
         driver.moreCenters = function() return Dynamics.centers(dynamics) end
     elseif #props > 0 then
         say(name .. ": " .. #props .. " props without a dynamic pool (not solid)")
@@ -354,9 +355,9 @@ function Runtime.status()
     say(string.format("%s: %d/%d pool objects in use, %d solid atmo objects", loaded.name,
         Driver.active(loaded.driver), #loaded.pool.entries, loaded.stats.collidable))
     if loaded.dynamics then
-        local carried, props = Dynamics.counts(loaded.dynamics)
-        say(string.format("props: %d of %d carried by %d dynamic pool objects", carried, props,
-            #loaded.dynamics.entries))
+        local carried, props, flying = Dynamics.counts(loaded.dynamics)
+        say(string.format("props: %d of %d carried by %d dynamic pool objects, %d flying drawn", carried, props,
+            #loaded.dynamics.entries, flying))
     end
 end
 

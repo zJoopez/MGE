@@ -51,7 +51,7 @@ $SampleAssets = @(
 )
 # Atmo Play's release (atmoplay.zip): its entry atmoplay.lua and these modules (atmoplay/), what the player
 # script loads. mge.zip has them too (MGE writes playable mods and tests them with the same code)
-$AtmoPlayModules = @("mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "dynamics.lua", "runtime.lua")
+$AtmoPlayModules = @("mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "flight.lua", "dynamics.lua", "runtime.lua")
 
 Push-Location $repo
 try {

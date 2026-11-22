@@ -42,6 +42,7 @@ local function stubEngine()
     set_obj_angular_vel = function(id, x, y, z) obj(id).ang = { x, y, z } end
     set_obj_mass = function(id, m) obj(id).mass = m; calls[#calls + 1] = "mass " .. id end
     set_obj_bounce = function() end
+    set_obj_force = function(id, x, y, z) obj(id).force = { x, y, z }; calls[#calls + 1] = "force " .. id end
 end
 
 local ATMO = [[
@@ -333,7 +334,7 @@ T.test("fight: a crate that fell off the map is released", function()
     T.eq(carried(s), "-", "released though moving and touched")
 end)
 
-T.test("fight: a full pool freezes a far moving prop for a near waiting one", function()
+T.test("fight: a full pool lets a far moving prop go for a near waiting one: it flies on drawn", function()
     local s = setup(1)
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
     T.eq(carried(s), "crateA", "taken")
@@ -341,12 +342,15 @@ T.test("fight: a full pool freezes a far moving prop for a near waiting one", fu
     world.objects[0].pos = { 10, 0, 1 }
     world.objects[0].lin = { 5, 0, 0 }
     Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
-    T.eq(carried(s), "-", "crateA frozen though moving")
-    T.near(s.props[1].pos[1], 10, 1e-9, "left where it flew")
+    T.eq(carried(s), "-", "crateA let go though moving")
+    T.near(s.props[1].pos[1], 10, 1e-9, "where its object was")
+    T.ok(s.props[1].flight ~= nil, "flying on drawn")
+    T.nearList(s.props[1].flight.vel, { 5, 0, 0 }, 1e-9, "at its object's velocity")
     T.ok(math.abs(world.objects[0].pos[3] - Dynamics.PARK_Z) < Dynamics.PARKED, "its object parked (above the map)")
     T.eq(s.events[#s.events].kind, "release", "a release event: replays see the object park")
     Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
     T.eq(carried(s), "crateB", "the near one gets the object the next frame")
+    T.near(s.props[1].pos[1], 10 + 5 * ATMOPLAY.Flight.DT, 1e-9, "crateA flew one frame on")
 end)
 
 T.test("fight: a full pool keeps a moving prop about as near as the waiting one", function()
@@ -713,4 +717,155 @@ env_obj blade
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
     T.eq(carried(s), "crate blade", "each taken by its own group's object")
     T.eq(world.objects[1].flag, nil, "the weapon object has the flag from the mod: no set_obj_flag")
+end)
+
+---------------------------------------------------------------------------------------------------- flight
+
+-- a rocket prop (thrust 200 along x: 1.2 m/s more each frame) 6 left of player 1, on a static floor
+local ROCKET_ATMO = [[
+env_obj floor
+   shape box
+   pos 0 0 0
+   sides 200 60 1
+   flag 8
+env_obj rocket
+   shape box
+   pos -6 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 200 0 0]]
+
+local function setupRocket()
+    stubEngine()
+    local colliders, _, props = Colliders.build(T.lines(ROCKET_ATMO))
+    local s = Dynamics.new({ { id = 1, shape = "box" } }, props,
+        { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 } })
+    set_obj_pos(0, Dynamics.parkPos(1))
+    return s
+end
+
+T.test("flight: a thrust prop flies drawn from frame 0", function()
+    local s = setupRocket()
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "-", "too far to be wanted")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.near(s.props[1].pos[1], -6 + 1.2 * ATMOPLAY.Flight.DT, 1e-9, "one push, one step")
+    local _, _, flying = Dynamics.counts(s)
+    T.eq(flying, 1, "counted as flying")
+end)
+
+T.test("flight: taken moving when it comes near; its object pushed on the thrust's frames", function()
+    local s = setupRocket()
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local f = 0
+    while carried(s) == "-" and f < 60 do
+        f = f + 1
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+    end
+    T.eq(carried(s), "rocket", "taken")
+    T.ok(world.objects[0].lin[1] > 10, "its object moving on at the flight's speed")
+    T.nearList(world.objects[0].force, { 200, 0, 0 }, 1e-9, "pushed as its thrust")
+    T.eq(s.props[1].flight, nil, "no longer flying drawn")
+    local _, _, flying = Dynamics.counts(s)
+    T.eq(flying, 0, "not counted as flying")
+end)
+
+---A fight with the rocket: flies in, taken, then the players leave and it's let go moving. The fake world steps
+---the carried object by its velocity and pushes. Returns each frame's object state (before the frame's draw) and
+---the rocket's pose after it
+local function rocketFight(frames)
+    local s = setupRocket()
+    local dt = ATMOPLAY.Flight.DT
+    local rec, poses = {}, {}
+    local function snapshot(f)
+        local o = world.objects[0]
+        rec[f] = { pos = { o.pos[1], o.pos[2], o.pos[3] }, lin = { o.lin[1], o.lin[2], o.lin[3] },
+            ang = { o.ang[1], o.ang[2], o.ang[3] } }
+    end
+    snapshot(0)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    poses[0] = s.props[1].pos
+    local takenAt
+    for f = 1, frames do
+        -- the physics step from f - 1: the carried object moves (and takes its push)
+        local o = world.objects[0]
+        if o.force then
+            o.lin = { o.lin[1] + o.force[1] * dt, o.lin[2] + o.force[2] * dt, o.lin[3] + o.force[3] * dt }
+            o.force = nil
+        end
+        o.pos = { o.pos[1] + o.lin[1] * dt, o.pos[2] + o.lin[2] * dt, o.pos[3] + o.lin[3] * dt }
+        if takenAt and f == takenAt + 2 then o.ang = { 0, 1, 3 } end -- it starts spinning
+        if takenAt and f == takenAt + 5 then world.players = { { 100, 100, 1 }, { 120, 120, 1 } } end
+        snapshot(f)
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        if not takenAt and carried(s) == "rocket" then takenAt = f end
+        poses[f] = { pos = s.props[1].pos, rot = s.props[1].rot }
+    end
+    poses[0] = { pos = poses[0], rot = s.props[1].home.rot }
+    return s, rec, poses, takenAt
+end
+
+T.test("flight: a thrust prop nobody wants is let go moving and flies on drawn", function()
+    local s, _, poses, takenAt = rocketFight(60)
+    T.ok(takenAt ~= nil, "taken on the way")
+    T.eq(carried(s), "-", "let go once the players left")
+    T.ok(s.props[1].flight ~= nil, "flying on")
+    T.ok(poses[60].pos[1] > poses[59].pos[1], "still moving along x")
+    T.ok(s.props[1].flight.ang ~= nil, "and spinning")
+    T.ok(poses[60].rot ~= poses[59].rot, "its drawn copy turns")
+end)
+
+T.test("flight: its replay flies the same, rewinds too", function()
+    local fight, rec, poses = rocketFight(60)
+    local s = setupRocket()
+    world.players = { { 0, 0, 1 }, { 50, 50, 1 } }
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    local function watch(f)
+        world.objects[0].pos, world.objects[0].lin, world.objects[0].ang = rec[f].pos, rec[f].lin, rec[f].ang
+        Dynamics.draw(s, { replay_mode = 1, match_frame = f })
+    end
+    ---how far the prop is from the fight's pose at f (position and rotation)
+    local function off(f)
+        local a, b = s.props[1], poses[f]
+        local d = math.abs(a.pos[1] - b.pos[1]) + math.abs(a.pos[2] - b.pos[2]) + math.abs(a.pos[3] - b.pos[3])
+        for k = 0, 10 do d = d + math.abs(a.rot["r" .. k] - b.rot["r" .. k]) end
+        return d
+    end
+    local worst = 0
+    for f = 0, 60 do
+        watch(f)
+        worst = math.max(worst, off(f))
+    end
+    T.near(worst, 0, 1e-9, "every frame as in the fight")
+    T.eq(#s.events, #fight.events, "the same takes and releases")
+    -- back to frame 30 and on again
+    worst = 0
+    for f = 30, 60 do
+        watch(f)
+        worst = math.max(worst, off(f))
+    end
+    T.near(worst, 0, 1e-9, "a rewind flies the same again")
+end)
+
+T.test("flight: a prop let go spinning spins on drawn; taken again, its object gets the spin", function()
+    local s = setup(1)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    -- crateA kicked away spinning; crateB next to the player has no object (as the full pool test)
+    world.objects[0].pos = { 10, 0, 1 }
+    world.objects[0].lin = { 5, 0, 0 }
+    world.objects[0].ang = { 0, 0, 4 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.nearList(s.props[1].flight.ang, { 0, 0, 4 }, 1e-9, "let go with its spin")
+    local rot = s.props[1].rot
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
+    T.eq(carried(s), "crateB", "the object went to crateB")
+    T.ok(s.props[1].rot ~= rot, "crateA's drawn copy turns")
+    T.near(s.props[1].rot.r4, math.sin(4 * ATMOPLAY.Flight.DT), 1e-9, "by its spin")
+    -- the player goes over to crateA: crateB rests and is let go, crateA gets the object back
+    world.players[1] = { s.props[1].pos[1], 0, 1 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 3 })
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 4 })
+    T.eq(carried(s), "crateA", "taken again")
+    T.nearList(world.objects[0].ang, { 0, 0, 4 }, 1e-9, "its object spins on")
+    T.ok(world.objects[0].lin[1] > 4.9, "and moves on")
 end)

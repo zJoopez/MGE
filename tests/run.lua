@@ -32,6 +32,7 @@ local FILES = {
     "test_atmoplay_builder.lua",
     "test_atmoplay_runtime.lua",
     "test_atmoplay_dynamics.lua",
+    "test_atmoplay_flight.lua",
 }
 
 -- game libraries plain 5.1 lacks (same shims as the workspace CLAUDE.md harness header)
@@ -88,7 +89,7 @@ Files = {
 -- namespace like atmoplay.lua loads them (ATMOPLAY_LOADING while one loads). The test_atmoplay_* files use
 -- them through ATMOPLAY; MGE's utils/playable.lua through MGE.AtmoPlay (main.lua loads its own, the same)
 ATMOPLAY = { scriptPath = testDir .. "../atmoplay/" }
-for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "dynamics.lua" }) do
+for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "flight.lua", "dynamics.lua" }) do
     ATMOPLAY_LOADING = ATMOPLAY
     dofile(ATMOPLAY.scriptPath .. module)
 end

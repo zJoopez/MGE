@@ -3,7 +3,8 @@ local Rows = MGE.EditorRows
 local ModData = MGE.ModData
 local History = MGE.History
 local FileHandler = MGE.FileHandler
-local getSelected = ModData.getSelected
+local getSelected = ModData.getEditSelection -- objects, or atmo objects on the Atmo list
+local atmoShown = Rows.atmoShown
 local inwuts = Rows.inputs
 local sharedChoice = Rows.sharedChoice
 local createInputRow = Rows.createInputRow
@@ -11,7 +12,8 @@ local createChoiceRow = Rows.createChoiceRow
 
 -- Thrust: "thrust <frames> <x> <y> <z> <space>" pushes the object along x y z every <frames> frames.
 -- <space> picks the axes the direction uses. No line means no thrust. The game has no live thrust
--- setter, changes are applied by saving
+-- setter, changes are applied by saving. On the Atmo list it edits the atmo objects' lines: a prop (no static
+-- bit) with thrust flies in Atmo Play (atmoplay/flight.lua); the game's own atmo skips the line
 ---@class Thrust
 ---@field frames integer
 ---@field dir number[] x y z
@@ -51,13 +53,19 @@ end
 -- re-reads the objects as new tables, the ids stay. An id can be another object's later (a delete, Reindex,
 -- another mod): the memory keeps the object's pos and sides and only counts for an object that still has
 -- them. Used up once it's back. Kept while MGE runs, not saved
----@type table<integer, { thrust: string, pos: string?, sides: string? }>
+---@type table<string, { thrust: string, pos: string?, sides: string? }> by "o<id>" / "a<id>" (atmo ids are their own)
 local thrustBeforeOff = {}
+
+---@param obj FileParserEnvObj
+---@return string
+local function offKey(obj)
+    return (obj.kind == "atmo" and "a" or "o") .. tostring(obj.id)
+end
 
 ---@param obj FileParserEnvObj
 ---@return string? the thrust line obj had before Off, nil for another object on its id
 local function rememberedThrust(obj)
-    local kept = thrustBeforeOff[obj.id]
+    local kept = thrustBeforeOff[offKey(obj)]
     if kept and kept.pos == obj.props.pos and kept.sides == obj.props.sides then return kept.thrust end
     return nil
 end
@@ -83,9 +91,9 @@ local function editThrust(edit)
         -- compared as values, the file may write the same thrust differently ("1.00" / "1")
         if value ~= (had and formatThrust(had) or nil) then
             if not value and had then
-                thrustBeforeOff[v.id] = { thrust = formatThrust(had), pos = v.props.pos, sides = v.props.sides }
+                thrustBeforeOff[offKey(v)] = { thrust = formatThrust(had), pos = v.props.pos, sides = v.props.sides }
             elseif value then
-                thrustBeforeOff[v.id] = nil -- back on: used up
+                thrustBeforeOff[offKey(v)] = nil -- back on: used up
             end
             v.props.thrust = value
             changed = true
@@ -93,7 +101,8 @@ local function editThrust(edit)
     end
     if not changed then return end
     History.commit()
-    MGE.apply()
+    -- atmo objects aren't in the .tbm: their lines only (Atmo Play reads them in the next fight)
+    if atmoShown() then Rows.afterAtmoEdit() else MGE.apply() end
 end
 
 ---Applies a typed thrust field: 1 frames, 2-4 direction x y z
@@ -145,7 +154,8 @@ local function buildThrust(holder, selected)
             thrust.space = space
             return thrust
         end)
-    end, "Off: no thrust. World: world axes.\nObject: turns with the object.")
+    end, "Off: no thrust. World: world axes.\nObject: turns with the object." ..
+        (atmoShown() and "\nAtmo: only props (not Static) fly, in Atmo Play." or ""))
 end
 
 

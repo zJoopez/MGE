@@ -474,7 +474,8 @@ function Playable.onMatchBegin()
     driver.follow = Driver.dynamicIds(skip)
     if loaded.dynamicObjects and #loaded.dynamicObjects > 0 and #props > 0 then
         -- follow: the mod's own dynamic objects push props too
-        local params = { dradius = ModData.parsed.playable.dradius, noCopies = true, follow = driver.follow }
+        local params = { dradius = ModData.parsed.playable.dradius, noCopies = true, follow = driver.follow,
+            statics = colliders }
         dynamics = Dynamics.new(loaded.dynamicObjects, props, params)
         local d = dynamics
         driver.moreCenters = function() return Dynamics.centers(d) end

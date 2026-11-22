@@ -29,6 +29,7 @@ local Mat3 = NS.Mat3
 ---@field visible boolean false for "visible 0": solid, not drawn
 ---@field color number[]? props only: r g b a as written (dynamics.lua paints the carrying object with it)
 ---@field mass number? props only: the mass line
+---@field thrust string? props only: the thrust line (dynamics.lua flies it, flight.lua)
 ---@field matrixTB table? the rotation for set_obj_rot_m, made by the runtime when first needed
 
 ---@class AtmoPlayColliders
@@ -237,6 +238,7 @@ function Colliders.build(lines)
                 bounce = tonumber(p.bounce),
                 visible = not (p.visible and p.visible:match("^0") ~= nil),
                 mass = dynamic and tonumber(p.mass) or nil,
+                thrust = dynamic and p.thrust or nil,
                 color = dynamic and p.color and numbers(p.color) or nil,
             }
         end
