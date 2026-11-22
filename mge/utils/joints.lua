@@ -212,7 +212,7 @@ local function unstaticLinked(obj1, obj2)
         local flag = tonumber(obj.props.flag) or get_obj_flag(obj.id - 1) or 0
         obj.props.flag = tostring(flag - bit.band(flag, STATIC))
     end
-    MGE.say("objects " .. obj1 .. " and " .. obj2 .. " were both static, made dynamic: the game doesn't join two static objects")
+    MGE.say("objects " .. obj1 .. " and " .. obj2 .. " made dynamic: a joint needs a dynamic object")
 end
 
 ---The game ignores joints to objects above the dynamic ids (mod_export.lua's id rules). A new link to
@@ -228,10 +228,10 @@ local function fitLinkedIds(jointId, obj1, obj2)
     ModData.refreshJointIds() -- the new link counts before the reload
     local moved, left = ModData.reindex()
     if left > 0 then
-        MGE.say("joint " .. jointId .. ": the game only joins objects 1-" .. max .. ", " .. left ..
-            " dynamic or joined objects still above (no lower ids left), make some static")
+        MGE.say("joint " .. jointId .. ": " .. left .. " objects still above id " .. max ..
+            " (joints need 1-" .. max .. "): make some static")
     elseif moved > 0 then
-        MGE.say("joint " .. jointId .. ": reindexed, " .. moved .. " objects moved so the joined ones are on ids 1-" .. max)
+        MGE.say("joint " .. jointId .. ": " .. moved .. " objects reindexed onto ids 1-" .. max)
     end
 end
 

@@ -157,14 +157,14 @@ function AtmoLayer.moveIn(mark)
         end
     end
     if joined > 0 then
-        MGE.say("" .. joined .. " objects joined by joints stay in the game, remove their joints to move them")
+        MGE.say("" .. joined .. " joint-linked objects stay (unlink them first)")
     end
     if #moved == 0 then return end
     for _, obj in ipairs(moved) do
         table.insert(ModData.parsed.atmo, obj)
         obj.id = #ModData.parsed.atmo -- atmo ids are their place in the list
     end
-    MGE.say("moved " .. #moved .. " objects to the atmo (" .. #ModData.parsed.atmo .. " atmo objects in all)")
+    MGE.say("moved " .. #moved .. " objects to the atmo (" .. #ModData.parsed.atmo .. " in all)")
     History.commit()
     MGE.apply()
 end
@@ -243,11 +243,11 @@ function AtmoLayer.moveOut()
     end
     local count = AtmoLayer.returnObjects(list)
     if count == 0 then
-        MGE.say("no free object ids (" .. MGE.MAX_ENV_OBJECTS .. " in the game): move or delete objects first")
+        MGE.say("no free object ids: delete objects first")
         return
     end
     MGE.say("moved " .. count .. " atmo objects back to objects" ..
-        (count < #list and (", " .. (#list - count) .. " stay in the atmo: no more free ids") or ""))
+        (count < #list and (", " .. (#list - count) .. " stay: no free ids") or ""))
     History.commit()
     MGE.apply()
 end
@@ -295,7 +295,7 @@ function AtmoLayer.unloadGameAtmo()
     local manager = rawget(_G, "Atmospheres")
     if type(manager) ~= "table" or type(manager.Unload) ~= "function" then return false end
     local ok = pcall(manager.Unload)
-    if ok then MGE.say("unloaded the game's atmo: MGE draws the atmo it edits itself") end
+    if ok then MGE.say("game atmo unloaded (MGE draws its own)") end
     return ok
 end
 
@@ -537,8 +537,7 @@ function AtmoLayer.exportAtmo()
         function(name)
             local file = Atmo.fileName(name)
             if Atmo.export(name) then
-                MGE.say("exported data/atmospheres/" .. file .. " (" .. #ModData.parsed.atmo .. " atmo objects; load" ..
-                    " it in Shaders & Atmos > Atmos)")
+                MGE.say("exported data/atmospheres/" .. file .. " (" .. #ModData.parsed.atmo .. " objects)")
             else
                 MGE.say("couldn't write data/atmospheres/" .. tostring(file))
             end

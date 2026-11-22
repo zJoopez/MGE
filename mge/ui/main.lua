@@ -141,13 +141,11 @@ local TOOLS = {
 local bar = {}
 -- In place (Transforms.inPlace): Rotate and Scale leave the positions, each object turns and sizes around itself.
 -- Lit while on, saved in config.cfg
-local IN_PLACE_LABEL = "In place: Rotate and Scale turn and size each object\naround itself, positions stay. " ..
-    "Off: the selection\nas one group around its center"
+local IN_PLACE_LABEL = "In place: Rotate / Scale each object\naround itself, positions stay"
 table.insert(bar, { label = IN_PLACE_LABEL, icon = MGE.scriptPath .. "textures/inplace.tga", onClick = function()
     MGE.Transforms.inPlace = not MGE.Transforms.inPlace
     Main.updateInPlaceButton()
-    MGE.say(MGE.Transforms.inPlace and "Rotate / Scale: in place, each object around itself"
-        or "Rotate / Scale: the selection as one group")
+    MGE.say(MGE.Transforms.inPlace and "In place: on" or "In place: off")
     if MGE.Config then MGE.Config.save() end
 end })
 for _, tool in ipairs(TOOLS) do
@@ -158,8 +156,7 @@ end
 table.insert(bar, { label = "Undo (Shift + Z)", icon = "../textures/menu/general/buttons/undo.tga", onClick = function() History.undo() end })
 table.insert(bar, { label = "Redo (Shift + Y)", icon = MGE.scriptPath .. "textures/redo.tga", onClick = function() History.redo() end })
 -- Save (the game's save icon), the footer's right end names the file it writes; World > Core's Name changes it
-table.insert(bar, { label = "Save (Ctrl + S): the mod into mod/" .. MGE.saveFolder .. ",\na mod from elsewhere is copied there.\n" ..
-    "Its name: World > Core > Name", icon = "../textures/menu/general/buttons/savewhite.tga", onClick = function() MGE.save() end })
+table.insert(bar, { label = "Save (Ctrl + S) into " .. MGE.saveFolder .. ".\nName: World > Name", icon = "../textures/menu/general/buttons/savewhite.tga", onClick = function() MGE.save() end })
 -- camera follow, gizmo snapping, shortcuts (ui/settings_overlay.lua), game's settings icon
 table.insert(bar, { label = "Settings", icon = "../textures/menu/general/buttons/settingswhite.tga",
     onClick = function() dofile(MGE.scriptPath .. "ui/settings_overlay.lua") end })

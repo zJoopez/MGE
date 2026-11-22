@@ -223,7 +223,7 @@ function ModData.allocateIds(plans)
     local free = ModData.freeIds
     local total = #free.nonStatic + #free.static
     if #plans > total then
-        MGE.say("Not enough object ids: " .. #plans .. " needed, " .. total .. " free")
+        MGE.say("not enough object ids: " .. #plans .. " needed, " .. total .. " free")
         return nil
     end
     local linkedCount = 0
@@ -231,7 +231,7 @@ function ModData.allocateIds(plans)
         if plan.linked then linkedCount = linkedCount + 1 end
     end
     if not freeLowIds(linkedCount) then
-        MGE.say("Not enough ids 1-" .. MAX_NONSTATIC_OBJECTS .. " for objects linked by joints: " .. linkedCount ..
+        MGE.say("not enough ids 1-" .. MAX_NONSTATIC_OBJECTS .. " for joint-linked objects: " .. linkedCount ..
             " needed, " .. #free.nonStatic .. " free")
         return nil
     end

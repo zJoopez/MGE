@@ -112,9 +112,7 @@ end
 local function buildFileRows(holder)
     Rows.begin()
     local row, contentX, contentW = createRow("Name", holder,
-        "The mod's name: Save writes mod/" .. MGE.saveFolder .. "<name>.tbm\n(asks before replacing another file), " ..
-        "the\nexports are named after it. Click to change it.\nWithout a mod: " .. MGE.DEFAULT_NAME ..
-        ". Never starts with " .. MGE.EXPORT_PREFIX .. "\n(the exports' prefix).")
+        "Save writes " .. MGE.saveFolder .. "<name>.tbm.\nClick to rename.")
     local inset = Widgets.INSET
     Widgets.button(row, { x = contentX + inset, y = inset, w = contentW - inset * 2, h = row.size.h - inset * 2 },
         MGE.saveTargetName(), function() MGE.renameProject() end, nil, Widgets.PANEL_STYLE)
@@ -210,10 +208,8 @@ local function buildPlayableRow(holder)
     Rows.createToggleButtonRow("Atmo", holder, {
         { label = "Playable", active = on, onClick = function() Playable.setPlayable(true) end },
         { label = "Default", active = not on, onClick = function() Playable.setPlayable(false) end },
-    }, "Playable: the atmo is solid in fights (Atmo Play\nfor players, MGE itself while editing), with the\n" ..
-        "atmo objects' Advanced lines. Static objects move\nto the atmo; Save writes the atmo and the objects\n" ..
-        "that follow the players into the mod.\nDefault: only drawn (by Atmo Play), saved inside\nthe mod as well. " ..
-        "The objects Playable moved\nare objects again (as many as free ids allow).")
+    }, "Playable: the atmo is solid in fights (needs\nAtmo Play). Static objects move to the atmo.\n" ..
+        "Default: the atmo is only drawn; moved objects\ncome back while there are free ids.")
 end
 
 ---Export row: "clean" copies for players without Atmo Play. Save keeps the atmo inside the mod (Atmo Play draws it,
@@ -225,10 +221,8 @@ local function buildExportRow(holder)
     createToggleButtonRow("Export", holder, {
         { label = "Atmo", active = false, onClick = function() MGE.AtmoLayer.exportAtmo() end },
         { label = "Mod", active = false, onClick = function() MGE.exportCleanMod() end },
-    }, "Save keeps the atmo inside the mod: Atmo Play\ndraws it. For players without Atmo Play:\n" ..
-        "Atmo: data/atmospheres/MGE - exp_<name>.atmo,\nloaded in Shaders & Atmos > Atmos.\n" ..
-        "Mod: modmaker/exp_<name>.tbm, the mod without\nits atmo. Both ask the name (the mod's name stays)\n" ..
-        "and replace an earlier export of that name\n(a mod's name never starts with exp_).")
+    }, "Copies for players without Atmo Play, named\nexp_<name>. Atmo: an .atmo for the game's\n" ..
+        "Atmos menu. Mod: the mod without its atmo.")
 end
 
 ---@type EditorPanelModule

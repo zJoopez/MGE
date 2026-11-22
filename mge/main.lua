@@ -396,7 +396,7 @@ function MGE.renameProject()
         if name ~= MGE.saveTargetName() then
             MGE.saveName = name
             MGE.say("Save writes " .. MGE.saveTarget() ..
-                (Files.Exists(MGE.modFolder .. MGE.saveTarget()) and " (it exists: Save asks before replacing it)" or ""))
+                (Files.Exists(MGE.modFolder .. MGE.saveTarget()) and " (exists: Save asks first)" or ""))
         end
         if MGE.EditorRows then MGE.EditorRows.refreshBlocks({ "miscFile" }) end -- the Name row shows it
     end)
@@ -455,11 +455,11 @@ local function writeMod(path)
     MGE.saveName = nil -- the source is that file now
     MGE.savedPlayable = plan ~= nil
     if plan then
-        MGE.say(string.format("saved %s: playable, %d atmo objects (%d solid), %d pool objects", path, plan.atmo,
+        MGE.say(string.format("saved %s (playable: %d atmo, %d solid, %d pool objects)", path, plan.atmo,
             plan.solid, #plan.objects))
     else
         local count = #(ModData.parsed.atmo or {})
-        MGE.say("saved " .. path .. (count > 0 and (" with its atmo (" .. count .. " objects, drawn)") or ""))
+        MGE.say("saved " .. path .. (count > 0 and (" (+" .. count .. " atmo objects)") or ""))
     end
     Atmo.markSaved() -- the atmo is in the mod file
     -- the saved mod is what gets shared, say so if dynamic objects won't fully work in it
@@ -490,7 +490,7 @@ function MGE.exportCleanMod()
             MGE.syncGamerules()
             if FileHandler.WriteMod(ModData.parsedFor(path), MGE.modFolder .. path) then
                 MGE.say("exported " .. path .. ": the mod without its atmo" ..
-                    (MGE.Playable.isOn() and " (playable: its static objects are in the atmo, not in this copy)" or ""))
+                    (MGE.Playable.isOn() and " (static objects are in the atmo, not here)" or ""))
             else
                 MGE.say("couldn't write " .. path)
             end

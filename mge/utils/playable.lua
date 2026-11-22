@@ -349,7 +349,7 @@ local function turnOn()
     for _, obj in ipairs(ModData.parsed.atmo or {}) do obj.selected = nil end
     local colliders, props = Playable.colliders(ModData.parsed.atmo)
     if count == 0 and #colliders == 0 and #props == 0 then
-        MGE.say("nothing to make solid: no static objects and no solid atmo objects (boxes, spheres, capsules)")
+        MGE.say("nothing to make solid (no static objects or solid atmo shapes)")
         return false
     end
     -- set before the step To atmo commits, so undo takes it back with the moved objects
@@ -361,11 +361,10 @@ local function turnOn()
         MGE.apply()
     end
     local plan = Playable.poolPlan(ModData.parsed)
-    MGE.say(string.format("playable: %d solid atmo objects, %d pool objects%s. Fights here are solid; Save writes it",
-        plan.solid, #plan.objects, count > 0 and (", " .. count .. " objects moved to the atmo") or ""))
+    MGE.say(string.format("playable: %d solid, %d pool objects%s",
+        plan.solid, #plan.objects, count > 0 and (", " .. count .. " moved to the atmo") or ""))
     if plan.props > 0 then
-        MGE.say(string.format("%d props (dynamic atmo objects), %d dynamic pool objects: pushable in Atmo Play, " ..
-            "not in MGE's own fights (proof of concept)", plan.props, #plan.dynamic))
+        MGE.say(string.format("%d props (pushable), %d dynamic pool objects", plan.props, #plan.dynamic))
     end
     return true
 end
@@ -385,11 +384,11 @@ local function turnOff()
     History.commit()
     MGE.apply() -- the working copy without its pool
     local note = ""
-    if back > 0 then note = ", " .. back .. " objects moved back from the atmo" end
-    MGE.say("atmo: Default, drawn only" .. note .. " (Save keeps it inside the mod; World > Export for clean copies)")
+    if back > 0 then note = ", " .. back .. " objects back" end
+    MGE.say("atmo: Default (drawn only)" .. note)
     if back < #marked then
-        MGE.say(string.format("%d objects Playable moved stay in the atmo: no free object ids (%d in the game). " ..
-            "Delete objects, then select them on the Atmo list and To objects", #marked - back, MGE.MAX_ENV_OBJECTS))
+        MGE.say(string.format("%d moved objects stay in the atmo: no free ids (To objects once there are)",
+            #marked - back))
     end
 end
 
@@ -425,7 +424,7 @@ local function setReplayCache(withProps)
         if ok and tonumber(value) and tonumber(value) ~= 0 then
             cacheBefore = tonumber(value)
             set_option("replaycache", 0)
-            MGE.say("replay cache off while the mod has props (cached replays misplace them); set back after")
+            MGE.say("replay cache off while props are loaded")
         end
     elseif not withProps and cacheBefore ~= nil then
         pcall(set_option, "replaycache", cacheBefore)

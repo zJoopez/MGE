@@ -52,8 +52,6 @@ local function say(text)
 end
 Runtime.say = say
 
-local clock = os and os.clock or function() return 0 end
-
 ---@param path string Files path ("../" = the Toribash folder)
 ---@return string[]?
 local function readLines(path)
@@ -186,7 +184,6 @@ end
 ---@param path string
 ---@return AtmoPlayLoaded?
 local function loadPlayable(path)
-    local start = clock()
     local lines = readLines(Runtime.MOD_FOLDER .. path)
     if not lines then return nil end
     local file = Format.read(lines)
@@ -195,13 +192,13 @@ local function loadPlayable(path)
     -- MGE open: it draws the atmo itself and moves a playable mod's pool (the same driver.lua); two drivers
     -- would move the same objects
     if Runtime.mgeRunning() then
-        say(name .. ": MGE is open, it plays playable mods itself (World > Atmo: Playable)")
+        say(name .. ": MGE is open, it plays this mod")
         return nil
     end
     -- a drawn mod (MGE's Default): its atmo is only drawn, there are no pools (driver nil: the hooks skip it)
     if Format.isDrawOnly(file.header) then
         local drawn = drawModAtmo(file.atmo)
-        say(string.format("%s: its atmo drawn (%d lines, not solid: a drawn mod)", name, #file.atmo))
+        say(name .. ": atmo drawn (a drawn mod, not solid)")
         return { path = path, name = name, file = file, drawn = drawn, drawOnly = true }
     end
     local colliders, stats, props = Colliders.build(file.atmo)
@@ -231,26 +228,19 @@ local function loadPlayable(path)
         dynamics = Dynamics.new(file.dynamic, props, { dradius = file.header.dradius, follow = driver.follow })
         driver.moreCenters = function() return Dynamics.centers(dynamics) end
     elseif #props > 0 then
-        say(name .. ": " .. #props .. " props (dynamic atmo objects) but no dynamic pool: they aren't solid")
+        say(name .. ": " .. #props .. " props without a dynamic pool (not solid)")
     end
-    local parsed = clock()
-
     local drawn = drawModAtmo(file.atmo)
 
     local skipped = 0
     for _, n in pairs(stats.skipped) do skipped = skipped + n end
-    say(string.format("%s: %d atmo objects, %d solid%s, %d pool objects (rule %d, radius %s); read %.0f ms, drawn %.0f ms",
-        name, stats.total, stats.collidable, skipped > 0 and (", " .. skipped .. " drawn only") or "", #file.pool,
-        pool.rule, tostring(pool.radius), (parsed - start) * 1000, (clock() - parsed) * 1000))
-    if #driver.follow > 0 then
-        say(#driver.follow .. " dynamic objects of the mod: the pool keeps a floor under them too")
-    end
+    say(string.format("%s: %d atmo objects, %d solid%s, %d pool objects", name, stats.total, stats.collidable,
+        skipped > 0 and (", " .. skipped .. " drawn only") or "", #file.pool))
     if dynamics then
-        say(string.format("%d props (pushable), %d dynamic pool objects, reach %s (proof of concept)", #props,
-            #file.dynamic, tostring(dynamics.radius)))
+        say(string.format("%d props (pushable), %d dynamic pool objects", #props, #file.dynamic))
     end
     if missing > 0 then
-        say(missing .. " pool objects aren't in the world: reload the mod (/lm) after changing it")
+        say(missing .. " pool objects missing: load the mod again (/lm)")
     end
     return { path = path, name = name, file = file, colliders = colliders, stats = stats, pool = pool,
         driver = driver, missing = missing, drawn = drawn, dynamics = dynamics }
@@ -264,7 +254,7 @@ local function replayCacheOff()
     if not ok or tonumber(value) == 0 then return end
     state.cacheBefore = tonumber(value)
     set_option("replaycache", 0)
-    say("replay cache off while this mod is loaded (cached replays misplace the props); it's set back after")
+    say("replay cache off while this mod is loaded")
 end
 
 local function restoreReplayCache()
@@ -325,7 +315,7 @@ local function onMatchBegin()
         if state.loaded.driver then Driver.matchBegin(state.loaded.driver, ws) end
         -- a replay that opened cached (its mod loaded inside open_replay, after the cache was made)
         if ws.replay_mode > 0 and state.loaded.dynamics and get_replay_cache and (get_replay_cache() or 0) > 0 then
-            say("this replay opened cached: props may not move in it. Open it again (the cache is off now)")
+            say("replay opened cached: props may be off, open it again")
         end
     end
     debugCall("flush")
@@ -354,7 +344,7 @@ end
 function Runtime.status()
     local loaded = state.loaded
     if not loaded then
-        say("running; the loaded mod (" .. tostring(state.modName) .. ") isn't a playable mod")
+        say("running; " .. tostring(state.modName) .. " isn't a playable mod")
         return
     end
     if loaded.drawOnly then

@@ -240,7 +240,7 @@ local function importObjects(parser, keepTab, inView, jointIds, atmoExcess)
         if type(atmoExcess) == "number" then free = math.max(0, math.min(free, atmoExcess)) end
         local over = #parser.env_obj - free
         if over > MGE.AtmoLayer.room() then
-            MGE.say("Not enough room: " .. over .. " objects for the atmo, " .. MGE.AtmoLayer.room() .. " more fit there")
+            MGE.say("no atmo room: " .. over .. " needed, " .. MGE.AtmoLayer.room() .. " free (Settings > Max atmo objects)")
             return false
         end
         for _ = 1, over do table.insert(excess, 1, table.remove(parser.env_obj)) end
@@ -252,7 +252,7 @@ local function importObjects(parser, keepTab, inView, jointIds, atmoExcess)
     local ids = ModData.allocateIds(plans) -- all or nothing
     if not ids then return false end
     local filled = fillJointAnchors(parser) -- before placeInView: the anchors move with the objects
-    if filled > 0 then MGE.say("" .. filled .. " joints had no anchor (pos), placed between their objects") end
+    if filled > 0 then MGE.say("" .. filled .. " joints without pos: anchored between their objects") end
     if inView then placeInView(parser) end
 
     -- selection moves to the imported objects so they can be moved right away
@@ -322,7 +322,7 @@ local function savePlayerToAsset(playerId)
     playerId = playerId or Main.selectedPlayer
     local parts = assetsView.playerParts(playerId)
     if not parts then
-        MGE.say("Player " .. playerId .. " uses the default body, the mod has no body or joint changes for it")
+        MGE.say("player " .. playerId .. " has the default body: nothing to export")
         return
     end
 
@@ -542,7 +542,7 @@ function assetsView.exportAtmo()
             for line in (text .. "\n"):gmatch("(.-)\n") do file:writeLine(line) end
             file:close()
             lastAtmo = fileName
-            MGE.say("saved assets/atmo/" .. fileName .. " (" .. #selected .. " atmo objects)")
+            MGE.say("saved assets/atmo/" .. fileName .. " (" .. #selected .. " objects)")
             return true
         end,
     }

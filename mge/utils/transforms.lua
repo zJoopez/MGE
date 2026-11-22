@@ -711,7 +711,7 @@ function Transforms.sizeTo(typed)
         if targets[i] and math.abs(reached[i] - targets[i]) > math.max(targets[i] * 0.01, 1e-4) then
             MGE.say(string.format("can't scale the group to %g on %s: it gets to %.3g%s", targets[i],
                 ({ "x", "y", "z" })[i], reached[i], Transforms.inPlace and
-                " (In place keeps the positions: the space between the objects stays; turn it off to scale that too)"
+                " (In place keeps the spacing)"
                 or ""))
             return
         end
