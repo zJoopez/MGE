@@ -531,3 +531,24 @@ T.test("merged history steps: a wheel scroll is one undo step", function()
     History.reset()
     T.eq(History.lastMerge, nil, "reset ends the run")
 end)
+
+T.test("undo keeps the objects see-through on the Atmo list", function()
+    local a = object(2, { color = "1 0 0 1" })
+    setup({ a })
+    -- the world: one object, its live color
+    local live = { [1] = { 1, 0, 0, 1 } }
+    local saved = { get_obj_pos, get_obj_color, set_obj_color }
+    get_obj_pos = function(id) return live[id] and 0 or nil, 0, 0 end
+    get_obj_color = function(id) local c = live[id] return c[1], c[2], c[3], c[4] end
+    set_obj_color = function(id, r, g, b, al) live[id] = { r, g, b, al } end
+    AtmoLayer.setObjectsSeeThrough(true)
+    T.eq(live[1][4], AtmoLayer.seeThroughAlpha, "see-through on the Atmo list")
+    a.props.color = "0 1 0 1"
+    MGE.History.commit()
+    MGE.History.undo() -- the same objects: the restored colors are set live (applyLive)
+    T.eq(live[1][2], 0, "the undone color")
+    T.eq(live[1][4], AtmoLayer.seeThroughAlpha, "still see-through after the undo")
+    AtmoLayer.setObjectsSeeThrough(false)
+    T.eq(table.concat(live[1], " "), "1 0 0 1", "leaving the list gives the restored color back")
+    get_obj_pos, get_obj_color, set_obj_color = saved[1], saved[2], saved[3]
+end)

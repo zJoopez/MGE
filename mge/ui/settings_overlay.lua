@@ -7,6 +7,7 @@
 --   Atmo objects:   the atmo's size (AtmoLayer.maxAtmo), every one is drawn: the game's graphics
 --                   settings set how many shapes it draws a frame. Typed like the steps
 --   Prop flight:    how drawn props fly in a playable mod (Playable.flightLevel): Simple, Shapes, Full
+--   Prop ghosts:    the flying props' move predictions while a turn waits (Playable.ghosts): On, Off
 --   Shortcuts:      heading with a "?", hovering it lists the keyboard and mouse shortcuts
 -- Every row explains itself on the "?" at its end, like the editor rows
 --   UI size:        MGE's overall size (Widgets.UI_SCALE), restarts MGE to apply it
@@ -103,10 +104,12 @@ local SECTION_H = px(26) -- section heading
 local SNAP_H = SECTION_H + #SNAP_STEPS * SETTING_H
 local ATMO_H = SECTION_H + #ATMO_FIELDS * SETTING_H
 local FLIGHT_H = SETTING_H -- Prop flight
+local GHOSTS_H = SETTING_H -- Prop ghosts
 local SHORTCUTS_H = SECTION_H + px(4)
 local CLOSE_H = Widgets.ROW_H
 local LABEL_W = px(150)
-local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + ATMO_H + FLIGHT_H + SHORTCUTS_H + CLOSE_H + PAD * 2 -- + UI size
+local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + ATMO_H + FLIGHT_H + GHOSTS_H + SHORTCUTS_H + CLOSE_H +
+    PAD * 2 -- + UI size
 
 local overlay = TBMenu:spawnWindowOverlay(true) -- true: a click on the dark background closes it
 MGE.settingsOverlay = overlay
@@ -326,6 +329,30 @@ do
     buttons = Widgets.buttonRow(content, 0, ROW_H, items, Widgets.GAP)
     show()
     y = y + FLIGHT_H
+end
+
+-- Prop ghosts (utils/playable.lua, Atmo Play's Dynamics.drawGhosts): the flying props' move predictions while a turn
+-- waits. They run the props' flights ahead, as much work as playing them: off for many thrust props on a slow computer
+do
+    local content = addRow(y, "Prop ghosts", "Ghosts of the flying props while a turn waits,\n" ..
+        "where the turn takes them (like the game's ghosts).\n" ..
+        "They fly the props ahead: as much work as\nplaying them. Off saves it with many thrust props.\n" ..
+        "Atmo Play: /atmoplay ghosts")
+    local buttons
+    local function show()
+        for i, on in ipairs({ true, false }) do
+            local btn = buttons[i]
+            if btn and not btn.destroyed then
+                btn.bgColor = MGE.Playable.ghosts == on and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
+            end
+        end
+    end
+    buttons = Widgets.buttonRow(content, 0, ROW_H, {
+        { label = "On", onClick = function() MGE.Playable.setGhosts(true) show() end },
+        { label = "Off", onClick = function() MGE.Playable.setGhosts(false) show() end },
+    }, Widgets.GAP)
+    show()
+    y = y + GHOSTS_H
 end
 
 -- Shortcuts heading with the "?" right after the text, hovering it lists them

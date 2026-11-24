@@ -515,6 +515,18 @@ function AtmoLayer.setObjectsSeeThrough(on)
     end
 end
 
+---Sets an object's color live (an undo's restore, History's applyLive) as the Atmo list wants it: while the objects
+---are see-through, the color is kept as the one to put back and the object stays see-through (a plain
+---set_obj_color showed it solid until the list was left and opened again)
+---@param id integer 0-based
+function AtmoLayer.setObjectColor(id, r, g, b, a)
+    if seeThrough then
+        seeThrough[id] = { r, g, b, a }
+        a = math.min(a, AtmoLayer.seeThroughAlpha)
+    end
+    set_obj_color(id, r, g, b, a)
+end
+
 ---After a reload (the game set the file's colors again): see-through again when it was
 function AtmoLayer.reapplySeeThrough()
     if not seeThrough then return end

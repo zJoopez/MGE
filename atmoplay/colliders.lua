@@ -30,6 +30,11 @@ local Mat3 = NS.Mat3
 ---@field color number[]? props only: r g b a as written (dynamics.lua paints the carrying object with it)
 ---@field mass number? props only: the mass line
 ---@field thrust string? props only: the thrust line (dynamics.lua flies it, flight.lua)
+---@field noHits boolean? props only: "prop_hits 0", it flies through the other props (still hits the static atmo)
+---@field noPlayer boolean? props only: doesn't become real near players (Colliders.collision)
+---@field noDynamic boolean? props only: doesn't become real near real dynamic objects (the mod's own, carried props)
+---@field noReal boolean? props only: neither: never carried by a pool object, players and real objects pass through
+---it (it flies drawn only, needs no dynamic pool object)
 ---@field matrixTB table? the rotation for set_obj_rot_m, made by the runtime when first needed
 
 ---@class AtmoPlayColliders
@@ -52,6 +57,24 @@ local SKIP_KEYS = {
     move = "animated", rotate = "animated", drawfunc = "animated", framefunc = "animated",
     parent = "parented",
 }
+
+---A prop's collision toggles from its lines: `prop_collide <player> <dynamic> <atmo>` (1 on, 0 off; no line: all on).
+---Player / dynamic: whether it becomes real near players / near real dynamic objects (a real object collides with
+---everything real: the game can't filter that). Atmo: whether its drawn flight hits other props. The older lines
+---still count: prop_real 0 (neither player nor dynamic), prop_hits 0 (no atmo)
+---@param p table<string, string> the entity's lines
+---@return boolean player, boolean dynamic, boolean atmo
+function Colliders.collision(p)
+    local function on(n) return n == nil or n ~= 0 end
+    if p.prop_collide then
+        local n = {}
+        for v in tostring(p.prop_collide):gmatch("%S+") do n[#n + 1] = tonumber(v) end
+        return on(n[1]), on(n[2]), on(n[3])
+    end
+    local real = not (p.prop_real ~= nil and p.prop_real:match("^%s*0") ~= nil)
+    local hits = not (p.prop_hits ~= nil and p.prop_hits:match("^%s*0") ~= nil)
+    return real, real, hits
+end
 
 ---A line's numbers ("1 2 3" -> { 1, 2, 3 }), {} for nil
 ---@param text string?
@@ -224,6 +247,7 @@ function Colliders.build(lines)
                 frames[rotKey] = frame
             end
             local list = dynamic and props or colliders
+            local player, real, atmo = Colliders.collision(p)
             list[#list + 1] = {
                 index = index,
                 name = entity.name,
@@ -239,6 +263,10 @@ function Colliders.build(lines)
                 visible = not (p.visible and p.visible:match("^0") ~= nil),
                 mass = dynamic and tonumber(p.mass) or nil,
                 thrust = dynamic and p.thrust or nil,
+                noHits = dynamic and not atmo or nil,
+                noPlayer = dynamic and not player or nil,
+                noDynamic = dynamic and not real or nil,
+                noReal = dynamic and not player and not real or nil,
                 color = dynamic and p.color and numbers(p.color) or nil,
             }
         end

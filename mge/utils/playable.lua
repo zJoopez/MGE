@@ -100,7 +100,13 @@ function Playable.poolSplitKey(atmo)
     for _, obj in ipairs(atmo or {}) do
         local reason, _, group, prop = Colliders.classify(obj.props)
         if not reason then
-            local key = (prop and "p " or "s ") .. group
+            -- a prop that never becomes real (Collision: Player and Dynamic off) needs no pool object: counted apart
+            local never = false
+            if prop then
+                local player, real = Colliders.collision(obj.props)
+                never = not player and not real
+            end
+            local key = (never and "n " or prop and "p " or "s ") .. group
             counts[key] = (counts[key] or 0) + 1
         end
     end
@@ -159,7 +165,13 @@ function Playable.poolPlan(parsed, colliders, props)
     local dynamic, park = {}, nil
     if #props > 0 and #freeDynamic > 0 and #free > 0 then
         park = table.remove(free, 1)
-        dynamic = Pool.plan(props, freeDynamic, tonumber(params.dradius) or Dynamics.DEFAULT_RADIUS).objects
+        -- only the props that can become real get pool objects (Player and Dynamic off: drawn only)
+        local real = {}
+        for _, p in ipairs(props) do
+            if not p.noReal then real[#real + 1] = p end
+        end
+        dynamic = #real > 0 and Pool.plan(real, freeDynamic, tonumber(params.dradius) or Dynamics.DEFAULT_RADIUS).objects
+            or {}
     end
     local plan = Pool.plan(colliders, free, tonumber(params.radius) or Playable.DEFAULT_RADIUS)
     return { objects = plan.objects, groups = plan.groups, freeIds = #free, solid = #colliders,
@@ -414,6 +426,15 @@ end
 -- how drawn props fly while testing in the editor (Atmo Play's Dynamics.LEVELS), Settings > Prop flight (config.cfg):
 -- the player's computer, not the mod. Atmo Play has its own (/atmoplay flight)
 Playable.flightLevel = Dynamics.DEFAULT_LEVEL
+-- the flying props' ghosts (Playable.drawGhosts), Settings > Prop ghosts (config.cfg propGhosts): off saves their work
+Playable.ghosts = true
+
+---Settings > Prop ghosts
+---@param on boolean
+function Playable.setGhosts(on)
+    Playable.ghosts = on and true or false
+    if not Playable.ghosts and dynamics then dynamics.prediction = nil end -- its memory goes at once
+end
 
 local PLAY_HOOKS = MGE.hookname .. "_playable"
 ---@type AtmoPlayDriver?
@@ -484,15 +505,16 @@ function Playable.onMatchBegin()
     local skip = {}
     for _, object in ipairs(loaded.dynamicObjects or {}) do skip[object.id] = true end
     driver.follow = Driver.dynamicIds(skip)
-    if loaded.dynamicObjects and #loaded.dynamicObjects > 0 and #props > 0 then
-        -- follow: the mod's own dynamic objects push props too
+    if #props > 0 then
+        -- follow: the mod's own dynamic objects push props too. Without a dynamic pool (props that never become
+        -- real) they still fly drawn (thrust, hits)
         local params = { dradius = ModData.parsed.playable.dradius, noCopies = true, follow = driver.follow,
             statics = colliders, level = Playable.flightLevel }
-        dynamics = Dynamics.new(loaded.dynamicObjects, props, params)
+        dynamics = Dynamics.new(loaded.dynamicObjects or {}, props, params)
         local d = dynamics
         driver.moreCenters = function() return Dynamics.centers(d) end
     end
-    setReplayCache(dynamics ~= nil)
+    setReplayCache(dynamics ~= nil and #dynamics.entries > 0)
     local ws = get_world_state()
     runDynamics(Dynamics.matchBegin, ws) -- first: the static pool covers the props it takes
     Driver.matchBegin(driver, ws)
@@ -503,19 +525,37 @@ end
 ---@param index integer the atmo object's place in the Atmo list
 ---@param g AtmoGhost
 ---@return AtmoGhost?
+-- one ghost per moved prop, by its Atmo list place, kept and updated in place (a copy of its ghost a frame for
+-- thousands of flying props was most of the garbage MGE made)
+local movedGhosts = {}
+
 function Playable.movedGhost(index, g)
     if not dynamics then return g end
     if Dynamics.isCarried(dynamics, index) then return nil end
-    local moved = Dynamics.movedProp(dynamics, index)
-    if not moved then return g end
-    local cached = moved.ghost
-    if not cached or cached.from ~= g then
-        cached = {}
-        for k, v in pairs(g) do cached[k] = v end
-        cached.pos, cached.frame, cached.from = moved.pos, moved.frame, g
-        moved.ghost = cached
+    local pos, rot = Dynamics.movedPose(dynamics, index)
+    if not pos then return g end
+    local ghost = movedGhosts[index]
+    if not ghost or ghost.from ~= g then
+        ghost = {}
+        for k, v in pairs(g) do ghost[k] = v end
+        ghost.from = g
+        movedGhosts[index] = ghost
     end
-    return cached
+    -- the prop's own pos and rotation (rotTB: drawn as it is, Highlight.drawBox), not a frame made from it
+    ghost.pos, ghost.rotTB = pos, rot
+    return ghost
+end
+
+---draw3d (highlight.lua): the flying props' ghosts while the fight waits for the turn, as the game shows its
+---objects' (Atmo Play's Dynamics.drawGhosts); with the mod's thrust this shows where each prop is headed
+---@param onScreen (fun(x: number, y: number, z: number, r: number): boolean)? highlight.lua's view check
+function Playable.drawGhosts(onScreen)
+    if not dynamics or not Playable.ghosts then return end
+    local ok, err = pcall(Dynamics.drawGhosts, dynamics, get_world_state(), onScreen)
+    if not ok and not Playable.ghostError then
+        Playable.ghostError = true -- once a session
+        MGE.say("playable: prop ghosts failed: " .. tostring(err))
+    end
 end
 
 ---draw2d, between physics steps: the pools follow the players once per new match frame from Driver.FIRST_FRAME
@@ -532,6 +572,18 @@ function Playable.draw()
 end
 remove_hooks(PLAY_HOOKS)
 add_hook("draw2d", PLAY_HOOKS, function() Playable.draw() end)
+-- replays are watched before anything is drawn (as Atmo Play does): the game has moved the pool objects to this frame
+-- already and MGE draws the atmo in draw3d, before draw2d; watched there, a prop let go wasn't drawn for one frame
+-- (its object parked, the prop still "carried") and a taken one was drawn twice. Fights stay in draw2d
+local function watchReplay()
+    if not dynamics then return end
+    local ws = get_world_state()
+    if ws.replay_mode > 0 then runDynamics(Dynamics.draw, ws) end
+end
+add_hook("pre_draw", PLAY_HOOKS, watchReplay)
+-- and every physics frame, drawn or not (enter_frame at frame t sees the state draw2d would): no let-go or take falls
+-- between two drawn frames, the drawn flights start exactly as in the fight (Atmo Play's runtime.lua: onEnterFrame)
+add_hook("enter_frame", PLAY_HOOKS, watchReplay)
 table.insert(MGE.onQuit, function()
     remove_hooks(PLAY_HOOKS)
     driver, dynamics = nil, nil

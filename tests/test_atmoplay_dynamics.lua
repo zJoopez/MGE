@@ -693,6 +693,24 @@ T.test("replay: an object that took a prop is painted its color, the copy hidden
     T.eq(carried(s), "crateA crateB", "object 1 took crateB")
     T.eq(world.objects[1].flag, nil, "no set_obj_flag in a replay")
     T.ok(world.objects[1].color ~= nil, "painted though")
+    -- the game puts the file's color back (suspected at the end of an R replay's recorded frames): painted again
+    local saved = get_obj_color
+    get_obj_color = function(id)
+        local c = world.objects[id].color or { 1, 1, 1, 0.1 }
+        return c[1], c[2], c[3], c[4]
+    end
+    world.objects[0].color = { 1, 1, 1, 0.1 }
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 2 })
+    T.eq(table.concat(world.objects[0].color, " "), "0.2 0.4 0.6 1", "painted again")
+    world.objects[0].color = { 1, 1, 1, 0.1 }
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 2 }) -- the same frame drawn again (no new frame to watch)
+    T.eq(table.concat(world.objects[0].color, " "), "0.2 0.4 0.6 1", "painted again on the same frame")
+    local sets = 0
+    local setColor = set_obj_color
+    set_obj_color = function(...) sets = sets + 1 setColor(...) end
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 3 })
+    T.eq(sets, 0, "still its color: nothing set")
+    set_obj_color, get_obj_color = setColor, saved
 end)
 
 T.test("a weapon prop: its own group, carried by a pool object written with that flag (no flag call)", function()
@@ -799,7 +817,11 @@ local function rocketFight(frames)
         snapshot(f)
         Dynamics.draw(s, { replay_mode = 0, match_frame = f })
         if not takenAt and carried(s) == "rocket" then takenAt = f end
-        poses[f] = { pos = s.props[1].pos, rot = s.props[1].rot }
+        -- the rotation's numbers: a flying prop's rotation is one table written in place (flight.lua)
+        local r, rot = s.props[1].rot, {}
+        for k = 0, 11 do rot["r" .. k] = r["r" .. k] or 0 end
+        local p = s.props[1].pos -- its numbers too: a flight moves its position table in place
+        poses[f] = { pos = { p[1], p[2], p[3] }, rot = rot }
     end
     poses[0] = { pos = poses[0], rot = s.props[1].home.rot }
     return s, rec, poses, takenAt
@@ -812,7 +834,28 @@ T.test("flight: a thrust prop nobody wants is let go moving and flies on drawn",
     T.ok(s.props[1].flight ~= nil, "flying on")
     T.ok(poses[60].pos[1] > poses[59].pos[1], "still moving along x")
     T.ok(s.props[1].flight.ang ~= nil, "and spinning")
-    T.ok(poses[60].rot ~= poses[59].rot, "its drawn copy turns")
+    local turned = 0
+    for k = 0, 10 do turned = turned + math.abs(poses[60].rot["r" .. k] - poses[59].rot["r" .. k]) end
+    T.ok(turned > 1e-6, "its drawn copy turns")
+end)
+
+T.test("flight: a flying prop's rotation is one table written in place; an event keeps its own copy", function()
+    local s = setupRocket()
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local prop = s.props[1]
+    prop.flight.ang = { 0, 0, 3 } -- spinning: its rotation changes every frame
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    local rot, r4 = prop.rot, prop.rot.r4
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
+    T.ok(prop.rot == rot, "the same table")
+    T.ok(prop.rot.r4 ~= r4, "turned on")
+    -- a take keeps the pose of its moment, not the flight's table
+    local events = #s.events
+    world.players = { { prop.pos[1], 0, 1 }, { 120, 120, 1 } }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 3 })
+    T.eq(#s.events, events + 1, "taken")
+    T.ok(s.events[#s.events].rot ~= rot, "its own copy")
 end)
 
 T.test("flight: its replay flies the same, rewinds too", function()
@@ -892,7 +935,8 @@ env_obj crate
     local fight = {}
     for f = 1, 160 do
         Dynamics.draw(s, { replay_mode = 0, match_frame = f })
-        fight[f] = { s.props[1].pos, s.props[2].pos }
+        local a, b = s.props[1].pos, s.props[2].pos -- numbers: flights move their tables in place
+        fight[f] = { { a[1], a[2], a[3] }, { b[1], b[2], b[3] } }
     end
     T.ok(fight[160][2][1] > -1.9, "the crate was hit and moved")
     -- a rewind to 40, then on again
@@ -952,6 +996,39 @@ T.test("snapshots: a rewind steps on from the nearest one, the same as from fram
     assert(ok, err)
 end)
 
+T.test("snapshots: older ones thinned out, rewinds from what's left still fly as the fight did", function()
+    local every, recent, old = Dynamics.SNAPSHOT_EVERY, Dynamics.SNAPSHOT_RECENT, Dynamics.SNAPSHOT_OLD
+    Dynamics.SNAPSHOT_EVERY, Dynamics.SNAPSHOT_RECENT, Dynamics.SNAPSHOT_OLD = 5, 10, 20
+    local ok, err = pcall(function()
+        local _, rec, poses = rocketFight(60)
+        local s = setupRocket()
+        world.players = { { 0, 0, 1 }, { 50, 50, 1 } }
+        Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+        local function watch(f)
+            world.objects[0].pos, world.objects[0].lin, world.objects[0].ang = rec[f].pos, rec[f].lin, rec[f].ang
+            Dynamics.draw(s, { replay_mode = 1, match_frame = f })
+        end
+        for f = 0, 60 do watch(f) end
+        local kept = {}
+        for at in pairs(s.snapshots) do kept[#kept + 1] = at end
+        table.sort(kept)
+        T.eq(table.concat(kept, " "), "20 40 50 55 60", "the last 10 frames' every 5th, older every 20th")
+        local worst = 0
+        for _, back in ipairs({ 47, 33, 14 }) do -- from 40, 20 and 0
+            for f = back, 60 do
+                watch(f)
+                local a, b = s.props[1], poses[f]
+                local d = math.abs(a.pos[1] - b.pos[1]) + math.abs(a.pos[2] - b.pos[2]) + math.abs(a.pos[3] - b.pos[3])
+                for k = 0, 10 do d = d + math.abs(a.rot["r" .. k] - b.rot["r" .. k]) end
+                worst = math.max(worst, d)
+            end
+        end
+        T.near(worst, 0, 1e-9, "every rewind flies as the fight did")
+    end)
+    Dynamics.SNAPSHOT_EVERY, Dynamics.SNAPSHOT_RECENT, Dynamics.SNAPSHOT_OLD = every, recent, old
+    assert(ok, err)
+end)
+
 T.test("levels: a new level waits for the next fight (a fight and its rewinds keep one)", function()
     local s = setupRocket()
     T.eq(s.level, "shapes", "the default")
@@ -966,4 +1043,581 @@ T.test("levels: a new level waits for the next fight (a fight and its rewinds ke
     Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
     T.ok(s.flightOpts.simple, "flying simple")
     T.eq(s.props[1].body.shape, "sphere", "as a sphere")
+end)
+
+---A fight on one pool object: crateA taken, then kicked away fast (the fake world moves the carried object by its
+---velocity each frame); far enough, a full pool lets it go flying and crateB gets the object the frame after.
+---Returns the object's state each frame (as a replay shows it), and the frames it was parked in
+local function swapFight()
+    local s = setup(1)
+    local rec, parked, dt = {}, {}, ATMOPLAY.Flight.DT
+    local function snapshot(f)
+        local o = world.objects[0]
+        rec[f] = { pos = { o.pos[1], o.pos[2], o.pos[3] }, lin = { o.lin[1], o.lin[2], o.lin[3] },
+            ang = { o.ang[1], o.ang[2], o.ang[3] } }
+        if math.abs(o.pos[3] - Dynamics.PARK_Z) < Dynamics.PARKED then parked[#parked + 1] = f end
+    end
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 }) -- crateA taken: its object there from frame 0
+    snapshot(0)
+    local f = 0
+    repeat
+        f = f + 1
+        local o = world.objects[0]
+        if f == 2 then o.lin = { 150, 0, 0 } end -- kicked: 0.9 a frame from here
+        o.pos = { o.pos[1] + o.lin[1] * dt, o.pos[2] + o.lin[2] * dt, o.pos[3] + o.lin[3] * dt }
+        snapshot(f)
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+    until carried(s) == "crateB" or f > 40
+    for _ = 1, 2 do
+        f = f + 1
+        snapshot(f)
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+    end
+    return s, rec, parked, f
+end
+
+T.test("replay, every frame drawn: the swap is seen as in the fight", function()
+    local fight, rec, parked, last = swapFight()
+    T.eq(carried(fight), "crateB", "the fight: crateB carried")
+    T.ok(#parked > 0, "parked in between")
+    local s = setup(1)
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    for f = 0, last do
+        world.objects[0].pos, world.objects[0].lin, world.objects[0].ang = rec[f].pos, rec[f].lin, rec[f].ang
+        Dynamics.draw(s, { replay_mode = 1, match_frame = f })
+    end
+    T.eq(carried(s), "crateB", "crateB carried")
+    T.ok(s.props[1].flight ~= nil and not s.props[1].entry, "crateA flying, drawn")
+end)
+
+T.test("replay, frames skipped (a low fps): a park between two drawn frames is still a release", function()
+    local _, rec, parked, last = swapFight()
+    local skip = {}
+    for _, f in ipairs(parked) do skip[f] = true end
+    skip[parked[#parked] + 1] = true -- and the first frame at crateB
+    local s = setup(1)
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    local lastSeenX
+    for f = 0, last do
+        if not skip[f] then
+            world.objects[0].pos, world.objects[0].lin, world.objects[0].ang = rec[f].pos, rec[f].lin, rec[f].ang
+            Dynamics.draw(s, { replay_mode = 1, match_frame = f })
+            if s.props[1].entry then lastSeenX = rec[f].pos[1] end
+        end
+    end
+    T.eq(carried(s), "crateB", "crateB carried (its object jumped there: a teleport, not a move)")
+    T.ok(s.props[1].flight ~= nil and not s.props[1].entry, "crateA flying on, drawn (not hidden at crateB's place)")
+    T.ok(lastSeenX and s.props[1].pos[1] > lastSeenX, "from where it was last seen, flown on")
+end)
+
+T.test("replay, frames skipped: a rewind gives the props as watched", function()
+    local _, rec, parked, last = swapFight()
+    local skip = { [parked[#parked]] = true, [parked[#parked] + 1] = true }
+    local s = setup(1)
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    local function watch(f)
+        world.objects[0].pos, world.objects[0].lin, world.objects[0].ang = rec[f].pos, rec[f].lin, rec[f].ang
+        Dynamics.draw(s, { replay_mode = 1, match_frame = f })
+    end
+    local seen = {}
+    for f = 0, last do
+        if not skip[f] then
+            watch(f)
+            seen[f] = { carried(s), s.props[1].pos[1], s.props[2].pos[1] }
+        end
+    end
+    watch(1) -- back
+    local worst, same = 0, true
+    for f = 1, last do
+        if not skip[f] then
+            watch(f)
+            if carried(s) ~= seen[f][1] then same = false end
+            worst = math.max(worst, math.abs(s.props[1].pos[1] - seen[f][2]), math.abs(s.props[2].pos[1] - seen[f][3]))
+        end
+    end
+    T.ok(same, "the same carried")
+    T.near(worst, 0, 1e-9, "the same poses")
+end)
+
+T.test("replay: a hard hit (40 m/s more in a frame) is a move, not a teleport", function()
+    local s = setup(1)
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    world.objects[0].pos = { 1, 0, 1 }
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 0 })
+    T.eq(carried(s), "crateA", "taken")
+    world.objects[0].pos, world.objects[0].lin = { 1 + 40 * ATMOPLAY.Flight.DT * 3, 0, 1 }, { 40, 0, 0 }
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 3 }) -- 3 frames later, hit hard in between
+    T.eq(carried(s), "crateA", "still crateA")
+    T.eq(#s.events, 1, "no release")
+end)
+
+T.test("replay: an object that took a prop none is near takes the nearest of its group within MATCH_FAR", function()
+    local s = setup(2)
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    -- the replay's props drifted from the fight's: the object shows up 2 from crateA (its prop in the fight)
+    world.objects[0].pos = { -1, 0, 1 }
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 1 })
+    T.eq(carried(s), "crateA -", "crateA taken by the wider search")
+    T.eq(s.replayMisses.far, 1, "counted")
+    T.near(s.props[1].pos[1], -1, 1e-9, "the prop where its object is")
+    world.objects[1].pos = { 30, 0, 1 } -- nothing of its group within MATCH_FAR (far is 30 30 1)
+    Dynamics.draw(s, { replay_mode = 1, match_frame = 2 })
+    T.eq(carried(s), "crateA -", "nothing taken")
+    T.eq(s.replayMisses.none, 1, "counted as not found")
+end)
+
+T.test("a carried prop tipping over (spinning, its center slow) makes the props it touches real", function()
+    stubEngine()
+    world.players = { { -2.2, 0, 1 }, { 50, 50, 1 } }
+    local _, _, props = Colliders.build(T.lines([[
+env_obj tipping
+   shape box
+   pos 0 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+env_obj leaned
+   shape box
+   pos 0.6 0 1
+   sides 0.4 0.4 0.4
+   flag 0]]))
+    local s = Dynamics.new({ { id = 1, shape = "box" }, { id = 2, shape = "box" } }, props, { dradius = 2, fromFrame = 0 })
+    for i = 1, 2 do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "tipping -", "only the near one is wanted by the player")
+    -- it tips toward the other: its center barely moves, its corners do
+    world.objects[0].lin, world.objects[0].ang = { 0.05, 0, 0 }, { 0, 3, 0 }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(carried(s), "tipping leaned", "the one it tips onto is real too (else it would sink into it)")
+end)
+
+T.test("a prop without a mass line flies with its object's mass in the game (as its real object would)", function()
+    stubEngine()
+    world.objects[0] = { pos = { 0, 0, 0 }, lin = { 0, 0, 0 }, ang = { 0, 0, 0 }, mass = 0.1 } -- the game's mass
+    local colliders, _, props = Colliders.build(T.lines(ROCKET_ATMO))
+    local s = Dynamics.new({ { id = 1, shape = "box" } }, props,
+        { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 } })
+    T.near(s.props[1].flightMass, 0.1, 1e-12, "read from its group's pool object")
+    set_obj_pos(0, Dynamics.parkPos(1))
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.near(s.props[1].pos[1], -6 + 200 / 0.1 * ATMOPLAY.Flight.DT ^ 2, 1e-9, "thrust 200 on 0.1: ten times the push of 1")
+end)
+
+T.test("props overlapping where they start never push each other apart; prop_hits 0 read", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj a
+   shape box
+   pos 0 0 1
+   sides 0.5 0.5 0.5
+   flag 0
+env_obj b
+   shape box
+   pos 0.18 0 1
+   rot 0 30 0
+   sides 0.5 0.5 0.5
+   flag 0
+env_obj c
+   shape box
+   pos 3 0 1
+   sides 0.5 0.5 0.5
+   flag 0
+   prop_hits 0]]))
+    T.eq(props[3].noHits, true, "prop_hits 0")
+    T.eq(props[1].noHits, nil, "hits by default")
+    local s = Dynamics.new({ { id = 1, shape = "box" } }, props, { dradius = 2, fromFrame = 0 })
+    T.ok(s.props[1].ignore and s.props[1].ignore[s.props[2]], "a and b overlap: they ignore each other")
+    T.ok(not (s.props[1].ignore and s.props[1].ignore[s.props[3]]), "c is apart")
+end)
+
+T.test("a carried thrust prop gets the pushes of frames not drawn (low fps)", function()
+    local s = setupRocket()
+    world.players = { { -6, 0, 1 }, { 50, 50, 1 } } -- next to the rocket: taken at once
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "rocket", "taken")
+    T.nearList(world.objects[0].force, { 200, 0, 0 }, 1e-9, "frame 0: one push")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 3 }) -- frames 1 and 2 not drawn
+    T.nearList(world.objects[0].force, { 600, 0, 0 }, 1e-9, "frame 3: the pushes of 1, 2 and 3")
+end)
+
+T.test("rewind on Full: a prop put back far from home is found by the flights flown again", function()
+    stubEngine()
+    world.players = { { -20, 0, 1 }, { 50, 50, 1 } }
+    local colliders, _, props = Colliders.build(T.lines(ROCKET_ATMO .. [[
+
+env_obj crate
+   shape box
+   pos -20 0 0.7
+   sides 0.4 0.4 0.4
+   flag 0]]))
+    local s = Dynamics.new({ { id = 1, shape = "box" } }, props,
+        { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 }, level = "full" })
+    set_obj_pos(0, Dynamics.parkPos(1))
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(s.props[2].entry ~= nil, true, "the crate taken")
+    -- carried over to x 0 (the fake world's physics) and left there at rest; the players leave
+    world.objects[0].pos, world.objects[0].lin = { 0, 0, 0.7 }, { 0, 0, 0 }
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    T.eq(s.props[2].entry, nil, "let go at x 0, far from its home cell")
+    local live = {}
+    for f = 2, 120 do
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        live[f] = { s.props[1].pos[1], s.props[2].pos[1] }
+    end
+    T.ok(live[120][2] > 0.1, "the rocket hit it (woken, pushed along)")
+    -- rewound to after the hit: the flights flown again must find the crate where it was let go
+    local hit
+    for f = 2, 120 do
+        if not hit and live[f][2] > 0.01 then hit = f end
+    end
+    local worst = 0
+    for f = hit + 3, 120 do
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        worst = math.max(worst, math.abs(s.props[1].pos[1] - live[f][1]), math.abs(s.props[2].pos[1] - live[f][2]))
+    end
+    T.near(worst, 0, 1e-9, "rewound to after the hit and on: the same")
+end)
+
+T.test("prop_real 0: never taken, even next to a player; still listed (woken by flights); replays don't match it", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj ghost
+   shape box
+   pos 1 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   prop_real 0
+env_obj crate
+   shape box
+   pos 1.5 0 1
+   sides 0.4 0.4 0.4
+   flag 0]]))
+    T.eq(props[1].noReal, true, "read")
+    local s = Dynamics.new({ { id = 1, shape = "box" }, { id = 2, shape = "box" } }, props, { dradius = 2, fromFrame = 0 })
+    for i = 1, 2 do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crate -", "only the crate taken, with an object to spare")
+    T.ok(s.props[1].listed and s.props[1].cell ~= nil, "the ghost is in the grid")
+    -- a replay: an object appearing on the ghost takes the crate (its group's free prop) or nothing, never the ghost
+    local r = Dynamics.new({ { id = 1, shape = "box" }, { id = 2, shape = "box" } }, props, { dradius = 2, fromFrame = 0 })
+    Dynamics.matchBegin(r, { replay_mode = 1, match_frame = 0 })
+    world.objects[0].pos = { 1, 0, 1 }
+    world.objects[1].pos = { Dynamics.parkPos(2) } -- parked
+    Dynamics.draw(r, { replay_mode = 1, match_frame = 1 })
+    T.ok(r.props[1].entry == nil, "the ghost never carried in a replay")
+end)
+
+T.test("Collision lines: prop_collide <player> <dynamic> <atmo>, the older prop_real / prop_hits still read", function()
+    local function c(lines) return { Colliders.collision(lines) } end
+    T.eq(table.concat({ tostring(c({})[1]), tostring(c({})[2]), tostring(c({})[3]) }, " "), "true true true", "no line: all on")
+    local t = c({ prop_collide = "1 0 1" })
+    T.ok(t[1] and not t[2] and t[3], "player on, dynamic off, atmo on")
+    t = c({ prop_real = "0" })
+    T.ok(not t[1] and not t[2] and t[3], "prop_real 0: neither player nor dynamic")
+    t = c({ prop_hits = "0" })
+    T.ok(t[1] and t[2] and not t[3], "prop_hits 0: no atmo")
+end)
+
+T.test("props never real (no dynamic pool at all) still fly their thrust", function()
+    stubEngine()
+    local colliders, _, props = Colliders.build(T.lines(ROCKET_ATMO:gsub("thrust 1 200 0 0", "thrust 1 200 0 0\n   prop_collide 0 0 1")))
+    T.eq(props[1].noReal, true, "never real")
+    local s = Dynamics.new({}, props, { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 } })
+    world.players = { { -6, 0, 1 }, { 50, 50, 1 } } -- right next to it
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    for f = 1, 10 do Dynamics.draw(s, { replay_mode = 0, match_frame = f }) end
+    T.ok(s.props[1].pos[1] > -6 + 0.1, "flying on its thrust")
+    T.eq(s.props[1].entry, nil, "never carried")
+end)
+
+T.test("Collision Player / Dynamic: what a prop becomes real for", function()
+    local function run(line)
+        stubEngine()
+        local _, _, props = Colliders.build(T.lines([[
+env_obj crate
+   shape box
+   pos 1 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   prop_collide ]] .. line))
+        local s = Dynamics.new({ { id = 1, shape = "box" } }, props, { dradius = 2, fromFrame = 0, follow = { 5 } })
+        set_obj_pos(0, Dynamics.parkPos(1))
+        return s
+    end
+    -- a player next to it (no dynamic object near)
+    local s = run("0 1 1")
+    world.objects[5] = { pos = { 40, 40, 1 }, lin = { 0, 0, 0 }, ang = { 0, 0, 0 }, mass = 1 }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "-", "player off: not real near a player")
+    s = run("1 0 1")
+    world.objects[5] = { pos = { 40, 40, 1 }, lin = { 0, 0, 0 }, ang = { 0, 0, 0 }, mass = 1 }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crate", "player on: real near a player")
+    -- a dynamic object of the mod next to it, the players away
+    s = run("1 0 1")
+    world.players = { { 40, 0, 1 }, { 50, 50, 1 } }
+    world.objects[5] = { pos = { 1.5, 0, 1 }, lin = { 0, 0, 0 }, ang = { 0, 0, 0 }, mass = 1 }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "-", "dynamic off: not real near the mod's dynamic object")
+    s = run("0 1 1")
+    world.players = { { 40, 0, 1 }, { 50, 50, 1 } }
+    world.objects[5] = { pos = { 1.5, 0, 1 }, lin = { 0, 0, 0 }, ang = { 0, 0, 0 }, mass = 1 }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crate", "dynamic on: real near it")
+end)
+
+T.test("Full, a fight drawn every third frame flies as its replay watched every frame (grid each step)", function()
+    local atmo = ROCKET_ATMO .. [[
+
+env_obj crate
+   shape box
+   pos -2 0 0.7
+   sides 0.4 0.4 0.4
+   flag 0]]
+    local function make()
+        stubEngine()
+        world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+        local colliders, _, props = Colliders.build(T.lines(atmo))
+        local s = Dynamics.new({ { id = 1, shape = "box" } }, props,
+            { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 }, level = "full" })
+        set_obj_pos(0, Dynamics.parkPos(1))
+        return s
+    end
+    local s = make()
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    for f = 3, 120, 3 do Dynamics.draw(s, { replay_mode = 0, match_frame = f }) end -- several frames a call
+    local fight = { s.props[1].pos, s.props[2].pos }
+    T.ok(fight[2][1] > -1.9, "the crate was hit")
+    local r = make()
+    Dynamics.matchBegin(r, { replay_mode = 1, match_frame = 0 })
+    for f = 1, 120 do Dynamics.draw(r, { replay_mode = 1, match_frame = f }) end -- one frame a call
+    local worst = 0
+    for k = 1, 2 do
+        for a = 1, 3 do worst = math.max(worst, math.abs(r.props[k].pos[a] - fight[k][a])) end
+    end
+    T.near(worst, 0, 1e-9, "the same poses")
+end)
+
+T.test("movedPose: a moved prop's own pos and rotation (nothing made), nothing at home", function()
+    local s = setupRocket()
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(Dynamics.movedPose(s, s.props[1].index), nil, "at home")
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
+    local pos, rot = Dynamics.movedPose(s, s.props[1].index)
+    T.ok(pos == s.props[1].pos and rot == s.props[1].rot, "its own tables")
+    T.eq(Dynamics.movedPose(s, 999), nil, "no such prop")
+end)
+
+local Flight = ATMOPLAY.Flight
+
+T.test("ghosts: the prediction is the flights to come (full: a hit and a wake), the props untouched", function()
+    stubEngine()
+    local colliders, _, props = Colliders.build(T.lines(ROCKET_ATMO .. [[
+
+env_obj crate
+   shape box
+   pos -2 0 0.7
+   sides 0.4 0.4 0.4
+   flag 0]]))
+    local s = Dynamics.new({ { id = 1, shape = "box" } }, props,
+        { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 }, level = "full" })
+    set_obj_pos(0, Dynamics.parkPos(1))
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } } -- nobody near: nothing is taken
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local rocket, crate = s.props[1], s.props[2]
+    local rocketPos, rocketVx, cratePos = rocket.pos, rocket.flight.vel[1], crate.pos
+    local budget = Dynamics.PREDICT_MS
+    Dynamics.PREDICT_MS = math.huge -- all of it in one call
+    local pr = Dynamics.predict(s, 120)
+    Dynamics.PREDICT_MS = budget
+    T.eq(pr.steps, 120, "120 frames ahead")
+    T.ok(rocket.pos == rocketPos and rocket.flight.vel[1] == rocketVx and crate.pos == cratePos and not crate.flight,
+        "predicting moved no prop")
+    T.eq(Dynamics.predict(s, 120), pr, "the same frame: the same prediction")
+    local worst, compared = 0, 0
+    for f = 1, 120 do
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        for _, p in ipairs({ rocket, crate }) do
+            local x, y, z = Flight.predictedPose(pr, p, f)
+            if x then
+                compared = compared + 1
+                worst = math.max(worst, math.abs(x - p.pos[1]), math.abs(y - p.pos[2]), math.abs(z - p.pos[3]))
+            else
+                T.eq(p.pos, cratePos, "no prediction only while still at home (frame " .. f .. ")")
+            end
+        end
+    end
+    T.ok(crate.pos[1] > -1.9, "the rocket hit the crate")
+    T.ok(compared > 120, "the crate predicted too once woken")
+    T.near(worst, 0, 1e-9, "predicted = flown, every frame")
+    T.eq(Dynamics.predict(s, 10), pr, "the flights followed it: kept")
+    T.eq(pr.base, 120, "from their frame now")
+    s.events[#s.events + 1] = { frame = 120, kind = "take" }
+    T.eq(Dynamics.predict(s, 10), pr, "a take: kept (the taken prop's ghost is the game's)")
+    s.flightStarts = (s.flightStarts or 0) + 1 -- a prop let go flying: a flight the prediction doesn't have
+    T.ok(Dynamics.predict(s, 10) ~= pr, "a release that flies: a new prediction")
+end)
+
+T.test("ghosts: a prediction carried over turns goes on exactly, its old poses dropped", function()
+    stubEngine()
+    local colliders, _, props = Colliders.build(T.lines(ROCKET_ATMO .. [[
+
+env_obj crate
+   shape box
+   pos -2 0 0.7
+   sides 0.4 0.4 0.4
+   flag 0]]))
+    local s = Dynamics.new({ { id = 1, shape = "box" } }, props,
+        { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 }, level = "full" })
+    set_obj_pos(0, Dynamics.parkPos(1))
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local budget = Dynamics.PREDICT_MS
+    Dynamics.PREDICT_MS = math.huge
+    local pr = Dynamics.predict(s, 40) -- turn 1 waits at frame 0
+    for f = 1, 30 do Dynamics.draw(s, { replay_mode = 0, match_frame = f }) end -- 30 frames played
+    T.eq(Dynamics.predict(s, 40), pr, "turn 2 at frame 30: the same prediction")
+    T.eq(pr.steps, 70, "extended to 30 + 40")
+    T.eq(pr.poses[s.props[1]].first, 30, "frames already played dropped")
+    Dynamics.PREDICT_MS = budget
+    local worst, compared = 0, 0
+    for f = 31, 70 do
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        for _, p in ipairs(s.props) do
+            local x, y, z = Flight.predictedPose(pr, p, f)
+            if x and pr.poses[p] then
+                compared = compared + 1
+                worst = math.max(worst, math.abs(x - p.pos[1]), math.abs(y - p.pos[2]), math.abs(z - p.pos[3]))
+            end
+        end
+    end
+    T.ok(compared >= 40, "compared every frame")
+    T.near(worst, 0, 1e-9, "carried over: still the flights to come")
+end)
+
+T.test("ghosts: play along with the game's ghost loop (its frame and fade), from frame 0", function()
+    local s = setupRocket()
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local saved = { get_ghost, get_ghost_length, get_ghost_frame, get_option, set_color, draw_box_m }
+    local draws, opts, ghostAt = {}, { ghostenvobj = 1, ghostopacity = 50 }, { 30, 0.5 }
+    get_ghost = function() return 2 end
+    get_ghost_length = function() return 100 end
+    get_ghost_frame = function() return ghostAt[1], ghostAt[2], 99 end
+    get_option = function(name) return opts[name] end
+    set_color = function(r, g, b, a) draws.alpha = a end
+    draw_box_m = function(x) draws[#draws + 1] = x end
+    local ws = { replay_mode = 0, match_frame = 0, match_turn_frame = 0 } -- frame 0: no turn frames counted yet
+    local still = Dynamics.GHOST_STILL
+    Dynamics.GHOST_STILL = -1
+    local budget = Dynamics.PREDICT_MS
+    Dynamics.PREDICT_MS = math.huge
+    T.eq(Dynamics.drawGhosts(s, ws), 1, "the rocket's ghost on frame 0")
+    local pr = s.prediction
+    T.eq(pr.steps, 99, "the ghost's 100 frames predicted")
+    T.near(draws[1], (Flight.predictedPose(pr, s.props[1], 30)), 1e-12, "where the game's ghost is (30 ahead)")
+    T.ok(draws[1] > s.props[1].pos[1], "ahead of the rocket")
+    T.near(draws.alpha, 0.25, 1e-12, "the ghost opacity, fading with the game's")
+    ghostAt = { 70.5, 1 }
+    Dynamics.drawGhosts(s, ws)
+    T.near(draws[2], (Flight.predictedPose(pr, s.props[1], 70.5)), 1e-12, "on along the loop, between frames")
+    T.ok(draws[2] > draws[1], "further on")
+    get_ghost_frame = nil
+    T.eq(Dynamics.drawGhosts(s, ws), 1, "no game frame: our own loop")
+    opts.ghostenvobj = 0
+    T.eq(Dynamics.drawGhosts(s, ws), 0, "object ghosts off")
+    opts.ghostenvobj = 1
+    T.eq(Dynamics.drawGhosts(s, { replay_mode = 1, match_frame = 0 }), 0, "none in replays")
+    Dynamics.GHOST_STILL = 1000
+    T.eq(Dynamics.drawGhosts(s, { replay_mode = 0, match_frame = 1 }), 0, "frames playing: none")
+    local fresh = setupRocket() -- a new state (MGE's reload after an edit): at once, no hold
+    Dynamics.matchBegin(fresh, { replay_mode = 0, match_frame = 0 })
+    T.eq(Dynamics.drawGhosts(fresh, ws), 1, "a state's first frame shows them at once")
+    Dynamics.GHOST_STILL, Dynamics.PREDICT_MS = still, budget
+    get_ghost, get_ghost_length, get_ghost_frame, get_option, set_color, draw_box_m =
+        saved[1], saved[2], saved[3], saved[4], saved[5], saved[6]
+end)
+
+T.test("ghosts: only on screen, the nearest the camera past MAX_GHOSTS, colors as MGE draws them", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj left
+   shape box
+   pos -20 0 1
+   sides 0.4 0.4 0.4
+   color 1.6 0.5 0.25 1
+   flag 0
+   thrust 1 0 0 50
+env_obj right
+   shape box
+   pos 20 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 0 0 50]]))
+    local s = Dynamics.new({}, props, { dradius = 2, fromFrame = 0, gravity = { 0, 0, -9.82 } })
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local saved = { get_ghost, get_ghost_length, get_ghost_frame, get_option, set_color, draw_box_m, get_camera_info }
+    local drawnAt, colors = {}, {}
+    get_ghost = function() return 2 end
+    get_ghost_length = function() return 20 end
+    get_ghost_frame = function() return 10, 1, 19 end
+    get_option = function(name) return name == "ghostopacity" and 100 or 1 end
+    set_color = function(r, g, b, a) colors[#colors + 1] = { r, g, b, a } end
+    draw_box_m = function(x) drawnAt[#drawnAt + 1] = x end
+    local camera = { x = 25, y = 0, z = 2 }
+    get_camera_info = function() return { pos = camera } end
+    local still, budget, cap = Dynamics.GHOST_STILL, Dynamics.PREDICT_MS, Dynamics.MAX_GHOSTS
+    Dynamics.GHOST_STILL, Dynamics.PREDICT_MS = -1, math.huge
+    local ws = { replay_mode = 0, match_frame = 0 }
+    T.eq(Dynamics.drawGhosts(s, ws), 2, "both under the cap")
+    Dynamics.MAX_GHOSTS = 1
+    drawnAt = {}
+    Dynamics.drawGhosts(s, ws)
+    T.ok(#drawnAt == 1 and drawnAt[1] > 0, "over the cap: the one nearest the camera (right)")
+    camera = { x = -25, y = 0, z = 2 }
+    drawnAt, colors = {}, {}
+    Dynamics.drawGhosts(s, ws)
+    T.ok(#drawnAt == 1 and drawnAt[1] < 0, "the camera moved: the left one")
+    T.eq(table.concat(colors[1], " "), "1 0.5 0.25 1", "a color over 1 drawn as 1")
+    Dynamics.MAX_GHOSTS = cap
+    drawnAt = {}
+    T.eq(Dynamics.drawGhosts(s, ws, function(x) return x > 0 end), 1, "off screen: not drawn")
+    T.ok(drawnAt[1] > 0, "the one on screen")
+    Dynamics.GHOST_STILL, Dynamics.PREDICT_MS = still, budget
+    get_ghost, get_ghost_length, get_ghost_frame, get_option, set_color, draw_box_m, get_camera_info =
+        saved[1], saved[2], saved[3], saved[4], saved[5], saved[6], saved[7]
+end)
+
+T.test("ghosts: past MAX_GHOSTS only the props nearest the camera are predicted, picked again when it moves away", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj left
+   shape box
+   pos -20 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 0 0 50
+env_obj right
+   shape box
+   pos 20 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 0 0 50]]))
+    local s = Dynamics.new({}, props, { dradius = 2, fromFrame = 0, gravity = { 0, 0, -9.82 } })
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local cap, budget = Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS
+    Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS = 1, math.huge
+    local pr = Dynamics.predict(s, 20, { 25, 0, 2 })
+    T.eq(#pr.props, 1, "one predicted")
+    T.eq(pr.props[1], s.props[2], "the one nearest the camera")
+    T.eq(Dynamics.predict(s, 20, { 27, 0, 2 }), pr, "the camera moved a little: kept")
+    local again = Dynamics.predict(s, 20, { -25, 0, 2 })
+    T.ok(again ~= pr, "moved away: picked again")
+    T.eq(again.props[1], s.props[1], "the other one now")
+    s.prediction = nil -- both as far from the camera: the one on screen first
+    local seen = Dynamics.predict(s, 20, { 0, 0, 2 }, function(x) return x > 0 end)
+    T.eq(seen.props[1], s.props[2], "on screen first")
+    Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS = cap, budget
 end)

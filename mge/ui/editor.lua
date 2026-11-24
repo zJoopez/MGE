@@ -7,7 +7,7 @@
 --   player:   ui/editor_player.lua    Pos, Rot, Scale, parts of the selected players (the Players list's Core tab)
 --   jointLink: ui/editor_link.lua     the 2 linked objects (grid), Create / Update, Reset (the Joints list's Link tab)
 --   joint:    ui/editor_joint.lua     Pos, Axis, Range, Strength, Velocity, Type (the Joints list's Properties tab)
---   (advanced) ui/editor_atmo.lua     Depth, Graphics levels, kept lines: the Atmo list's own rows on its
+--   (advanced) ui/editor_atmo.lua     Prop hits, Real hits (props in Atmo Play): the Atmo list's own rows on its
 --                                     Advanced tab. Its Core, Advanced and Generate tabs are the objects' panels,
 --                                     on the selected atmo objects (ModData.getEditSelection)
 -- Shared row widgets are in ui/editor_rows.lua, the transform math in utils/transforms.lua.

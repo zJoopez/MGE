@@ -32,7 +32,7 @@ local function fakeGame()
     local names = { "Files", "FILES_MODE_READONLY", "FILES_MODE_WRITE", "FILES_MODE_APPEND", "get_game_rules", "get_world_state",
         "get_body_info", "BODYPARTS", "get_obj_pos", "set_obj_pos", "set_obj_sides", "set_obj_rot_m",
         "set_obj_flag", "set_obj_bounce", "set_obj_color", "set_obj_vis", "get_option", "set_option",
-        "Atmospheres", "add_hook", "remove_hooks", "find_mod", "echo", "ATMOPLAY_LOADATMO",
+        "Atmospheres", "add_hook", "remove_hooks", "find_mod", "echo", "ATMOPLAY_LOADATMO", "ATMOPLAY_UNLOAD",
         "get_obj_flag", "get_obj_bounce" }
     for _, name in ipairs(names) do saved[name] = rawget(_G, name) end
     function game.restore()
@@ -79,7 +79,7 @@ local function fakeGame()
         Unload = function() game.loads[#game.loads + 1] = "(unload)" end,
     }
     game.originalLoadAtmo = Atmospheres.LoadAtmo
-    ATMOPLAY_LOADATMO = nil
+    ATMOPLAY_LOADATMO, ATMOPLAY_UNLOAD = nil, nil
     add_hook = function(event, set, fn) game.hooks[event .. "/" .. set] = fn end
     remove_hooks = function(set)
         for key in pairs(game.hooks) do
@@ -156,7 +156,7 @@ run("a drawn mod (MGE's Default): its atmo drawn, nothing moved", function(game)
     game.lm("drawn.tbm")
     T.ok(Runtime.state.loaded and Runtime.state.loaded.drawOnly, "read as a drawn mod")
     T.eq(game.loads[#game.loads], "Atmo Play.atmo", "its atmo drawn")
-    T.ok(game.files["../data/atmospheres/Atmo Play.atmo"]:find("env_obj wall", 1, true) ~= nil, "the mod's atmo")
+    T.eq(Runtime.state.drawer and Runtime.state.drawer.count, 4, "its plain shapes drawn by Atmo Play (draw own)")
     T.eq(#game.play(30, false, 1), 0, "a fight moves nothing")
     game.fire("leave_game")
     T.eq(#game.play(10, true), 0, "nor a replay")
@@ -174,9 +174,16 @@ run("start: options untouched, normal mod left alone, playable mod drawn", funct
     T.ok(Runtime.state.loaded ~= nil, "arena is playable")
     T.eq(game.loads[#game.loads], "Atmo Play.atmo", "the cache atmo is loaded")
     local cache = game.files["../data/atmospheres/Atmo Play.atmo"]
-    T.ok(cache:find("env_obj wall", 1, true) ~= nil, "cache holds the atmo")
+    T.ok(cache:find("shader dark", 1, true) ~= nil, "the cache keeps the header (draw own)")
+    T.ok(cache:find("env_obj wall", 1, true) == nil, "its plain shapes are Atmo Play's to draw")
+    T.eq(Runtime.state.drawer.count, 4, "wall, floor, ball, far (clip is visible 0)")
+    game.fire("command", "atmoplay draw game")
+    cache = game.files["../data/atmospheres/Atmo Play.atmo"]
+    T.ok(cache:find("env_obj wall", 1, true) ~= nil, "draw game: the cache holds the atmo")
     T.ok(cache:find("#@", 1, true) == nil, "without the prefix")
     T.ok(cache:find("env_obj clip", 1, true) == nil, "invisible objects aren't drawn")
+    T.eq(Runtime.state.drawer, nil, "nothing drawn by Atmo Play")
+    game.fire("command", "atmoplay draw own")
     T.eq(#Runtime.state.loaded.pool.entries, 5, "pool objects")
     T.eq(Runtime.state.loaded.missing, 0, "all pool objects exist")
 end)
@@ -375,4 +382,179 @@ run("debug log: every object call and a summary per frame, the setters back afte
     game.fire("command", "atmoplay log")
     T.eq(set_obj_pos, original, "the engine's setter back")
     T.eq(ATMOPLAY_TRACED, nil, "nothing kept")
+end)
+
+run("commands: flight sets the level, saved in atmoplay.cfg and read at start", function(game)
+    local Runtime = startRuntime()
+    T.eq(Runtime.settings.flight, "shapes", "the default")
+    game.fire("command", "atmoplay flight full")
+    T.eq(Runtime.settings.flight, "full", "set")
+    T.ok((game.files[Runtime.settingsPath()] or ""):find("flight full", 1, true) ~= nil, "saved")
+    game.fire("command", "atmoplay flight fast")
+    T.eq(Runtime.settings.flight, "full", "an unknown level changes nothing")
+    T.ok(game.said[#game.said]:find("simple | shapes | full", 1, true) ~= nil, "the levels listed")
+    Runtime.settings.flight = "shapes"
+    Runtime.start() -- a restart reads the file
+    T.eq(Runtime.settings.flight, "full", "read back")
+end)
+
+run("commands: time measures some frames, reports, and gives the game's drawing back", function(game)
+    local drawn = 0
+    local original = function() drawn = drawn + 1 end
+    UIElement3D = { drawVisuals = original }
+    Atmospheres.Globalid = 7
+    local ok, err = pcall(function()
+        local Runtime = startRuntime()
+        Runtime.TIMING_FRAMES = 5
+        game.lm("arena.tbm")
+        game.fire("command", "atmoplay time")
+        T.ok(UIElement3D.drawVisuals ~= original, "the atmo's drawing timed")
+        for f = 1, 5 do
+            UIElement3D.drawVisuals(7) -- the game's draw3d
+            game.play(1, false, f)
+        end
+        T.eq(drawn, 5, "the atmo still drawn")
+        local report = table.concat(game.said, "\n")
+        T.ok(report:find("5 frames", 1, true) ~= nil, "reported")
+        T.ok(report:find("the game drawing the atmo", 1, true) ~= nil, "the atmo's part")
+        T.eq(UIElement3D.drawVisuals, original, "given back after")
+    end)
+    UIElement3D = nil
+    assert(ok, err)
+end)
+
+run("draw own: draw3d draws the plain shapes on screen, nothing while MGE runs", function(game)
+    local calls = {}
+    local names = { "set_color", "draw_box_m", "draw_sphere_m", "draw_capsule_m", "get_camera_info", "get_screen_pos" }
+    local saved = {}
+    for _, name in ipairs(names) do saved[name] = rawget(_G, name) end
+    set_color = function() end
+    draw_box_m = function(x) calls[#calls + 1] = "box " .. x end
+    draw_sphere_m = function(x) calls[#calls + 1] = "sphere " .. x end
+    draw_capsule_m = function(x) calls[#calls + 1] = "pill " .. x end
+    get_camera_info = function() return nil end -- no view: every shape
+    local ok, err = pcall(function()
+        startRuntime()
+        game.lm("arena.tbm")
+        game.fire("draw3d")
+        T.eq(#calls, 4, "4 shapes (no view measured: all)")
+        T.ok(table.concat(calls, ","):find("sphere 0", 1, true) ~= nil, "the ball as a sphere")
+        MGE = { running = true }
+        calls = {}
+        game.fire("draw3d")
+        T.eq(#calls, 0, "MGE open: it draws")
+        MGE = nil
+    end)
+    for _, name in ipairs(names) do rawset(_G, name, saved[name]) end
+    MGE = nil
+    assert(ok, err)
+end)
+
+run("replays are watched in pre_draw (before anything is drawn), fights in draw2d", function(game)
+    -- a playable mod with one prop and one dynamic pool object, written as MGE writes them
+    game.files["../data/mod/props.tbm"] = table.concat({
+        "env_obj 1", "    #atmoplay dynamic", "    shape box", "    pos -48 0 50000.76", "    sides 0.4 0.4 0.4",
+        "    flag 0", "", "#atmoplay v1 rule=1 radius=4 dradius=2",
+        "#@ env_obj crate", "#@    shape box", "#@    pos 1 0 1", "#@    sides 0.4 0.4 0.4", "#@    flag 0",
+    }, "\n")
+    game.objects[0] = true
+    local Runtime = startRuntime()
+    game.lm("props.tbm")
+    local d = Runtime.state.loaded and Runtime.state.loaded.dynamics
+    T.ok(d ~= nil, "its props loaded")
+    local Dynamics = ATMOPLAY.Dynamics
+    local getters = { "get_obj_linear_vel", "get_obj_angular_vel", "get_obj_rot" }
+    local savedGetters = {}
+    for _, name in ipairs(getters) do savedGetters[name] = rawget(_G, name) end
+    get_obj_linear_vel = function() return 0, 0, 0 end
+    get_obj_angular_vel = function() return 0, 0, 0 end
+    get_obj_rot = function() return { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 } end
+    local original, calls = Dynamics.draw, {}
+    Dynamics.draw = function(s, ws)
+        calls[#calls + 1] = ws.replay_mode
+        return original(s, ws)
+    end
+    local ok, err = pcall(function()
+        game.replay, game.frame = 1, 5
+        game.fire("pre_draw")
+        T.eq(#calls, 1, "a replay frame: watched in pre_draw")
+        T.eq(d.lastFrame, 5, "this frame")
+        game.replay = 0
+        game.fire("pre_draw")
+        T.eq(#calls, 1, "a fight: not in pre_draw")
+        -- frames the game doesn't draw still have enter_frame: a replay watches each of them
+        game.replay = 1
+        for f = 6, 9 do
+            game.frame = f
+            game.fire("enter_frame")
+        end
+        T.eq(#calls, 5, "4 undrawn replay frames watched in enter_frame")
+        T.eq(d.lastFrame, 9, "up to the last one")
+        game.frame = 9
+        game.fire("pre_draw")
+        T.eq(d.lastFrame, 9, "a frame already watched isn't watched again")
+        game.replay, game.frame = 0, 10
+        game.fire("enter_frame")
+        T.eq(d.lastFrame, 9, "a fight frame isn't stepped in enter_frame (fights move in draw2d)")
+    end)
+    Dynamics.draw = original
+    for _, name in ipairs(getters) do rawset(_G, name, savedGetters[name]) end
+    assert(ok, err)
+end)
+
+run("draw own: another atmo stops our drawing; a drawing error gives the atmo back to the game", function(game)
+    local names = { "set_color", "draw_box_m", "draw_sphere_m", "draw_capsule_m", "get_camera_info" }
+    local saved = {}
+    for _, name in ipairs(names) do saved[name] = rawget(_G, name) end
+    set_color, draw_sphere_m, draw_capsule_m = function() end, function() end, function() end
+    draw_box_m = function() end
+    get_camera_info = function() return nil end
+    local ok, err = pcall(function()
+        local Runtime = startRuntime()
+        game.lm("arena.tbm")
+        T.ok(Runtime.state.drawer ~= nil, "drawing")
+        Atmospheres.LoadAtmo("night.atmo") -- the player's pick
+        T.eq(Runtime.state.drawer, nil, "the player's atmo replaced ours: no more drawing")
+        game.lm("plain.tbm")
+        game.lm("arena.tbm")
+        T.ok(Runtime.state.drawer ~= nil, "drawing again")
+        draw_box_m = function() error("bad shape") end
+        game.fire("draw3d")
+        T.eq(Runtime.state.drawer, nil, "stopped")
+        game.fire("draw2d")
+        T.eq(Runtime.settings.draw, "game", "the game draws")
+        T.ok(game.files["../data/atmospheres/Atmo Play.atmo"]:find("env_obj wall", 1, true) ~= nil, "the whole atmo")
+    end)
+    for _, name in ipairs(names) do rawset(_G, name, saved[name]) end
+    assert(ok, err)
+end)
+
+run("leaving a playable mod ends a /atmoplay time measurement", function(game)
+    local original = function() end
+    UIElement3D = { drawVisuals = original }
+    local ok, err = pcall(function()
+        startRuntime()
+        game.lm("arena.tbm")
+        game.fire("command", "atmoplay time")
+        T.ok(UIElement3D.drawVisuals ~= original, "timing")
+        game.lm("plain.tbm")
+        T.eq(UIElement3D.drawVisuals, original, "the game's drawing given back")
+    end)
+    UIElement3D = nil
+    assert(ok, err)
+end)
+
+run("a playable mod whose props never become real (no dynamic pool) still flies them", function(game)
+    game.files["../data/mod/ghosts.tbm"] = table.concat({
+        "#atmoplay v1 rule=1 radius=4",
+        "#@ env_obj ghost", "#@    shape box", "#@    pos 1 0 1", "#@    sides 0.4 0.4 0.4", "#@    flag 0",
+        "#@    thrust 1 0 15 0", "#@    prop_collide 0 0 1",
+    }, "\n")
+    local Runtime = startRuntime()
+    game.lm("ghosts.tbm")
+    local loaded = Runtime.state.loaded
+    T.ok(loaded ~= nil, "playable")
+    T.ok(loaded.dynamics ~= nil, "its props are run (they fly drawn)")
+    T.eq(#loaded.dynamics.entries, 0, "with no pool objects")
+    T.eq(game.options.replaycache, 2, "the replay cache left alone (no pool objects to misplace)")
 end)

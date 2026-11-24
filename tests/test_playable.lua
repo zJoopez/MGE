@@ -463,3 +463,22 @@ T.test("dynamic pool looks: each group's most common prop; the parking layout fi
     local top = Dynamics.PARK_Z + Dynamics.PLATFORM_SIDES[3] / 2
     T.near(spots[3][3], top + 0.5 + 0.01, 1e-9, "the sphere rests on it")
 end)
+
+T.test("a prop that never becomes real (prop_real 0) gets no dynamic pool object; the split check sees it", function()
+    smallMod()
+    Playable.setPlayable(true)
+    ModData.parsed.env_obj_joint = {}
+    ModData.refreshJointIds()
+    for _, obj in ipairs(ModData.parsed.env_obj) do obj.selected = obj.id == 2 or nil end
+    MGE.AtmoLayer.moveIn()
+    local before = Playable.poolSplitKey(ModData.parsed.atmo)
+    for _, obj in ipairs(ModData.parsed.atmo) do
+        if obj.props.flag == "0" then obj.props.prop_real = "0" end
+    end
+    T.ok(Playable.poolSplitKey(ModData.parsed.atmo) ~= before, "the split changed: the working copy reloads")
+    local _, props = Playable.colliders(ModData.parsed.atmo)
+    T.eq(#props, 1, "still a prop (it flies drawn)")
+    T.eq(props[1].noReal, true, "that never becomes real")
+    local _, plan = Playable.text(ModData.parsed, Atmo.currentText())
+    T.eq(#plan.dynamic, 0, "no dynamic pool object for it")
+end)

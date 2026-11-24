@@ -611,6 +611,245 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     World tab) came first and was dropped the same day.
     Speed (30 / 100 flying props, 5,000 static boxes): simple 0.15 / 0.48 ms a frame, shapes 0.68 / 2.1,
     full 0.80 / 2.7.
+  - **Optimized (2026-11-22, user: Full lost fps while CPU and GPU stayed under 30%: Lua runs on the game's
+    main thread, one core; scripts can't use threads or the GPU).** Profile (100 props, Full): box-box SAT 31%
+    (tables and closures a call), solver 33% (inertia turned into world axes on every call), static lookup
+    10% (a `seen` table a call), all pairs tried 8%; ~650 KB of garbage a frame. Now: contacts and touch points
+    pooled, SAT on upvalues, world inertia once a prop a frame, lookups stamped, pairs by a sweep along x
+    (tried in the order they used to be). ~48 KB a frame; 30 / 100 props: simple 0.09 / 0.29 ms, shapes 0.32 /
+    1.0, full 0.43 / 1.16 (about 2x). Results equal the old code to rounding (1e-16) until a contact flips on it
+    (piles are chaotic); fights still equal their replays (one code).
+  - `/atmoplay time`: 300 frames measured, then their cost: props (sim), their copies, the static pool and the
+    game drawing the atmo (UIElement3D.drawVisuals for Atmospheres.Globalid, wrapped while it measures).
+  - **Atmo Play draws the atmo (2026-11-22, user: on MGE the amount drawn drove fps; MGE draws only what's on
+    screen).** atmoplay/drawer.lua, `/atmoplay draw own` (default, atmoplay.cfg) or `game`. The game's atmo
+    draws every element every frame from Lua (UIElement3D display calls), seen or not. Own: the plain shapes
+    (box / sphere / pill with pos, rot, size, color, no_depth, min / max level) in one draw3d loop, by x / y
+    cells (16), a cell off screen skipped at once, then each shape (MGE's onScreen and its projection
+    measure); set_color only when the color changes (colors shared by line). The game keeps the header
+    (shader, opt) and models, count / random, rotate / move, drawfunc / framefunc, parents and their children,
+    size_dojo, queue_player and player lines (the cache atmo holds only those). Props are drawn where they are
+    (not while carried) and their copies aren't moved any more (Dynamics noCopies). Nothing while MGE runs.
+    Offline (dust2-5k, 5,293 boxes, draw calls stubbed): from the middle 1,217-1,847 drawn, ~1.0-1.2 ms of
+    Lua; looking across the whole map from a corner all 5,293 (2.2 ms). In game: to be measured
+    (`/atmoplay time` has an Atmo Play drawing line). Not yet: a draw distance (the corner view draws all).
+  - **Low fps (2026-11-22, user: capped at 30, props vanished mid flight).** Props run once a drawn frame; at 30 fps
+    more match frames pass between two. Fights decide every take and release themselves (fine); replays watch the
+    pool objects, and a let-go plus a take between two drawn frames never showed the object parked: the replay
+    kept it carrying the old prop, moved to the new one's place and hidden (gone mid flight), the new one left
+    flying. Fixed in observe: a carrying object farther than JUMP (1) + JUMP_SPEED (50) x the time since from where
+    its last seen velocity takes it was put there: a release (the old prop flies on from where it was last seen)
+    and a take; an appearing object is matched with flying props where they'd be now, with slack for its speed
+    over the skipped frames. Events keep the sim step they were made at (`sim`); rebuilds put them in place by it,
+    so a replay watched with skipped frames rewinds as it was watched. Tests: the swap seen every frame (the
+    fight's events, same steps), with the parked frames skipped, its rewind, a hard hit isn't a teleport. Left:
+    a take within ~1.4 of where the old prop was heading isn't seen as one.
+  - **A frame drawn late (2026-11-22, user: props that collided sometimes not drawn for a moment).** draw3d (the
+    props and the game's atmo copies) comes before draw2d, and in a replay the game has moved the pool objects to
+    the frame already: watched in draw2d, a prop let go was drawn by nobody for one frame (its object parked, the
+    prop still carried) and a taken one twice. Collisions swap props often, so they showed it. Replays are now
+    watched in pre_draw (before any drawing; the game's chat uses the hook), in Atmo Play and MGE's Playable;
+    fights stay in draw2d (their moves are recorded there). Dynamics.draw skips a frame it has seen, so draw2d's
+    call then only draws copies; /atmoplay time adds both calls up.
+  - **Every physics frame (2026-11-22, user: replays on Full: stacks still flickered before settling, props
+    overlapped while moving, test2.rpl too).** Watched only on drawn frames, a replay started a let-go prop's
+    flight from an older pose than the fight did; flights drifted from the fight's (piles amplify it), so the
+    recorded objects met props where the fight had them while they were drawn elsewhere. The probe log shows
+    the order: draw2d at t, enter_frame at t (same state), the step to t + 1; undrawn frames still get
+    enter_frame. Replays are now watched in enter_frame too (and pre_draw for drawn frames; a frame seen once is
+    skipped), in Atmo Play and MGE: every let-go and take at its own frame, flights as in the fight.
+    Still overlapping by design: drawn props don't meet carried ones (they're taken when near, if the pool has
+    an object free: test2 has 46 for 360 props), and fast props can pass through each other in one step (no
+    sweep). test2's props weigh 0.0001 against a 25 cube (250,000:1): ODE and the flight sim both handle such
+    ratios badly (light bodies pushed into each other, thrown very fast).
+  - **768 thrust props (2026-11-24, user: mge.tbm, 256 each of box / sphere / pill in three lanes, Full: a freeze
+    right before the game ends, play frames lose fps).** Offline (Lua 5.1, the real file, players away): a played
+    frame 4-7 ms on Full, 3-6 on Shapes; ghosts ~6 ms a draw (one predicted frame of 768 props is over PREDICT_MS on
+    its own). Profile: the contact solver ~38% (push, solve, relVel, resistance, prepare), the step's own loop 15%,
+    turning / orthonormalizing 10%, the pair sweep 9%, touch points 7%: no single hot spot. Done: a prediction is
+    kept while the flights follow it (`pr.base`; no take, release, rebuild or level change), so a turn's ghosts go on
+    from where the last turn's got: ghosts per 50-frame turn 575 -> 280 ms, results equal (test). The freeze isn't
+    explained yet (guess: many frames stepped in one draw at the end); `tools/atmoplay/probe_timing.lua` times every
+    props call and the gaps between draws in game (atmoplay_timing.log).
+    - Match end and replay start (user): offline the draws themselves don't spike there, but the Lua heap grew
+      with the match (live after a fight: 300 frames 19 MB, 1,000 42 MB, 2,000 76 MB), most of it snapshots
+      (53 MB, ~207,000 small tables at 2,000 frames: seven a prop every 50 frames) and the ghost prediction (a
+      position and a rotation table a prop and predicted frame). The GC walks all of it, more each cycle. Now: a
+      snapshot is one flat list of numbers (`SNAP` a prop), older than SNAPSHOT_RECENT (200) frames only every
+      SNAPSHOT_OLD-th (250) kept; the prediction's poses are numbers in a ring the ghost's size (`pr.ring`), its
+      rotation per frame only for non-spheres; a rewind or new fight frees the prediction (it stayed through a
+      whole replay). 2,000 frames: 76 -> 30 MB, a full GC 24 -> 5 ms (offline). Results unchanged (tests: rewinds
+      from thinned snapshots fly as the fight did). Ghosts stop at the match's end (`game_frame`) and show none
+      once it's over (the end screen held a full prediction). Toggles: `/atmoplay ghosts on | off`
+      (atmoplay.cfg), MGE Settings > Prop ghosts (config.cfg `propGhosts`). Left: the flights' CPU (~6 us a flying
+      prop a frame), which only fewer flying props cuts (a flight range around the players is the candidate).
+    - The end-of-game freeze (user, probe_timing in game, MGE, mge.tbm, 500 frames, ghosts off): 1,275 ms between
+      frames 499 and 500, our calls 17 ms of it; Lua memory 116 MB at frame 300, 213 MB at end_game, 73 MB by replay
+      frame 15. Garbage piled up through the match (~0.46 MB a played frame) and was collected at the end in one go
+      (no pool object at 0,0,0: not the physics). In game the props cost ~7 ms a played frame on Full (offline 4.6);
+      replays play ~63 frames a second against ~25 in fights, so the same cost is a bigger share there. Garbage cut
+      (offline, 768 props, Full: 592 -> 145 KB a played frame): a flight writes its rotation into one table of its
+      own (`fl.tb`, was a new 12-key table a frame for every turning prop; events copy it), fly() alternates two
+      flying lists emptied in place and keeps the moved list only when the game's atmo copies are moved (`draw game`).
+      Left: each flying prop's new pos table a frame (~70 KB; "did it move" checks compare tables), MGE's own ~1 MB a
+      second while a turn waits (not looked into). probe_timing no longer counts a call inside another twice.
+    - Second run (same setup, two fights, the second with ghosts): the end freeze is the same (1,298 / 1,280 ms, ours
+      8 ms) but Lua memory doesn't drop across it (212.9 -> 213.7 -> 215.1 MB): not a collection, the first reading
+      was wrong. The game's own end-of-match work (engine or its scripts; no game script calls collectgarbage);
+      a run without MGE / Atmo Play on the same mod tells whether the props' 48 pool objects or the atmo are part of
+      it. Ghosts cost 190-390 ms a second there, more than playing the props: a take restarted the whole prediction,
+      and props near the players are taken every turn. Now only a release that starts a flight, a rebuild or a new
+      level does (`s.flightStarts`; a taken prop's ghost is the game's own, drawGhosts skips it, and drawn flights
+      never met it): offline, players in the props' path, 10-frame turns: 13 -> 3 predictions in 20 turns, 440 ->
+      153 ms of ghost work a turn.
+    - Third run (after a restart: no bad freeze at the end any more; the match start and a new game still heavy):
+      the first ~50 frames cost ~15 ms each in game (all 768 props tipping on the ground: the solver is 57% there,
+      17% later), and ghosts took 200-260 ms a second through the whole fight (a prediction step for all 768 props
+      every draw of each turn's wait). A new game: 127 ms (ghosts' first prediction 69, MGE's updateSource 19,
+      onMatchBegin 16). Changes (user: ~100 ghosts are enough; cheaper "did it move"):
+      - MAX_GHOSTS 100, and only those are predicted: the nearest the camera, on screen first, picked again when the
+        camera moved more than GHOST_RECENTER (4). Their ghosts pass through the flying props left out. Offline ghost
+        work a turn: 153 -> 18 ms.
+      - A flight moves one position table of its own in place (`fl.posBuf`, made at its first step, never the atmo's
+        or an event's) and counts `prop.moves`; drawn copies and movedProp compare the count as well as the tables.
+        Events copy pos as they do rot. Carried props: get_obj_rot compared before it's copied (a new 12-key table a
+        frame for each carried prop at rest); the step's candidate list and set kept between frames. Garbage a
+        played frame (offline, 768 props, Full): 145 -> 49 KB (592 at the start of the day); 3.07 -> 2.74 ms.
+      - The solver's later rounds stop once a round changes the impulses by less than SETTLE (1e-7 N s): results
+        unchanged. A relative stop (a share of the first round's change) was tried: 0.01 changed nothing and saved
+        5%, 0.03+ made the box travel 8-17% short against the recorded real one: dropped. The early frames' cost
+        is real contact work; only fewer flying props cuts it (a flight range).
+  - **Replay of a 200,000:1 hit (2026-11-24, user: MGE working copy, thrust cubes of mass 20 / 25 into walls of
+    0.0001 props; in the replay view the cubes slid through and props vanished "about where we entered the replay").**
+    Probe `tools/atmoplay/probe_replay.lua` + `compare_replay.lua` (fight against each replay viewing, frame by frame).
+    The replay equals the fight exactly over its 50 recorded frames (cubes, pool objects, which prop each carries;
+    replay cache off) and plays on in the unrecorded frames with all 30 props carried. Sliding through is the mass
+    ratio: the cube keeps 29.6 of 29.64 per second through both walls, and props go from still to 25-33 per second in a frame or two
+    (two thrown at 200-240 per second). The vanishing isn't in the positions: suspected the game putting the
+    pool objects back to their file color (alpha POOL_ALPHA) where the recording ends, as it reset other things
+    there before. Replays now paint a carrying object again whenever its color isn't its prop's (`keepDressed`;
+    nothing set while it is). User: that fixed it but for a one-frame flash; checked first on new frames only (in
+    observe), now on every replay draw call (pre_draw, enter_frame, draw2d), the same frame drawn again too. The
+    probe's alpha is read after the repaint, so it can't show the reset itself.
+  - **Move predictions for drawn props (2026-11-24, user: see if a thrust is right while editing, and match the
+    game's ~100-frame object ghosts in play).** `Dynamics.drawGhosts` (Atmo Play's draw3d, MGE's through
+    `Playable.drawGhosts` in highlight.lua: the Atmo list and F1 only, user: fewer draws): each flying prop drawn faint (its color x the
+    `ghostopacity` option) where its flight is at the frame the game's ghost shows: the classic ghost
+    plays the next `get_ghost_length()` frames in a loop, `get_ghost_frame()` gives its frame and fade (our own
+    loop at GHOST_LOOP_FPS without it). A first version showed betterghost's still turn-end pose instead, and
+    nothing on frame 0 (`match_turn_frame` is 0 there, user 2026-11-24: the editing view needs it). Shown only in fights, with `get_ghost()` and `ghostenvobj` on, once the
+    match frame has held GHOST_STILL (0.25 s: frames playing hide it). The prediction (`Flight.newPrediction` /
+    `predictStep` / `predictedPose`) steps copies of the flights (a prop's fields, its own pos and flight; the
+    world's caches its own; Full's wakes on copies), PREDICT_MS (2) of each drawn frame, the ghost at the farthest
+    frame reached until it's done; made again when the flights move on (frame, events, `s.epoch` from clear, level).
+    Test: a rocket hitting a crate on Full, predicted at frame 0 = flown, every frame (1e-9).
+    Fixes (user, 2026-11-24, many props: "only ~300 get a ghost, white towards the end"): MAX_GHOSTS (256) took the
+    first in atmo order, on screen or not; now only on-screen ones (the hosts' view checks: Drawer.onScreen,
+    highlight's onScreen) and past the cap the nearest the camera. Colors clamped to 0-1 as MGE draws props (a
+    color line goes up to 2; passed as is, set_color washed it out). The white is otherwise unexplained: the
+    ghost's alpha also falls with the game's loop fade. Draw order (user: a ghost shouldn't take priority over its
+    prop): ghosts were drawn before the props (MGE: before drawAtmo; Atmo Play: before its own drawing), so a
+    see-through ghost on or in front of a prop filled the depth first and the prop showed faded through it (likely
+    the whitish look too). Now drawn last in both, and GHOST_SHRINK (0.01 off the sides, half on radii) keeps a ghost
+    on its prop inside it, also under "draw game", where the game's atmo copies' order isn't ours. Not covered: carried
+    props (their pool object has the game's own ghost, which doesn't know the script's thrust pushes), players
+    (props become real near them). Unchecked in game: that ghost frames count from the current frame, and the
+    GHOST_STILL (0.1 s, after frames played; a new state shows at once) for "the turn waits".
+  - **Real against drawn (2026-11-24, user: modmaker/mge.tbm, a real box, sphere and cylinder with thrust 1 0 2 0 0
+    beside atmo copies; the copies seem to bounce more).** Probe: `tools/atmoplay/probe_dynamic.lua` (wraps
+    Dynamics.draw / matchBegin, Atmo Play or MGE; logs each pair every frame to `atmoplay_dynprobe.log`, echoes a
+    summary at end_game) and `tools/atmoplay/compare_dynamic.lua` (the full report, Lua 5.1). Result (MGE, Full,
+    600 frames; its 8 replay viewings equal the fight exactly): the sphere rolls as the game's (0.004 apart after
+    93 units). Box and cylinder tumble the same way, about as much off the ground and with the same mean spin,
+    for ~150 frames (0.25 apart at 150 / 113), then part (> 1 at 230 / 199): tumbling under a constant 2 g push
+    is chaotic, and the real box and cylinder came within 0.64 of each other at ~200 where the drawn ones didn't.
+    Over the whole fight the drawn box flew higher (mean lift 1.04 vs 0.40, one hard landing at 400), the
+    cylinder didn't (0.65 vs 0.66). Not restitution (e = 0 at bounce 0.1): landings turn more forward speed
+    into spin in the sim (box +16 / +20 rad/s against the game's +8 / -2), and a faster-spinning box vaults
+    higher off its edge. Judged not worth a fix from one run; a control (two real copies 0.001 apart: how fast
+    the game's own physics parts) would show whether the sim parts any faster.
+    - Run 2 (user: each copy on its real object, the pairs 5 apart, nothing touching; 600 frames): sphere exact
+      (0.004). Box: travels the same (75.4 / 74.9), 0.25 apart at 150, 5.5 at 600; lift 4.0 against 2.0 but
+      fewer frames in the air (457 / 499). Cylinder: systematically slow (79.6 / 89.6 travelled, less spin).
+      The flights replayed offline against the log (scratch harness: same code reproduces the in-game drawn
+      numbers to 0.0000; all three only touch the ground) show why: the pill's inertia was the box around it,
+      ~1.5x ODE's capsule (dMassSetCapsule: cylinder r, l plus two half spheres). With ODE's formula the
+      cylinder travels 89.3 / 89.6 and is 0.15 apart at 200, 1.5 at 600 (was 1.0, 10.2). The box can't be
+      tuned: MU 1-100, 4-16 solver rounds and PUSH 0.2-1 all follow it equally for ~150 frames, then its peak
+      lift scatters from 0.67 to 3.99 on tiny changes (the game's 2.04 inside): chaos, not a bias. MU 0.5
+      slides instead of tipping (wrong).
+  - **Debug log of an owo replay (2026-11-22):** 1,111 frames, none skipped; 212 times a pool object left its
+    parking spot, 208 matched to a prop, 4 not (frames 149, 303, 328, 394), no teleports. With every frame
+    watched, a miss means the replay's drawn flights weren't where the fight's were: a replay recorded with
+    other code (the optimization changed rounding; piles are chaotic) or another flight level. A miss left the
+    object in the faint pool color (a hole) with its prop drawn elsewhere. Now: no prop within the usual
+    slack, the nearest free prop of its group within MATCH_FAR (4) is taken (the prop shows where its object
+    is); misses are counted (`/atmoplay` status) and written to the debug log (`replay take: ...`).
+  - **Drawn against real (2026-11-22, user: a tipped cube inside another).** Drawn props never collide with real
+    objects: a real one that moves makes the drawn ones it touches real (chain), if the pool has an object free.
+    "Moves" counted only its center's speed: a cube tipping over (center slow, corners fast) pulled nothing in
+    and sank into its neighbour. Now its fastest point: speed + spin x radius > MOVING. Still by design: a full
+    pool, and drawn props meet carried ones only by becoming real (no drawn-against-real contact: it would need
+    every carried pose per frame kept for rewinds).
+  - **The replay fixes, reviewed:** pre_draw and enter_frame are the real fixes (every frame watched, before
+    drawing). Events' `sim` and the teleport check matter when frames are still missed (a seek ahead in the
+    replay, enter_frame not run); prediction in matching is harmless. MATCH_FAR only papers over replays whose
+    flights drifted (other code or level): the one to drop if it ever takes the wrong prop.
+  - **Thrust differed from a real object (2026-11-22, user: New atmo box, thrust 1 0 15 0 world).** Not the pushes
+    (one-step forces, measured, both): the mass. MGE's New object writes mass 0.1, New on the Atmo list wrote no
+    mass and the flight sim took 1: a tenth of the push. Now a prop without a mass line flies with its pool
+    object's mass read from the game (get_obj_mass: the game's default, whatever it is), and the Atmo list's New
+    writes New's mass 0.1 too. Friction is still a model: the sim holds a box still under pushes below ~2 g
+    (Coulomb, MU 2); the game's grip measured as a slowdown of ~11% a frame, which may let it creep.
+  - **Generated shapes (2026-11-22, user: Generate on the Atmo list, thrust on every piece, the shape broke apart
+    at once).** Generate's atmo pieces overlap (6 boxes 0.5 wide, 0.18 apart) and have no joints: separate props.
+    On Full they pushed each other apart from frame 1. Now props that overlap where the map places them never
+    push each other (Flight.overlap: separating axes for boxes, points otherwise; dynamics.lua sets prop.ignore
+    by pair): all 15 pairs, the shape holds while drawn (offline: layout unchanged after 10 frames on Full). And a
+    prop can pass through all other props: `prop_hits 0` (MGE: Atmo list > Advanced > Prop hits; the game's
+    atmo skips the line), still hitting the static atmo and the ground. Real objects always collide (no flag
+    turns it off): overlapping pieces part once they're real. Holding a shape real needs jointed assemblies
+    (Future ideas).
+  - **Code review fixes (2026-11-22):** a carried thrust prop gets the pushes of frames not drawn (e.pushedTo: as
+    many pushes' force in one step); props are always drawn by Atmo Play with `draw own` (rcolor, size_dojo...
+    left them frozen in the game's atmo); another atmo loaded or unloaded by the player stops our drawing; a
+    rebuild lists the props it puts back in the grid before flying again (Full: rewinds found still props in
+    their home cells); alpha 0 drawn by nobody (as UIElement3D); an error in our drawing gives the whole atmo back
+    to the game (this session); leaving a playable mod ends `/atmoplay time`.
+  - **Real hits (2026-11-22, user):** `prop_real 0` (MGE: Atmo list > Advanced > Real hits) makes a prop that
+    never becomes real: never wanted or taken (fights) nor matched (replays), so players and real objects pass
+    through it; it still flies drawn, hits the static atmo and (Prop hits) other props, and is listed in the
+    grid for wakes (prop.listed; prop.grouped is now "can get an object"). MGE plans no dynamic pool object
+    for it, and the split check counts it apart (toggling reloads the working copy). The Advanced tab's
+    Depth, Graphics and Kept rows went (their lines stay as written).
+  - **Collision (2026-11-22, user: with Real hits off thrust stopped; one row of toggles instead).** The bug: a
+    mod whose props all never become real has no dynamic pool, and both Atmo Play and MGE ran props only with
+    one: nothing flew. Now props run whenever there are props (no pool: drawn only; the replay cache is left
+    alone then). The Advanced tab's Prop hits and Real hits became one **Collision** row: Player, Dynamic,
+    Atmo, saved as `prop_collide <player> <dynamic> <atmo>` (no line: all on; prop_real 0 / prop_hits 0 still
+    read). Player / Dynamic choose what a prop becomes real for (near players; near the mod's dynamic objects
+    and carried props): a real object collides with everything real, the game can't filter that. Both off:
+    never real, no pool object. Atmo: the drawn flight hits other props.
+  - **1.7k flying props (2026-11-22, user: modmaker/mge, 1,726 thrust boxes in a line along y, Full slow).**
+    Offline through Dynamics (fake world): Full 101.6 ms a frame, Shapes 9.4. Fixes: the pair sweep runs along
+    the axis the props spread most on (along x every prop of a line along y overlapped: 1.5 M pair checks) and
+    keeps last frame's order (insertion sort, ties by atmo index: the same from any start); props with Atmo off
+    aren't swept and don't look for still props to wake; no wake search when no listed prop is still; touch
+    points and world inertia worked out only when a contact needs them (ptsOf / inertiaOf, once a frame); the
+    flight list sorted only when it isn't; a cheap distance check before the gap test against carried props.
+    Now Full 9-13 ms, Shapes 5.0, Simple 5.3. Also a fix: fly() put moved props in the grid only after all the
+    frames of a call; a fight with skipped draws steps several frames a call, its replay one, and Full's wakes
+    could differ: now after every step (test: a fight drawn every third frame equals its replay).
+  - **2.6k rolling spheres (2026-11-22, user: modmaker/mge, 2,592 thrust spheres along y, slow while frames
+    play, worst on Full).** All on the ground: a contact each every frame, 8 solver rounds each, their
+    rotations turned. Now: a prop's only contact against the ground / static atmo is solved in round 1 alone (no
+    other contact moves it: later rounds change nothing), later rounds only the rest; a sphere's rotation isn't
+    kept up (it looks the same; spin and its isotropic inertia still roll it) unless a thrust on its own axes
+    needs it; its world inertia is the constant; the sweep keeps its per-prop values in stamped fields (no
+    tables a frame); no static atmo: no lookups. Full 22.3 -> 12.7 ms a frame, Shapes 18.7 -> 9.8, Simple
+    17.1 -> 9.9. MGE: a moved prop's ghost was a new pose, frame and ghost copy a frame (and a new rotation in
+    Highlight); now Dynamics.movedPose gives the prop's own pos and rotation, one ghost per prop is updated in
+    place and drawn with the rotation as it is (rotTB).
   - All flights step together a frame at a time (Flight.step, atmo order), after the carried objects are read
     (step and observe in the same order). A flying prop near a carried one is wanted (chain tier): drawn
     flights don't meet carried props, the game does once it's real.

@@ -471,7 +471,8 @@ assetsView.addAtmo = addAtmo -- Generate on the Atmo list (ui/editor_generate.lu
 ---New on the Atmo list: a default box in front of the camera, in the atmo (its look lines only)
 function assetsView.newAtmo()
     local all = assetsView.defaultProps()
-    local props = { shape = all.shape, pos = all.pos, rot = all.rot, sides = all.sides, color = all.color }
+    -- its mass too: the game's atmo skips the line, Atmo Play flies a prop (Static off) with it, as heavy as New's object
+    local props = { shape = all.shape, pos = all.pos, rot = all.rot, sides = all.sides, color = all.color, mass = all.mass }
     addAtmo({ { kind = "atmo", id = 1, props = props } }, true)
 end
 

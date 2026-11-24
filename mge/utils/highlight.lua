@@ -53,16 +53,19 @@ local rotCache = setmetatable({}, { __mode = "k" })
 ---@param color number[]
 ---@param fillAlpha number
 ---@param outline boolean?
-function Highlight.drawBox(box, color, fillAlpha, outline)
+---@param grow number? added to each side of the fill (drawGhost's GROW)
+function Highlight.drawBox(box, color, fillAlpha, outline, grow)
     local p, s, c = box.pos, box.sides, color
-    local rot = rotCache[box.frame]
+    grow = grow or 0
+    -- a moved prop's rotation as draw_box_m takes it (Playable.movedGhost), else its frame's, converted once
+    local rot = box.rotTB or rotCache[box.frame]
     if not rot then
         rot = toMatrixTB(box.frame)
         rotCache[box.frame] = rot
     end
     if fillAlpha > 0 then
         set_color(c[1], c[2], c[3], fillAlpha)
-        draw_box_m(p[1], p[2], p[3], s[1], s[2], s[3], rot)
+        draw_box_m(p[1], p[2], p[3], s[1] + grow, s[2] + grow, s[3] + grow, rot)
     end
     if outline ~= false then
         set_color(c[1], c[2], c[3], 1.0)
@@ -106,24 +109,32 @@ end
 ---@param c number[]
 ---@param alpha number
 ---@param outline boolean
-local function drawGhost(g, c, alpha, outline)
+---@param grow number? this much larger (sides; a sphere's or pill's radius by half): GROW on the Atmo list
+local function drawGhost(g, c, alpha, outline, grow)
     local p, s = g.pos, g.sides
+    grow = grow or 0
     if g.shape == "box" then
-        Highlight.drawBox(g, c, alpha, outline)
+        Highlight.drawBox(g, c, alpha, outline, grow)
         return
     end
-    local rot = rotCache[g.frame] -- like drawBox: the ghost keeps its frame
+    local rot = g.rotTB or rotCache[g.frame] -- like drawBox: the ghost keeps its frame
     if not rot then
         rot = toMatrixTB(g.frame)
         rotCache[g.frame] = rot
     end
     set_color(c[1], c[2], c[3], alpha)
     if g.shape == "sphere" then
-        draw_sphere_m(p[1], p[2], p[3], s[1], rot)
+        draw_sphere_m(p[1], p[2], p[3], s[1] + grow / 2, rot)
     else -- pill: x radius, y length
-        draw_capsule_m(p[1], p[2], p[3], s[2], s[1], rot)
+        draw_capsule_m(p[1], p[2], p[3], s[2], s[1] + grow / 2, rot)
     end
 end
+
+-- The Atmo list draws atmo shapes this much larger (sides; 0.005 a face): an atmo object exactly where a real one
+-- is (a copy on its original) has the same surfaces, the game draws the (see-through) real one first and it still
+-- fills the depth, so the atmo one lost and only the faint real one showed. Less than the selection highlight's
+-- own margin (0.01-0.02)
+local GROW = 0.01
 
 ---The selection highlight on a shape: a translucent fill slightly larger than it, then a bigger
 ---inverted shell that reads as an outline (2 draws). fillOnly: the fill alone (1 draw), when the
@@ -188,6 +199,16 @@ local function onScreen(g)
     return x + sr >= 0 and x - sr <= WIN_W and y + sr >= 0 and y - sr <= WIN_H
 end
 
+-- the props' ghosts (Playable.drawGhosts) through onScreen, one table reused
+local ghostProbe = { pos = { 0, 0, 0 }, radius = 0 }
+
+---Whether a prop's ghost at x y z (bounding radius r) can show this frame
+local function ghostOnScreen(x, y, z, r)
+    local p = ghostProbe.pos
+    p[1], p[2], p[3], ghostProbe.radius = x, y, z, r
+    return onScreen(ghostProbe)
+end
+
 ---Atmo objects (utils/atmo_layer.lua): not in the game, MGE draws them, every one. The atmo's size
 ---(AtmoLayer.maxAtmo, 256) has its own share of the shapes the game draws a frame: 256 objects, 256
 ---atmo objects and 256 for the highlights (Highlight.drawRoom)
@@ -221,11 +242,12 @@ local function drawAtmo(full, plain)
         if g and live and selected then g = AtmoLayer.liveGhost(g, live) end
         if g and onScreen(g) then
             local c = colorOf(atmoObj)
+            local grow = not plain and GROW or 0 -- F1's play view: as in game
             if selected then
                 -- see-through ones too: a selected box is never fainter than SELECTED_ALPHA
-                drawGhost(g, Highlight.color, math.max(c[4], SELECTED_ALPHA), false)
+                drawGhost(g, Highlight.color, math.max(c[4], SELECTED_ALPHA), false, grow)
             else
-                drawGhost(g, c, c[4], false)
+                drawGhost(g, c, c[4], false, grow)
             end
         end
     end
@@ -440,5 +462,12 @@ add_hook("draw3d", MGE.hookname, function()
     if not ok and not Highlight.errorShown then -- report once instead of spamming every frame
         Highlight.errorShown = true
         MGE.say("highlight error: " .. tostring(err))
+    end
+    -- a playable mod's flying props: their ghosts (where the turn takes them), on the Atmo list (the other lists don't
+    -- edit props: fewer draws) and in the play view (F1, as in game). Last: drawn before the props, a see-through
+    -- ghost in front of (or on) its prop filled the depth first and the prop showed faded through it
+    local ghosts = not Main.window.displayed or Main.listTab == "atmo"
+    if ghosts and not MGE.isPlacing() and MGE.Playable and MGE.Playable.drawGhosts then
+        MGE.Playable.drawGhosts(ghostOnScreen) -- catches its own errors
     end
 end)

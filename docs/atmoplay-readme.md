@@ -23,6 +23,11 @@ Commands: `/atmoplay` (status), `/atmoplay reload` (read the mod again), `/atmop
 `/atmoplay flight [simple | shapes | full]`: how props fly while no pool object carries them, for your
 computer. `simple` flies them as spheres (the least work), `shapes` (default) with their real shapes, `full`
 with real shapes that also hit each other (the most work). Kept in `atmoplay.cfg`, used from the next fight.
+`/atmoplay time` measures the next 300 frames and says what they cost: the props, moving their drawn copies,
+the static pool, Atmo Play's drawing and the game drawing the atmo.
+`/atmoplay draw [own | game]`: who draws the atmo. `own` (default): Atmo Play draws its plain boxes, spheres and
+pills, only those on screen; the game keeps models, animated, random and scripted objects. `game`: the game
+draws every object, as before. Kept in `atmoplay.cfg`.
 
 ## Replays
 

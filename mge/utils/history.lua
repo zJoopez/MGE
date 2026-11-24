@@ -165,7 +165,9 @@ local function applyLive(parsed)
             end
             if p.color then
                 local v = parseNumbers(p.color)
-                set_obj_color(id, v[1] or 1, v[2] or 1, v[3] or 1, v[4] or 1)
+                -- see-through while the Atmo list shows (AtmoLayer keeps this color to put back)
+                local setColor = MGE.AtmoLayer and MGE.AtmoLayer.setObjectColor or set_obj_color
+                setColor(id, v[1] or 1, v[2] or 1, v[3] or 1, v[4] or 1)
             end
             if p.mass then
                 set_obj_mass(id, math.max(tonumber(p.mass) or 1, 0.0001)) -- zero mass breaks physics

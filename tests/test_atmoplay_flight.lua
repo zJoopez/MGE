@@ -295,3 +295,26 @@ T.test("levels: known ones kept, anything else the default", function()
     T.eq(Dynamics.level("fast"), Dynamics.DEFAULT_LEVEL, "unknown")
     T.eq(Dynamics.level(nil), "shapes", "default: shapes")
 end)
+
+T.test("overlap: boxes crossing (no corner inside) overlap, touching faces don't", function()
+    local rotated = { shape = "box", sides = { 0.5, 0.5, 0.5 }, pos = { 0.18, 0, 0 }, radius = 0.433,
+        frame = Colliders.frameOf({ 0, 30, 0 }) }
+    local plain = { shape = "box", sides = { 0.5, 0.5, 0.5 }, pos = { 0, 0, 0 }, radius = 0.433, frame = Colliders.frameOf({ 0, 0, 0 }) }
+    T.ok(Flight.overlap(plain, rotated), "crossing")
+    local beside = { shape = "box", sides = { 0.5, 0.5, 0.5 }, pos = { 0.5, 0, 0 }, radius = 0.433, frame = Colliders.frameOf({ 0, 0, 0 }) }
+    T.ok(not Flight.overlap(plain, beside), "faces touching: not overlapping")
+    local ball = { shape = "sphere", sides = { 0.3, 0.3, 0.3 }, pos = { 0.4, 0, 0 }, radius = 0.3, frame = Colliders.frameOf({ 0, 0, 0 }) }
+    T.ok(Flight.overlap(plain, ball), "a sphere into a box")
+end)
+
+T.test("prop hits off: flying props pass through, still hit the ground", function()
+    local w = Flight.newWorld({}, { 0, 0, -9.82 })
+    local a, b = prop({ -2, 0, 5 }), prop({ 2, 0, 5 })
+    a.index, b.index, a.noHits = 1, 2, true
+    a.flight.vel, b.flight.vel = { 5, 0, 0 }, { -5, 0, 0 }
+    run(w, { a, b }, 100, true)
+    T.ok(a.pos[1] > b.pos[1], "through each other")
+    local c = prop({ 0, 0, 2 }, { noHits = true })
+    Flight.advance(w, c, 600)
+    T.near(c.pos[3], 0.25, 0.01, "on the ground")
+end)

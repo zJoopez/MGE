@@ -1,32 +1,34 @@
--- The Atmo list's own rows on its Advanced tab (the objects' Advanced panel, ui/editor_advanced.lua: Friction,
--- Bounce, Hardness and Flags first; rows 4-6 here, where the objects have Model and Ids). The lines atmos have
--- and objects don't, and the lines MGE keeps without editing them:
---   Depth:    drawn over everything (no_depth 1), or normally
---   Graphics: the game's graphics levels it's drawn at, min and max (0 lowest - 2 highest)
---   Kept:     only when the selected ones have such lines: how many other lines they keep (count, randompos,
---             rotate, parent...), written back as they are, MGE draws such objects as their plain shape
+-- The Atmo list's own row on its Advanced tab (the objects' Advanced panel, ui/editor_advanced.lua: Friction,
+-- Bounce, Hardness and Flags first; row 4 here, where the objects have Model and Ids): how a prop (Static off) meets
+-- things in Atmo Play, `prop_collide <player> <dynamic> <atmo>` (the game's atmo skips the line):
+--   Collision: Player / Dynamic: it becomes real (a pool object carries it) near players / near real dynamic objects
+--              (a real one collides with everything real); both off: never real, needs no pool object.
+--              Atmo: flying drawn, it hits the other props (else passes through them)
+-- Other atmo lines (no_depth, min_level, count, rotate, parent...) aren't edited here: kept as they are.
 -- Playable (the whole mod) is on the World tab (ui/editor_misc.lua).
 -- Atmo objects aren't in the .tbm: changes here are an undo step, no reload.
 local Rows = MGE.EditorRows
 local ModData = MGE.ModData
 local History = MGE.History
-local inputs = Rows.inputs
 local sharedChoice = Rows.sharedChoice
 
--- the lines atmo objects use that MGE edits (the Core and Advanced tabs): every other one is kept as it is
-local EDITED = { shape = true, pos = true, rot = true, sides = true, color = true, no_depth = true,
-    min_level = true, max_level = true, mass = true, visible = true, friction = true, bounce = true,
-    hardness = true, flag = true,
-    mge_was_object = true } -- Playable's mark (AtmoLayer.FROM_KEY), not for editing
+local Colliders = MGE.AtmoPlay.Colliders
 
----Writes a line on the selected atmo objects (nil: removes it), one undo step when one changed
----@param key string
----@param value string?
-local function setLine(key, value)
+---Turns one Collision toggle (1 player, 2 dynamic, 3 atmo) on or off on the selected atmo objects: one
+---prop_collide line (none when all are on; the older prop_hits / prop_real lines go), one undo step
+---@param which integer
+---@param on boolean
+local function setCollision(which, on)
     local changed = false
     for _, obj in ipairs(ModData.getSelectedAtmo()) do
-        if obj.props[key] ~= value then
-            obj.props[key] = value
+        local t = { Colliders.collision(obj.props) }
+        t[which] = on
+        local line = nil -- all on: no line
+        if not (t[1] and t[2] and t[3]) then
+            line = string.format("%d %d %d", t[1] and 1 or 0, t[2] and 1 or 0, t[3] and 1 or 0)
+        end
+        if obj.props.prop_collide ~= line or obj.props.prop_hits or obj.props.prop_real then
+            obj.props.prop_collide, obj.props.prop_hits, obj.props.prop_real = line, nil, nil
             changed = true
         end
     end
@@ -35,73 +37,28 @@ local function setLine(key, value)
     Rows.afterAtmoEdit()
 end
 
----Graphics row: the typed min / max levels (0-2), an empty field keeps each object's own. The game's
----defaults (0 and 2) aren't written
-local function setLevels()
-    local typed = Rows.readInputs(inputs.atmoLevels)
-    local changed = false
-    for _, obj in ipairs(ModData.getSelectedAtmo()) do
-        for i, key in ipairs({ "min_level", "max_level" }) do
-            local value = typed[i]
-            if value then
-                value = math.max(0, math.min(2, math.floor(value + 0.5)))
-                local line = (value ~= (i == 1 and 0 or 2)) and tostring(value) or nil
-                if obj.props[key] ~= line then
-                    obj.props[key] = line
-                    changed = true
-                end
-            end
-        end
-    end
-    if not changed then return end
-    History.commit()
-    Rows.afterAtmoEdit()
-end
-
----Depth, Graphics and Kept rows, rebuilt with the selection; nothing on the Objects list (Model and Ids there)
+---Collision row, rebuilt with the selection; nothing on the Objects list (Model and Ids there)
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[] the selected atmo objects (ModData.getEditSelection on the Atmo list)
 local function buildAtmoRows(holder, selected)
     Rows.begin()
-    if not Rows.atmoShown() then
-        inputs.atmoLevels = {}
-        return
+    if not Rows.atmoShown() then return end
+    -- each toggle lit when every selected one has it on; a click sets it for all of them (on when it wasn't lit)
+    local items = {}
+    for which, label in ipairs({ "Player", "Dynamic", "Atmo" }) do
+        local lit = sharedChoice(selected, function(obj) return (select(which, Colliders.collision(obj.props))) end)
+            == true
+        items[which] = { label = label, active = lit, onClick = function() setCollision(which, not lit) end }
     end
-    Rows.createChoiceRow("Depth", holder, {
-        { label = "Normal", value = false },
-        { label = "On top", value = true },
-    }, sharedChoice(selected, function(obj) return obj.props.no_depth == "1" end),
-        function(onTop) setLine("no_depth", onTop and "1" or nil) end,
-        "On top: drawn over everything, even what's in front\n(no_depth 1).")
-    local function level(key, default)
-        return sharedChoice(selected, function(obj) return tostring(tonumber(obj.props[key]) or default) end)
-            or tostring(default)
-    end
-    inputs.atmoLevels = Rows.createInputRow("Graphics", holder, setLevels, { level("min_level", 0), level("max_level", 2) },
-        "Lowest and highest graphics level it's drawn at\n(0-2): keeps detail off slower computers.", nil, { whole = true })
-    -- the other lines (count, randompos, rotate, parent...): kept, not edited, not drawn as the game does
-    local kept, keys = 0, {}
-    for _, obj in ipairs(selected) do
-        for key in pairs(obj.props) do
-            if not EDITED[key] then
-                kept = kept + 1
-                keys[key] = true
-            end
-        end
-    end
-    if kept == 0 then return end
-    local names = {}
-    for key in pairs(keys) do names[#names + 1] = key end
-    table.sort(names)
-    Rows.createToggleButtonRow("Kept", holder, {
-        { label = kept .. " lines: " .. table.concat(names, ", "), active = false, onClick = function() end },
-    }, "Lines MGE doesn't edit (count, randompos, parent...),\nsaved as they are.")
+    Rows.createToggleButtonRow("Collision", holder, items,
+        "Props (Static off) in Atmo Play. Player / Dynamic:\nbecomes real near players / real dynamic objects\n" ..
+        "(real, it collides with everything real). Both off:\nnever real, needs no pool object. Atmo: flying\n" ..
+        "drawn, it hits other props. Overlapping ones\nnever push each other apart.")
 end
 
 ---@type EditorPanelModule
 return {
     blocks = {
-        { name = "atmoRows", build = buildAtmoRows, panel = "advanced", row = 4, rows = 3 },
+        { name = "atmoRows", build = buildAtmoRows, panel = "advanced", row = 4, rows = 1 },
     },
-    inputs = { rebuilt = { "atmoLevels" } },
 }

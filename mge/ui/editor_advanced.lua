@@ -217,7 +217,7 @@ return {
     blocks = {
         { name = "advancedProps", build = buildAdvancedProps, panel = "advanced", row = 0, rows = 3 },
         { name = "flags", build = buildFlags, panel = "advanced", row = 3, rows = 1 },
-        -- objects only; the Atmo list has its rows 4-6 (ui/editor_atmo.lua)
+        -- objects only; the Atmo list has its rows 4-5 (ui/editor_atmo.lua)
         { name = "model", build = buildModel, panel = "advanced", row = 4, rows = 1 },
         { name = "ids", build = buildIdRow, panel = "advanced", row = 5, rows = 1 },
     },
