@@ -160,7 +160,7 @@ local function build()
     y = y + UI.ROW_H + UI.GAP
     -- the nearest this many atmo shapes a frame: steadier fps on big maps
     local draws = {}
-    for i, n in ipairs({ 5000, 1000, 500, 250 }) do
+    for i, n in ipairs({ 5000, 1000, 500 }) do
         draws[i] = { tostring(n), Runtime.setMaxDraws, n, function() return settings.maxDraws == n end }
     end
     choiceRow(content, y, "Max draws", draws, c)

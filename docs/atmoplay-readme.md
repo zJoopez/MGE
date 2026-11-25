@@ -31,7 +31,7 @@ which opens it again:
   wait where they are until someone comes near: less work on big maps. Neither starts a prop: ones the
   map's maker didn't set Active stay still until something reaches them.
   Used from the next fight; replays pause the same props at the same frames.
-- **Max draws**: at most 5000 / 1000 (default) / 500 / 250 atmo shapes a frame, the nearest. Lower keeps big
+- **Max draws**: at most 5000 / 1000 (default) / 500 atmo shapes a frame, the nearest. Lower keeps big
   maps' fps steady; low graphics settings can show more.
 - **Quit Atmo Play**: stops it and gives you your own atmo back.
 

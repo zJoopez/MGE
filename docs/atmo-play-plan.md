@@ -643,10 +643,24 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     drawCopies / restoreCopies, noCopies; MGE never used them), the draw fallback (an error is said once, drawing
     goes on) and `/atmoplay draw`. An old `draw` line in atmoplay.cfg is ignored.
     Max draws (2026-11-25, user tested in game: 1000 on max graphics drew no fewer shapes but gave much steadier fps;
-    past ~5k fps drops fast): the nearest N shapes a frame, 5000 / 1000 (default) / 500 / 250. Atmo Play's window
+    past ~5k fps drops fast): the nearest N shapes a frame, 5000 / 1000 (default) / 500 (250 dropped: 500 is safe on every graphics setting). Atmo Play's window
     and atmoplay.cfg `maxdraws`; MGE's Settings > Max draws (config `maxDraws`, AtmoLayer.maxDraws). MGE's atmo size
     limit (maxAtmo, Settings > Max atmo objects, the "no atmo room" checks) is gone; Generate adds at most
     AtmoLayer.MAX_GENERATE (5000, the most Max draws can show) pieces at once to the atmo. Settings: Max draws, then a "Dynamic atmo" heading over Prop detail (was Prop flight; Low / Medium / High as in Atmo Play), Prop ghosts, Far props.
+    Early stop (2026-11-25): cells on screen visited nearest edge first; once Max draws shapes are in hand they're
+    sorted and the farthest is a threshold, cells and shapes past it skipped, nearer extras merged in. The same
+    shapes as sorting all (test). dust2-5k corner view (all 5,293 on screen): max 1000 5.0 -> 1.4 ms, 250 4.8 -> 0.4;
+    middle view 250 1.0 -> 0.6; uncapped cases unchanged. MGE's drawAtmo (no grid): distance tested before onScreen against last
+    frame's Max-draws-th x 2 (squared); a pass with too few under it runs again uncut, so the drawn are always the nearest
+    (offline harness: 0 frames off, fast camera swings included). Corner 1000 7.9 -> 4.3 ms, 500 7.9 -> 3.5.
+    Bucket order (2026-11-25, user: owo.tbm whole map selected and zoomed out lost fps): table.sort of all on screen
+    was most of the frame. Both drawers order by 256 distance buckets (nearly sorted), exact only in the bucket
+    holding the Max-draws-th (the same shapes drawn); MGE sets the color only when it changes (colors shared by
+    line). owo far view, all selected, 5000: 8.1 -> 5.8 ms, set_color 5000 -> 1 a frame; Atmo Play corner 5000
+    6.2 -> 5.3. Sub-pixel culling wouldn't help: from far, nearly all of owo's shapes are 2+ px.
+    Selected first (MGE's Atmo list, user's idea): selected ones on screen are drawn first in list order, no distances
+    or ordering, the loop stops once they fill Max draws; the nearest unselected fill what's left (exact, harness:
+    half of owo selected, 0 frames off). owo all selected: 1000 4.1 -> 1.0 ms, 500 0.35, 5000 5.8 -> 4.2.
   - **Low fps (2026-11-22, user: capped at 30, props vanished mid flight).** Props run once a drawn frame; at 30 fps
     more match frames pass between two. Fights decide every take and release themselves (fine); replays watch the
     pool objects, and a let-go plus a take between two drawn frames never showed the object parked: the replay

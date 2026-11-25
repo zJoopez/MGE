@@ -233,36 +233,75 @@ local function drawItem(item, x, y, z, rot)
     end
 end
 
-local visible = {} -- this frame's shapes on screen, reused
+-- this frame's shapes on screen and the cells on screen by distance (reused)
+local visible, cellOrder = {}, {}
 local function nearer(a, b) return a.dist < b.dist end
+local function cellNearer(a, b) return a.near < b.near end
 
----draw3d: the shapes on screen, nearest the camera first (if the game caps draws, the near ones make it; the GPU
----skips what they hide). Props where they are, not while carried (their object shows them)
----@param view table? Drawer.measureView's (nil: every shape, unsorted)
+-- orderNearest's lists: a bucket sort by distance (no comparisons: table.sort of thousands was most of a frame)
+local BUCKETS = 256
+local bucketCount, bucketEnd, bucketOf, ordered, boundary = {}, {}, {}, {}, {}
+
+---visible[1..n] near to far by buckets of distance (nearly sorted: the game keeps the first ones it's sent when it
+---caps draws), exactly sorted around the most-th, so visible[1..most] are exactly the nearest most
+local function orderNearest(n, most)
+    if n < 2 then return end
+    local sqrt, lo, hi = math.sqrt, math.huge, 0
+    for i = 1, n do
+        local d = sqrt(visible[i].dist)
+        bucketOf[i] = d
+        if d < lo then lo = d end
+        if d > hi then hi = d end
+    end
+    local scale = hi > lo and (BUCKETS - 1e-9) / (hi - lo) or 0
+    for b = 1, BUCKETS do bucketCount[b] = 0 end
+    for i = 1, n do
+        local b = math.floor((bucketOf[i] - lo) * scale) + 1
+        bucketOf[i] = b
+        bucketCount[b] = bucketCount[b] + 1
+    end
+    local at = 1
+    for b = 1, BUCKETS do
+        bucketEnd[b] = at -- the next free slot while placing; one past the bucket's last after
+        at = at + bucketCount[b]
+    end
+    for i = 1, n do
+        local b = bucketOf[i]
+        local slot = bucketEnd[b]
+        ordered[slot] = visible[i]
+        bucketEnd[b] = slot + 1
+    end
+    for i = 1, n do visible[i] = ordered[i] end
+    if most >= n then return end
+    local b = 1 -- the bucket holding the most-th: sorted exactly
+    while bucketEnd[b] <= most do b = b + 1 end
+    local first, last = bucketEnd[b] - bucketCount[b], bucketEnd[b] - 1
+    local m = 0
+    for k = first, last do
+        m = m + 1
+        boundary[m] = visible[k]
+    end
+    for k = #boundary, m + 1, -1 do boundary[k] = nil end
+    table.sort(boundary, nearer)
+    for k = 1, m do visible[first + k - 1] = boundary[k] end
+end
+
+---draw3d: the shapes on screen, nearest the camera first, at most maxDraws (if the game caps draws, the near ones
+---make it; the GPU skips what they hide). Cells are visited nearest first; once maxDraws are in hand, the farthest
+---of those is a threshold: cells and shapes past it are skipped (the same shapes as ordering every one on screen).
+---Props where they are, not while carried (their object shows them)
+---@param view table? Drawer.measureView's (nil: unordered, the first maxDraws)
 ---@param level integer the game's graphics level (0-2)
----@param maxDraws integer? at most this many (the nearest); nil or 0: all
+---@param maxDraws integer? nil or 0: all
 ---@return integer drawn
 function Drawer.draw(d, view, level, maxDraws)
     lastColor = nil -- others drew in between
+    local cap = (maxDraws and maxDraws > 0) and maxDraws or math.huge
     local n = 0
-    for _, cell in ipairs(d.cellList) do
-        local cp = cell.pos
-        if onScreen(view, cp[1], cp[2], cp[3], cell.radius) then
-            local items = cell.items
-            for k = 1, #items do
-                local item = items[k]
-                if level >= item.minLevel and level <= item.maxLevel then
-                    local p = item.pos
-                    if onScreen(view, p[1], p[2], p[3], item.radius) then
-                        n = n + 1
-                        visible[n] = item
-                        item.at, item.atRot = p, item.rot
-                    end
-                end
-            end
-        end
-    end
-    for _, item in ipairs(d.moving) do
+    local e = view and view.eye
+    local ex, ey, ez = 0, 0, 0
+    if e then ex, ey, ez = e[1], e[2], e[3] end
+    for _, item in ipairs(d.moving) do -- props first (few, not in cells)
         local prop = item.prop
         if not prop.entry and level >= item.minLevel and level <= item.maxLevel then
             local p = prop.pos
@@ -270,21 +309,52 @@ function Drawer.draw(d, view, level, maxDraws)
                 n = n + 1
                 visible[n] = item
                 item.at, item.atRot = p, prop.rot
+                local dx, dy, dz = p[1] - ex, p[2] - ey, p[3] - ez
+                item.dist = dx * dx + dy * dy + dz * dz
             end
         end
     end
-    for i = #visible, n + 1, -1 do visible[i] = nil end
-    if view then
-        local e = view.eye
-        for i = 1, n do
-            local item = visible[i]
-            local p = item.at
-            local dx, dy, dz = p[1] - e[1], p[2] - e[2], p[3] - e[3]
-            item.dist = dx * dx + dy * dy + dz * dz
+    -- cells on screen, nearest edge first
+    local m = 0
+    for _, cell in ipairs(d.cellList) do
+        local cp = cell.pos
+        if onScreen(view, cp[1], cp[2], cp[3], cell.radius) then
+            m = m + 1
+            cellOrder[m] = cell
+            local dx, dy, dz = cp[1] - ex, cp[2] - ey, cp[3] - ez
+            local near = math.sqrt(dx * dx + dy * dy + dz * dz) - cell.radius
+            cell.near = near > 0 and near * near or 0 -- squared, as the shapes' dist
         end
-        table.sort(visible, nearer)
     end
-    if maxDraws and maxDraws > 0 and maxDraws < n then n = maxDraws end
+    for i = #cellOrder, m + 1, -1 do cellOrder[i] = nil end
+    if e then table.sort(cellOrder, cellNearer) end
+    local threshold = math.huge -- once cap are in hand: the cap-th nearest's dist (nothing at or past it is drawn)
+    for k = 1, m do
+        local cell = cellOrder[k]
+        if cell.near >= threshold then break end
+        local items = cell.items
+        for j = 1, #items do
+            local item = items[j]
+            if level >= item.minLevel and level <= item.maxLevel then
+                local p = item.pos
+                local dx, dy, dz = p[1] - ex, p[2] - ey, p[3] - ez
+                local dist = dx * dx + dy * dy + dz * dz
+                if dist < threshold and onScreen(view, p[1], p[2], p[3], item.radius) then
+                    n = n + 1
+                    visible[n] = item
+                    item.at, item.atRot, item.dist = p, item.rot, dist
+                end
+            end
+        end
+        if e and threshold == math.huge and n >= cap then
+            orderNearest(n, cap)
+            n = cap -- the rest are at or past the threshold
+            threshold = visible[cap].dist
+        end
+    end
+    for i = #visible, n + 1, -1 do visible[i] = nil end
+    if e then orderNearest(n, cap) end
+    if n > cap then n = cap end
     for i = 1, n do
         local item = visible[i]
         local p = item.at

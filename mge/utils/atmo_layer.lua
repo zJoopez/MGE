@@ -24,7 +24,7 @@ local AtmoLayer = {
     -- at most this many atmo shapes drawn a frame, the nearest the camera (Settings > Max draws). The game draws
     -- only so many shapes a frame (fewer on higher graphics); a cap keeps big maps' fps steady
     maxDraws = 1000,
-    DRAW_CHOICES = { 5000, 1000, 500, 250 },
+    DRAW_CHOICES = { 5000, 1000, 500 },
     MAX_GENERATE = 5000, -- most pieces one Generate adds to the atmo: no more could be drawn (DRAW_CHOICES' most)
     -- the objects' alpha while the Atmo list shows (set live, put back after): see-through, the atmo in front
     seeThroughAlpha = 0.15,

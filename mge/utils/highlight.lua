@@ -44,6 +44,18 @@ Highlight.toMatrixTB = toMatrixTB -- also used by players.lua (body part rotatio
 -- dropped boxes go
 local rotCache = setmetatable({}, { __mode = "k" })
 
+-- set_color only when it changes, while drawAtmo draws (nothing else draws in between): thousands of atmo shapes
+-- mostly share a color
+local colorCaching, lastColor, lastAlpha = false, nil, nil
+
+local function setColor(c, alpha)
+    if colorCaching then
+        if c == lastColor and alpha == lastAlpha then return end
+        lastColor, lastAlpha = c, alpha
+    end
+    set_color(c[1], c[2], c[3], alpha)
+end
+
 ---Box that isn't an object: translucent fill, and an outline (a negative-size pass) unless outline is
 ---false. fillAlpha 0 draws only the outline
 ---@param box HighlightBox
@@ -61,11 +73,11 @@ function Highlight.drawBox(box, color, fillAlpha, outline, grow)
         rotCache[box.frame] = rot
     end
     if fillAlpha > 0 then
-        set_color(c[1], c[2], c[3], fillAlpha)
+        setColor(c, fillAlpha)
         draw_box_m(p[1], p[2], p[3], s[1] + grow, s[2] + grow, s[3] + grow, rot)
     end
     if outline ~= false then
-        set_color(c[1], c[2], c[3], 1.0)
+        setColor(c, 1.0)
         draw_box_m(p[1], p[2], p[3], -(s[1] + 0.02), -(s[2] + 0.02), -(s[3] + 0.02), rot)
     end
 end
@@ -85,19 +97,22 @@ local function getObjRotTB(id)
     return Utils3D.MatrixToMatrixTB(rot)
 end
 
+local colorByLine = {}
+
 ---An atmo object's own color, r g b a in 0-1 (atmo colors go up to 2: brighter, drawn as 1)
 ---@param obj FileParserEnvObj
 ---@return number[]
 local function colorOf(obj)
     -- parsed once per color line (like AtmoLayer.ghost's shape): the Atmo list draws every atmo object every
     -- frame, thousands parsed their color text each frame. Callers only read it
+    -- one table per color line, shared: drawAtmo sets the color only when the table changes (setColor)
     local line = obj.props.color or "1 1 1 1"
-    local cached = obj.colorCache
-    if cached and cached.line == line then return cached.color end
-    local c = {}
+    local c = colorByLine[line]
+    if c then return c end
+    c = {}
     for n in tostring(line):gmatch("%S+") do c[#c + 1] = tonumber(n) or 1 end
     for k = 1, 4 do c[k] = math.min(math.max(c[k] or 1, 0), 1) end
-    obj.colorCache = { line = line, color = c }
+    colorByLine[line] = c
     return c
 end
 
@@ -119,7 +134,7 @@ local function drawGhost(g, c, alpha, outline, grow)
         rot = toMatrixTB(g.frame)
         rotCache[g.frame] = rot
     end
-    set_color(c[1], c[2], c[3], alpha)
+    setColor(c, alpha)
     if g.shape == "sphere" then
         draw_sphere_m(p[1], p[2], p[3], s[1] + grow / 2, rot)
     else -- pill: x radius, y length
@@ -211,76 +226,169 @@ end
 --- full true (the Atmo list): in their own color, the selected ones in the highlight color instead, where a
 ---   gizmo drag has them (AtmoLayer.liveGhost). Color only, no extra highlight draw: every one of
 ---   thousands selected shows, an outlined highlight had room for 256 at most
---- Only the ones that can show on screen (onScreen), nearest the camera first: the game draws only so many shapes
---- a frame, so the near ones make it
+--- Only the ones that can show on screen (onScreen), nearest the camera first, at most AtmoLayer.maxDraws: the game
+--- draws only so many shapes a frame, so the near ones make it
 
 -- drawAtmo's on-screen ghosts this frame (reused lists): ghost, color, alpha, grow, distance, and the draw order
 local visG, visC, visA, visGrow, visDist, visOrder = {}, {}, {}, {}, {}, {}
 local visN = 0
 local function nearerVis(i, j) return visDist[i] < visDist[j] end
 
+-- orderNearest's lists: a bucket sort by distance (no comparisons: table.sort of thousands was most of a frame)
+local BUCKETS = 256
+local bucketCount, bucketEnd, visKey, boundary = {}, {}, {}, {}
+
+---visOrder[1..n] near to far by buckets of distance (nearly sorted: the game keeps the first ones it's sent when
+---it caps draws), exactly sorted around the most-th, so visOrder[1..most] are exactly the nearest most
+local function orderNearest(n, most)
+    if n == 0 then return end
+    local sqrt, lo, hi = math.sqrt, math.huge, 0
+    for i = 1, n do
+        local d = sqrt(visDist[i])
+        visKey[i] = d
+        if d < lo then lo = d end
+        if d > hi then hi = d end
+    end
+    local scale = hi > lo and (BUCKETS - 1e-9) / (hi - lo) or 0
+    for b = 1, BUCKETS do bucketCount[b] = 0 end
+    for i = 1, n do
+        local b = math.floor((visKey[i] - lo) * scale) + 1
+        visKey[i] = b
+        bucketCount[b] = bucketCount[b] + 1
+    end
+    local at = 1
+    for b = 1, BUCKETS do
+        bucketEnd[b] = at -- the next free slot of bucket b while placing; one past its last after
+        at = at + bucketCount[b]
+    end
+    for i = 1, n do
+        local b = visKey[i]
+        local slot = bucketEnd[b]
+        visOrder[slot] = i
+        bucketEnd[b] = slot + 1
+    end
+    if most >= n then return end
+    -- the bucket holding the most-th: sorted exactly
+    local b = 1
+    while bucketEnd[b] <= most do b = b + 1 end
+    local first, last = bucketEnd[b] - bucketCount[b], bucketEnd[b] - 1
+    local m = 0
+    for k = first, last do
+        m = m + 1
+        boundary[m] = visOrder[k]
+    end
+    for k = #boundary, m + 1, -1 do boundary[k] = nil end
+    table.sort(boundary, nearerVis)
+    for k = 1, m do visOrder[first + k - 1] = boundary[k] end
+end
+-- the squared distance a ghost must be under to be looked at (from last frame's maxDraws-th, with a margin); a pass
+-- that finds fewer than maxDraws under it runs again without one, so the drawn ones are always the nearest
+local visCut = math.huge
+local CUT_MARGIN = 2 -- squared: ~1.4 times the distance, room for the camera to move a frame
+local pendingDist = 0 -- nearEnough's distance for addVisible
+
+---Whether a ghost is under the cutoff (its squared distance kept for addVisible); a cheap test before onScreen
+local function nearEnough(g)
+    local e = view and view.eye
+    if not e then
+        pendingDist = 0
+        return true
+    end
+    local p = g.pos
+    local dx, dy, dz = p[1] - e[1], p[2] - e[2], p[3] - e[3]
+    pendingDist = dx * dx + dy * dy + dz * dz
+    return pendingDist < visCut
+end
+
 local function addVisible(g, c, alpha, grow)
     visN = visN + 1
     local n = visN
-    visG[n], visC[n], visA[n], visGrow[n], visOrder[n] = g, c, alpha, grow or 0, n
-    local e = view and view.eye
-    if e then
-        local p = g.pos
-        local dx, dy, dz = p[1] - e[1], p[2] - e[2], p[3] - e[3]
-        visDist[n] = dx * dx + dy * dy + dz * dz
-    end
+    visG[n], visC[n], visA[n], visGrow[n], visOrder[n], visDist[n] = g, c, alpha, grow or 0, n, pendingDist
 end
 
-local function drawVisible()
-    local n = visN
-    for i = #visOrder, n + 1, -1 do visOrder[i] = nil end
-    if view then table.sort(visOrder, nearerVis) end
-    local most = MGE.AtmoLayer.maxDraws
-    if most and most > 0 and most < n then n = most end
-    for k = 1, n do
-        local i = visOrder[k]
-        drawGhost(visG[i], visC[i], visA[i], false, visGrow[i])
-    end
-    visN = 0
-end
+-- the selected ones on screen (the Atmo list): drawn first, in list order, no distances or ordering (thousands
+-- selected cost no comparisons); the nearest of the rest fill what's left of maxDraws
+local selG, selA, selGrow = {}, {}, {}
+local selN = 0
 
+---The atmo objects' ghosts that can show: selected ones into the sel lists (until `most`), the rest under the cutoff
+---into the vis lists
 ---@param full boolean
----@param plain boolean? with full: as the map looks when played (MGE's window hidden): no selection highlight
-local function drawAtmo(full, plain)
+---@param plain boolean?
+---@param most number
+local function collectAtmo(full, plain, most)
     local AtmoLayer = MGE.AtmoLayer
     local list = ModData.parsed.atmo or {}
     -- props pushed in a fight (a playable mod's dynamic atmo objects) are drawn where they are now
     local moved = MGE.Playable and MGE.Playable.movedGhost
-    visN = 0
+    visN, selN = 0, 0
     if not full then
         for i, obj in ipairs(list) do
             local g = AtmoLayer.ghost(obj)
             if g and moved then g = moved(i, g) end
-            if g and onScreen(g) then addVisible(g, AtmoLayer.color, AtmoLayer.alpha) end
+            if g and nearEnough(g) and onScreen(g) then addVisible(g, AtmoLayer.color, AtmoLayer.alpha) end
         end
-        drawVisible()
         return
     end
     -- a gizmo drag: the selected ones' ghosts as it leaves them (AtmoLayer.liveGhost: matrices on the cached
     -- ghost; copying and re-parsing every selected object's lines each frame stuttered with thousands)
     local live = AtmoLayer.live
+    local grow = not plain and GROW or 0 -- F1's play view: as in game
     for i, atmoObj in ipairs(list) do
+        if selN >= most then break end -- the selected ones fill every draw
         local g = AtmoLayer.ghost(atmoObj)
         if g and moved then g = moved(i, g) end
         local selected = atmoObj.selected and not plain
         if g and live and selected then g = AtmoLayer.liveGhost(g, live) end
-        if g and onScreen(g) then
-            local c = colorOf(atmoObj)
-            local grow = not plain and GROW or 0 -- F1's play view: as in game
+        if g then
             if selected then
-                -- see-through ones too: a selected box is never fainter than SELECTED_ALPHA
-                addVisible(g, Highlight.color, math.max(c[4], SELECTED_ALPHA), grow)
-            else
+                if onScreen(g) then
+                    selN = selN + 1
+                    -- see-through ones too: a selected box is never fainter than SELECTED_ALPHA
+                    selG[selN], selA[selN], selGrow[selN] = g, math.max(colorOf(atmoObj)[4], SELECTED_ALPHA), grow
+                end
+            elseif nearEnough(g) and onScreen(g) then
+                local c = colorOf(atmoObj)
                 addVisible(g, c, c[4], grow)
             end
         end
     end
-    drawVisible()
+end
+
+---@param full boolean
+---@param plain boolean? with full: as the map looks when played (MGE's window hidden): no selection highlight
+local function drawAtmo(full, plain)
+    local most = MGE.AtmoLayer.maxDraws
+    if not (most and most > 0) then most = math.huge end
+    if not view then visCut = math.huge end
+    collectAtmo(full, plain, most)
+    local room = most - math.min(selN, most) -- draws left for the unselected
+    if visN < room and visCut < math.huge then -- the cutoff left too few: look at all of them
+        visCut = math.huge
+        collectAtmo(full, plain, most)
+        room = most - math.min(selN, most)
+    end
+    local n = visN
+    for i = #visOrder, n + 1, -1 do visOrder[i] = nil end
+    if view and room > 0 then orderNearest(n, room) end
+    if n > room then n = room end
+    -- next frame's cutoff: this frame's room-th, with a margin (none while fewer show; 0 while the selected fill it)
+    if not view then
+        visCut = math.huge
+    elseif room <= 0 then
+        visCut = 0
+    else
+        visCut = visN >= room and visDist[visOrder[room]] * CUT_MARGIN + 1 or math.huge
+    end
+    colorCaching, lastColor, lastAlpha = true, nil, nil
+    local color = Highlight.color
+    for k = 1, math.min(selN, most) do drawGhost(selG[k], color, selA[k], false, selGrow[k]) end
+    for k = 1, n do
+        local i = visOrder[k]
+        drawGhost(visG[i], visC[i], visA[i], false, visGrow[i])
+    end
+    colorCaching = false
+    visN, selN = 0, 0
 end
 
 ---The object highlight (drawShapeHighlight) on a game object, read from the game

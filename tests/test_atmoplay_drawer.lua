@@ -130,6 +130,46 @@ env_obj prop
     assert(ok, err)
 end)
 
+T.test("drawer: max draws over many cells: the nearest ones, as sorting every shape on screen gives", function()
+    local lines = {}
+    for i = 0, 29 do
+        for j = 0, 29 do
+            lines[#lines + 1] = "env_obj b" .. i .. "_" .. j
+            lines[#lines + 1] = string.format("   pos %d %d %d", 5 + i * 7, j * 7 - 100, (i * 13 + j * 7) % 5)
+        end
+    end
+    local d = Drawer.new(Drawer.split(lines))
+    local view = { eye = { 0, 0, 2 }, forward = { 1, 0, 0 }, right = { 0, -1, 0 }, up = { 0, 0, 1 }, cx = 500, cy = 500,
+        m11 = 1000, m12 = 0, m21 = 0, m22 = -1000, w = 1000, h = 1000 }
+    local saved = { set_color, draw_box_m }
+    local drawn = {}
+    set_color = function() end
+    draw_box_m = function(x, y, z) drawn[#drawn + 1] = (x * x + y * y + (z - 2) ^ 2) end
+    local ok, err = pcall(function()
+        local all = Drawer.draw(d, view, 2)
+        local every = {}
+        for i, v in ipairs(drawn) do every[i] = v end
+        table.sort(every)
+        for _, cap in ipairs({ 1, 37, 200, all, all + 50 }) do
+            drawn = {}
+            local n = Drawer.draw(d, view, 2, cap)
+            T.eq(n, math.min(cap, all), "max " .. cap .. ": how many")
+            -- the same ones as the nearest of all (the order is near to far by buckets, not exact)
+            local got = {}
+            for i, v in ipairs(drawn) do got[i] = v end
+            table.sort(got)
+            local ok2 = true
+            for i = 1, n do
+                if math.abs(got[i] - every[i]) > 1e-9 then ok2 = false end
+            end
+            T.ok(ok2, "max " .. cap .. ": the nearest ones")
+            T.ok(n == 0 or drawn[1] <= every[1] * 4 + 1, "max " .. cap .. ": a near one first")
+        end
+    end)
+    set_color, draw_box_m = saved[1], saved[2]
+    assert(ok, err)
+end)
+
 T.test("drawer: props always Atmo Play's (even with rcolor); alpha 0 drawn by nobody", function()
     local split = Drawer.split(T.lines([[
 env_obj prop

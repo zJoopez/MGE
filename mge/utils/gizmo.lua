@@ -97,35 +97,10 @@ local drag = nil
 ---AtmoLayer.live (their ghosts drawn where it puts them, utils/highlight.lua)
 ---@param objects FileParserEnvObj[] in the world, or atmo objects with a pos line
 ---@return GizmoTarget
--- The target is built again every frame, its pivot and frame read every object's lines (parsed from text):
--- with thousands of atmo objects selected (Select all) that was most of the frame. They change only with
--- the data (every edit commits an undo state, a reload re-reads it) or the selection, so they're kept for
--- those: the undo state, the data, how many are selected and the first and last of them
----@type { key: string?, pivot: number[]?, frame: number[][]? }
-local targetCache = {}
-
----@param objects FileParserEnvObj[]
----@return string
-local function selectionKey(objects)
-    local History = MGE.History
-    -- every selected id in order, as one number (the first and last alone missed swaps in the middle: Shift-click
-    -- 3 off and 2 on kept the old pivot). Arithmetic only, the list is built every frame anyway
-    local hash = 0
-    for i = 1, #objects do hash = (hash * 31 + (objects[i].id or 0)) % 2147483629 end
-    return tostring(History.states[History.index]) .. "|" .. tostring(MGE.ModData.parsed) .. "|" .. #objects ..
-        "|" .. hash .. "|" .. tostring(objects[1]) .. "|" .. tostring(objects[#objects])
-end
-
----A value of the target kept while selectionKey stays the same
----@param objects FileParserEnvObj[]
----@param name "pivot"|"frame"
----@param compute fun(): any
-local function cachedFor(objects, name, compute)
-    local key = selectionKey(objects)
-    if targetCache.key ~= key then targetCache = { key = key } end
-    if targetCache[name] == nil then targetCache[name] = compute() end
-    return targetCache[name]
-end
+-- The selection's target (its list, pivot and frame: the pivot and frame read every object's lines) is kept while the
+-- selection and the data stay the same (gizmoTarget's key: one pass a frame, no tables). Built every frame, thousands
+-- selected (Select all) cost ~2 ms a frame
+local cachedTarget, cachedKey = nil, nil
 
 local function objectTarget(objects)
     local T, AtmoLayer = MGE.Transforms, MGE.AtmoLayer
@@ -133,13 +108,22 @@ local function objectTarget(objects)
     for _, obj in ipairs(objects) do
         if obj.kind == "atmo" then hasAtmo = true break end
     end
-    -- copies of the kept values: callers may change what they get
+    -- worked out once for this target; copies returned: callers may change what they get
+    local cache = {}
     local function pivot()
-        local p = cachedFor(objects, "pivot", function() return { T.getSelectionPivot(objects) } end)
+        local p = cache.pivot
+        if not p then
+            p = { T.getSelectionPivot(objects) }
+            cache.pivot = p
+        end
         return { p[1], p[2], p[3] }
     end
     local function frame()
-        local f = cachedFor(objects, "frame", function() return T.groupFrame(objects) end)
+        local f = cache.frame
+        if not f then
+            f = T.groupFrame(objects)
+            cache.frame = f
+        end
         return { { f[1][1], f[1][2], f[1][3] }, { f[2][1], f[2][2], f[2][3] }, { f[3][1], f[3][2], f[3][3] } }
     end
     return {
@@ -207,14 +191,33 @@ local function gizmoTarget()
         local t = Gizmo.previewTarget(Gizmo.mode)
         if t ~= nil then return t or nil end
     end
-    -- the objects in the world, or on the Atmo list the atmo objects with a pos line (the ones drawn)
-    local objects = {}
-    for _, obj in ipairs(ModData.getEditSelection()) do
-        if obj.kind == "atmo" and obj.props.pos or obj.kind ~= "atmo" and get_obj_pos(obj.id - 1) ~= nil then
-            table.insert(objects, obj)
+    -- the selected objects in the world, or on the Atmo list the selected atmo objects with a pos line (the ones drawn).
+    -- The key: the undo state (every edit commits one), the data, and the selection (count, positions hashed, first
+    -- and last); the same as last frame's: the same target
+    local atmo = Main.listTab == "atmo"
+    local source = atmo and (ModData.parsed.atmo or {}) or ModData.parsed.env_obj
+    local count, hash, first, last = 0, 0, nil, nil
+    for i, obj in ipairs(source) do
+        if obj.selected and (atmo and obj.props.pos or not atmo and get_obj_pos(obj.id - 1) ~= nil) then
+            count = count + 1
+            hash = (hash * 31 + i) % 2147483629
+            first = first or obj
+            last = obj
         end
     end
-    return #objects > 0 and objectTarget(objects) or nil
+    if count == 0 then return nil end
+    local History = MGE.History
+    local key = tostring(History.states[History.index]) .. "|" .. tostring(ModData.parsed) .. "|" .. tostring(source) ..
+        "|" .. count .. "|" .. hash .. "|" .. tostring(first) .. "|" .. tostring(last)
+    if key == cachedKey then return cachedTarget end
+    local objects = {}
+    for _, obj in ipairs(source) do
+        if obj.selected and (atmo and obj.props.pos or not atmo and get_obj_pos(obj.id - 1) ~= nil) then
+            objects[#objects + 1] = obj
+        end
+    end
+    cachedTarget, cachedKey = objectTarget(objects), key
+    return cachedTarget
 end
 
 ---@param handle GizmoHandle
