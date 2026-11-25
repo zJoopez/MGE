@@ -1,12 +1,10 @@
--- Atmo Play's debug log, DEV ONLY: not in either release zip (tools/package.ps1). atmoplay.lua loads it when the
--- file is there, and runtime.lua calls it through NS.DebugLog only then, so the releases run without it.
--- /atmoplay log turns it on and off: every hook, every frame's planned pool moves and every engine object call
--- go to data/script/atmoplay_debug.log, written (and closed) before the calls run, so after a crash the file ends
--- at what was happening. It made the replay crashes findable (docs/atmo-play-plan.md)
+-- Atmo Play's dev tools, DEV ONLY (not in the release zips): the /atmoplay command. /atmoplay log writes every hook,
+-- planned pool move and engine object call to data/script/atmoplay_debug.log before the calls run, so after a crash
+-- the file ends at what was happening
 
-local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY)
+local NS = ATMOPLAY_LOADING
 
-local Runtime = NS.Runtime -- loaded first: its state, say
+local Runtime = NS.Runtime
 local Dynamics = NS.Dynamics
 
 ---@class AtmoPlayDebugLog
@@ -43,7 +41,7 @@ function DebugLog.event(event)
         tostring(get_game_rules().mod)) })
 end
 
----The driver's planned moves for a frame (driver.lua's onDrive), before they're made
+---The driver's planned moves for a frame, before they're made
 ---@param changes AtmoPlayPoolChange[]
 ---@param ws table
 function DebugLog.onDrive(changes, ws)
@@ -63,9 +61,8 @@ end
 
 ---------------------------------------------------------------------------------------------------- trace
 
--- The engine's object setters, traced while the log is on: each call is a log line, written at the end of the
--- hook that made it (or every 500 lines), so after a crash the log ends at the last hook that ran. The
--- originals are kept in a global, so a restart never wraps a wrapper
+-- The engine's object setters, traced while the log is on: written at the end of each hook (or every 500 lines).
+-- The originals are kept in a global, so a restart never wraps a wrapper
 local TRACED = { "set_obj_pos", "set_obj_sides", "set_obj_rot", "set_obj_rot_m", "set_obj_linear_vel",
     "set_obj_angular_vel", "set_obj_mass", "set_obj_bounce", "set_obj_flag", "set_obj_color", "set_obj_vis",
     "set_obj_force" }
@@ -86,8 +83,7 @@ end
 
 ---@param on boolean
 local function setTrace(on)
-    -- originals by name, and our wrappers: a global that isn't one of ours is the engine's (a restart that
-    -- didn't turn the log off left wrappers that a new trace must not take for originals)
+    -- a global that isn't one of our wrappers is the engine's
     ATMOPLAY_TRACED = ATMOPLAY_TRACED or { originals = {}, wrappers = {} }
     local traced = ATMOPLAY_TRACED
     for _, name in ipairs(TRACED) do
@@ -113,8 +109,7 @@ local function setTrace(on)
     if not on then ATMOPLAY_TRACED = nil end
 end
 
----Once per new frame (draw2d): where the pool objects are. How many sit at 0,0,0 (RPH saw objects moved before
----the first move teleported there in that replay) and every dynamic pool object off its parking spot
+---Once per new frame: how many pool objects sit at 0,0,0 and which dynamic ones are off their parking spot
 ---@param ws table
 function DebugLog.frame(ws)
     local loaded = Runtime.state.loaded
@@ -126,7 +121,7 @@ function DebugLog.frame(ws)
         local x, y, z = get_obj_pos(object.id - 1)
         if not x then return end
         if math.abs(x) + math.abs(y) + math.abs(z) < 0.01 then atOrigin = atOrigin + 1 end
-        if dynamic and math.abs(z - Dynamics.PARK_Z) > Dynamics.PARKED then -- not at the parking height
+        if dynamic and math.abs(z - Dynamics.PARK_Z) > Dynamics.PARKED then
             off[#off + 1] = string.format("%d@%.2f,%.2f,%.2f", object.id - 1, x, y, z)
         end
     end
@@ -142,7 +137,7 @@ end
 function DebugLog.toggle()
     DebugLog.on = not DebugLog.on
     DebugLog.loggedFrame = nil
-    setTrace(DebugLog.on) -- every object call goes in too
+    setTrace(DebugLog.on)
     if DebugLog.on then
         local file = Files.Open(DebugLog.PATH, FILES_MODE_WRITE)
         if file.data then
@@ -201,10 +196,8 @@ end
 
 ---------------------------------------------------------------------------------------------------- timing
 
--- /atmoplay time: TIMING_FRAMES drawn frames measured (Runtime.measure is set meanwhile), then one report. Each part's
--- average and worst in ms: the props (their flights, takes and releases), moving the props' drawn copies, the static
--- pool, Atmo Play's drawing and the game drawing the atmo (its draw3d loop over every atmo element, Atmospheres;
--- timed by wrapping UIElement3D.drawVisuals while it measures). os.clock: wall time on Windows
+-- /atmoplay time: TIMING_FRAMES drawn frames measured, then each part's average and worst ms: props, their drawn
+-- copies, the static pool, Atmo Play's drawing and the game's atmo drawing (UIElement3D.drawVisuals wrapped meanwhile)
 DebugLog.TIMING_FRAMES = 300
 
 local timing = nil
@@ -283,8 +276,7 @@ end
 
 ---------------------------------------------------------------------------------------------------- the command
 
--- /atmoplay [status | reload | time | draw own | draw game | flight <level> | ghosts on | off | log | quit]: dev builds
--- only (this file isn't in the release zip). Players use the window
+-- /atmoplay [status | reload | time | draw own|game | flight <level> | ghosts on|off | log | quit]
 function DebugLog.command(text)
     local word, rest = tostring(text or ""):match("^%s*(%S+)%s*(.-)%s*$")
     if word ~= "atmoplay" then return end

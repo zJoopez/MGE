@@ -1,41 +1,35 @@
--- The playable-mod format (docs/atmo-play-plan.md). A playable mod is an ordinary .tbm with:
---   * pool objects: hidden static env_obj blocks with a POOL_MARKER comment line
---   * with dynamic props (dynamics.lua, proof of concept): hidden dynamic env_obj blocks on ids 1-48 with a
---     DYNAMIC_MARKER line, and one hidden static parking platform with a PARK_MARKER line
---   * a header line, "#atmoplay v1 rule=1 radius=4": format version and the pool rule's parameters
---     (dradius=2: the props' reach)
---   * after the header, the atmo: every atmo line behind ATMO_PREFIX ("#@ ")
--- A DRAWN mod (MGE's Default, the atmo only drawn) has no pools: its header says "mode=draw" ("#atmoplay v1
--- mode=draw"), and Atmo Play only draws its atmo.
--- The game skips every "#" line of a mod, and its atmo parser only reads lines starting with shader,
--- shaderopt, opt and env_obj, so neither sees the atmo part (measured: a 5k-object atmo as "#@ " lines
--- doesn't slow /lm down and adds no objects).
+-- The playable-mod format (docs/atmo-play-plan.md): an ordinary .tbm with
+--   * pool objects: hidden static env_obj blocks marked POOL_MARKER; with props also hidden dynamic ones on ids 1-48
+--     (DYNAMIC_MARKER) and a hidden static parking platform (PARK_MARKER)
+--   * a header line, "#atmoplay v1 rule=1 radius=4 dradius=2" (a drawn-only mod: "#atmoplay v1 mode=draw", no pools)
+--   * after it, the atmo: every line behind ATMO_PREFIX ("#@ "). The game skips "#" lines of a mod and its atmo
+--     parser reads only shader, shaderopt, opt and env_obj lines, so neither sees it
 
-local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY, MGE's MGE.AtmoPlay)
+local NS = ATMOPLAY_LOADING
 
 ---@class AtmoPlayHeader
 ---@field version integer format version (the v in "#atmoplay v1")
----@field rule integer? pool rule number (Pool.RULES)
+---@field rule integer? Pool.RULES
 ---@field radius number? pool reach from a player's center
----@field dradius number? dynamic props' reach (dynamics.lua)
----@field mode string? "draw": the atmo is only drawn (no pools), Format.isDrawOnly
+---@field dradius number? props' reach
+---@field mode string? "draw": the atmo is only drawn
 
 ---@class AtmoPlayPoolObject
----@field id integer the env_obj id as the file writes it (1-based; the game's object id is id - 1)
----@field shape string the shape line's first word, as written
----@field friction string? the friction line as written, nil without one
----@field hardness string? the hardness line as written, nil without one
----@field pos string? the pos line as written (the dynamic pool's parking spot)
----@field sides string? the sides line as written (the dynamic pool's own size: no resize for props of it)
----@field mass string? the mass line as written
----@field bounce string? the bounce line as written
----@field flag string? the flag line as written
+---@field id integer the env_obj id as written (the game's object id is id - 1)
+---@field shape string
+---@field friction string? lines as written, nil without them
+---@field hardness string?
+---@field pos string? the dynamic pool's parking spot
+---@field sides string? the dynamic pool's own size
+---@field mass string?
+---@field bounce string?
+---@field flag string?
 
 ---@class AtmoPlayModFile
 ---@field header AtmoPlayHeader? nil when the mod isn't playable
 ---@field atmo string[] the atmo lines, ATMO_PREFIX removed
----@field pool AtmoPlayPoolObject[] pool objects in file order
----@field dynamic AtmoPlayPoolObject[] the dynamic pool (props), in file order
+---@field pool AtmoPlayPoolObject[] in file order
+---@field dynamic AtmoPlayPoolObject[] the props' pool, in file order
 ---@field park integer? the parking platform's id
 
 ---@class AtmoPlayFormat
@@ -50,7 +44,7 @@ local Format = {
     ATMO_PREFIX = "#@ ",
 }
 
--- words that start a new section of a mod file (as in MGE's file_handler.lua): a block ends at the next one
+-- words that start a section of a mod file: a block ends at the next one
 local SECTION_WORDS = {
     gamerule = true,
     body = true,
@@ -67,7 +61,7 @@ function Format.isSectionStart(line)
     return word ~= nil and SECTION_WORDS[word] == true
 end
 
----Lines Atmo Play writes and rebuilds: the header, the note, pool markers and atmo lines
+---Lines Atmo Play writes: header, note, markers and atmo lines
 ---@param line string
 ---@return boolean
 function Format.isOwnLine(line)
@@ -86,7 +80,7 @@ function Format.headerLine(params)
 end
 
 ---@param header AtmoPlayHeader?
----@return boolean a drawn mod's header: the atmo only drawn, no pools
+---@return boolean the atmo only drawn, no pools
 function Format.isDrawOnly(header)
     return header ~= nil and header.mode == Format.DRAW_MODE
 end
@@ -117,7 +111,7 @@ end
 ---@return AtmoPlayModFile
 function Format.read(lines)
     local result = { header = nil, atmo = {}, pool = {}, dynamic = {}, park = nil }
-    local block = nil -- the env_obj block being read: { id, props, marked = marker kind }
+    local block = nil -- { id, props, marked = marker kind }
     local function closeBlock()
         if block and block.marked then
             local object = { id = block.id, shape = block.props.shape or "box", friction = block.props.friction,
@@ -164,14 +158,13 @@ function Format.read(lines)
 end
 
 ---@class AtmoPlaySplit
----@field lines string[] the mod without Atmo Play's lines (note, header, "#@ ") and without the pool blocks
----@field header AtmoPlayHeader? nil: not a playable mod
----@field atmo string[] the atmo lines, ATMO_PREFIX removed
----@field pool integer[] every marked block's env_obj id (pool, dynamic pool, park; as the file writes them)
----@field poolObjects AtmoPlayPoolObject[]? the pool with shapes (Format.read's), added by MGE's Playable.split
+---@field lines string[] the mod without Atmo Play's lines and pool blocks (what MGE edits)
+---@field header AtmoPlayHeader? nil: not playable
+---@field atmo string[] ATMO_PREFIX removed
+---@field pool integer[] every marked block's env_obj id
+---@field poolObjects AtmoPlayPoolObject[]? added by MGE's Playable.split
 
----A mod file's lines in parts: what MGE parses and edits as the mod (`lines`), and the parts Atmo Play's
----format adds. Building from `lines` again gives the mod without its pool and atmo
+---A mod file's lines in parts: the mod itself and what Atmo Play's format adds
 ---@param lines string[]
 ---@return AtmoPlaySplit
 function Format.split(lines)
@@ -213,8 +206,7 @@ function Format.split(lines)
     return result
 end
 
----The atmo lines the game should draw: entities with "visible 0" (invisible walls and clips, solid but not
----drawn) are left out. Lines before the first entity (shader, shaderopt, opt) are kept
+---The atmo lines the game draws: "visible 0" entities (solid, not drawn) left out, the header kept
 ---@param atmoLines string[]
 ---@return string[]
 function Format.drawnLines(atmoLines)

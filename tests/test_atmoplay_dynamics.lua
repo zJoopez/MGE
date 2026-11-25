@@ -287,12 +287,6 @@ T.test("a pool object of another size than its prop: resized for it, and back to
     T.eq(world.objects[0].sides[1], Dynamics.PARK_SIDE, "back to its own size")
 end)
 
-T.test("props park above the map", function()
-    T.ok(Dynamics.PARK_Z > 0, "the parking height is above the map (below z = 0 the ground pushes dynamic bodies out)")
-    local s = setup(1)
-    T.ok(s.entries[1].home.pos[3] > 0, "a spot from the formula is up there")
-end)
-
 T.test("back in a fight from a replay: a carried prop in place and moving is left alone", function()
     local s = setup(1)
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
@@ -1299,7 +1293,7 @@ env_obj crate
     for i = 1, 2 do set_obj_pos(i - 1, Dynamics.parkPos(i)) end
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
     T.eq(carried(s), "crate -", "only the crate taken, with an object to spare")
-    T.ok(s.props[1].listed and s.props[1].cell ~= nil, "the ghost is in the grid")
+    T.ok(s.props[1].cell ~= nil, "the ghost is in the grid")
     -- a replay: an object appearing on the ghost takes the crate (its group's free prop) or nothing, never the ghost
     local r = Dynamics.new({ { id = 1, shape = "box" }, { id = 2, shape = "box" } }, props, { dradius = 2, fromFrame = 0 })
     Dynamics.matchBegin(r, { replay_mode = 1, match_frame = 0 })
@@ -1626,7 +1620,7 @@ env_obj right
     Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS = cap, budget
 end)
 
-T.test("review fixes: a carried prop's color as the game reads it (0-256, col / colour)", function()
+T.test("color: a carried prop's color as the game reads it (0-256, col / colour)", function()
     stubEngine()
     local _, _, props = Colliders.build(T.lines([[
 env_obj crate
@@ -1644,7 +1638,7 @@ env_obj crate
     T.near(world.objects[0].color[3], 0.125, 1e-9, "32 as 0.125")
 end)
 
-T.test("review fixes: a prop that fell off the map is let go and not taken again", function()
+T.test("fight: a prop that fell off the map is let go and not taken again", function()
     local s = setup(2)
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
     T.eq(carried(s):sub(1, 6), "crateA", "crateA taken")
@@ -1661,7 +1655,7 @@ T.test("review fixes: a prop that fell off the map is let go and not taken again
     T.eq(table.concat(its, " "), "release", "once: one release, no take after it")
 end)
 
-T.test("review fixes: a replay take that matches nothing is counted once", function()
+T.test("replay: a take that matches nothing is counted once", function()
     local s = setup(2)
     Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
     world.objects[0].pos = { 40, 40, 1 } -- out of its parking spot, no prop anywhere near
@@ -1669,7 +1663,7 @@ T.test("review fixes: a replay take that matches nothing is counted once", funct
     T.eq(s.replayMisses.none, 1, "one miss, not one a frame")
 end)
 
-T.test("review fixes: a state made mid-fight resets the pool objects on its first draw", function()
+T.test("restart: a state made mid-fight resets the pool objects on its first draw", function()
     local s = setup(2)
     -- no match_begin (Atmo Play restarted mid-fight): an object the old instance left carrying sits in the arena
     world.objects[0].pos = { 1, 0, 1 }

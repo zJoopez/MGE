@@ -1,27 +1,21 @@
--- The pool rule: which pool object stands in for which atmo collider, every frame of a fight. Pure logic:
--- Pool.step returns the changes, the runtime moves the objects (set_obj_*). Replays don't run it: the game
--- records every move and plays it back (docs/atmo-play-plan.md, part 3). A playable mod names its rule in the header
--- (rule=1) so a later, different rule gets a new number. It reads only the players' centers given to step
--- and its own previous assignment: the same frames give the same moves.
--- A grid built once (colliders never move) limits each step to the colliders around the players' cells;
--- the result is the same as looking at all of them (tests/test_pool.lua compares).
+-- The pool rule: which pool object stands in for which atmo collider each fight frame. Pure logic: Pool.step returns
+-- the changes, driver.lua moves the objects. It reads only the players' centers and its own previous assignment, so
+-- the same frames give the same moves. A mod names its rule in the header (rule=1), so a later rule gets a new number.
 --
--- Rule 1 (stable nearest), per group (shape|friction|hardness|bounce|flag bits, see Colliders.groupKey): the colliders within `radius`
--- of any player's center (distance to the collider's surface), nearest first, ties by collider index,
--- as many as the group has pool objects. A pool object keeps its collider while that collider is still
--- among them; the others, in id order, take the wanted colliders nobody holds, nearest first; pool
--- objects left over are parked. Keeping instead of re-sorting means few moves per frame (each move is a
--- set_obj_* call and an EOBJ line in the replay).
+-- Rule 1 (stable nearest), per group (Colliders.groupKey): the colliders within `radius` of any center (distance to
+-- the surface), nearest first, ties by index, as many as the group has pool objects. A pool object keeps its collider
+-- while that one is still wanted; the others, in id order, take the wanted ones nobody holds, nearest first; the rest
+-- park. Keeping means few moves (each one a set_obj_* call and a replay line).
 
-local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY, MGE's MGE.AtmoPlay)
+local NS = ATMOPLAY_LOADING
 
 local Colliders = NS.Colliders
 
 ---@class AtmoPlayPoolEntry
 ---@field id integer env_obj id as the file writes it
 ---@field group string
----@field target AtmoPlayCollider? the collider it stands in for, nil when parked
----@field dirty boolean the next step reports it even when its target stays (after a reset)
+---@field target AtmoPlayCollider? nil when parked
+---@field dirty boolean reported by the next step even when its target stays (after a reset)
 
 ---@class AtmoPlayPoolChange
 ---@field entry AtmoPlayPoolEntry
@@ -31,12 +25,11 @@ local Colliders = NS.Colliders
 ---@field rule integer
 ---@field radius number
 ---@field entries AtmoPlayPoolEntry[] by id
----@field groups table<string, AtmoPlayPoolEntry[]> pool objects per group, by id
+---@field groups table<string, AtmoPlayPoolEntry[]> by id
 ---@field targets table<string, AtmoPlayCollider[]> colliders per group, by index
----@field groupKeys string[] the groups with pool objects, sorted (a fixed order for step)
+---@field groupKeys string[] sorted
 ---@field cellSize number? grid cell edge (2 x radius); nil without the grid
----@field cells table<string, table<integer, AtmoPlayCollider[]>>? per group, x/y cell (cellKey) -> the colliders a
----player's center in that cell can reach (built once: colliders never move)
+---@field cells table<string, table<integer, AtmoPlayCollider[]>>? per group, x/y cell -> the colliders a center there can reach
 
 ---@class AtmoPlayPool
 local Pool = {
@@ -45,26 +38,33 @@ local Pool = {
     DEFAULT_RADIUS = 4,
 }
 
----@param state AtmoPlayPoolState
----@param v number
----@return integer the grid cell along one axis
-local function cellOf(state, v)
-    return math.floor(v / state.cellSize)
-end
-
----A grid cell's key: one number (faster than strings), cells -32768..32767 per axis (±262k units at 8)
----@param x integer
----@param y integer
+---A grid cell's key: one number, cells -32768..32767 per axis
 ---@return integer
 local function cellKey(x, y)
     return (x + 32768) * 65536 + (y + 32768)
 end
-Pool.cellKey = cellKey -- dynamics.lua's grid too
+Pool.cellKey = cellKey
 
----@param objects AtmoPlayPoolObject[] the mod's pool objects (Format.read)
+---Lists collider c in every x / y cell (edge `size`) a point within `reach` of its bounding sphere can be in
+local function addToCells(cells, c, reach, size)
+    local r = c.radius + reach
+    for x = math.floor((c.pos[1] - r) / size), math.floor((c.pos[1] + r) / size) do
+        for y = math.floor((c.pos[2] - r) / size), math.floor((c.pos[2] + r) / size) do
+            local key = cellKey(x, y)
+            local list = cells[key]
+            if not list then
+                list = {}
+                cells[key] = list
+            end
+            list[#list + 1] = c
+        end
+    end
+end
+
+---@param objects AtmoPlayPoolObject[] the mod's pool objects
 ---@param colliders AtmoPlayCollider[]
 ---@param params { rule: integer?, radius: number? }? the mod header's
----@param options { grid: boolean? }? grid = false: look at every collider each step (the tests compare)
+---@param options { grid: boolean? }? grid = false: every collider each step (tests compare)
 ---@return AtmoPlayPoolState? state, string? error
 function Pool.new(objects, colliders, params, options)
     params = params or {}
@@ -80,12 +80,8 @@ function Pool.new(objects, colliders, params, options)
     }
     for _, object in ipairs(objects) do
         local shape = Colliders.shapeOf(object.shape) or "box"
-        state.entries[#state.entries + 1] = {
-            id = object.id,
-            group = Colliders.groupKey(shape, object),
-            target = nil,
-            dirty = true,
-        }
+        state.entries[#state.entries + 1] = { id = object.id, group = Colliders.groupKey(shape, object), target = nil,
+            dirty = true }
     end
     table.sort(state.entries, function(a, b) return a.id < b.id end)
     for _, entry in ipairs(state.entries) do
@@ -109,37 +105,19 @@ function Pool.new(objects, colliders, params, options)
         table.sort(list, function(a, b) return a.index < b.index end)
     end
     if not (options and options.grid == false) then
+        -- built once (colliders never move); x / y only: height is checked per collider anyway
         state.cellSize = math.max(state.radius * 2, 1)
         state.cells = {}
         for group, list in pairs(state.targets) do
             local cells = {}
             state.cells[group] = cells
-            for _, c in ipairs(list) do
-                -- every cell (x, y: maps are flat, height is checked per collider anyway) a player's
-                -- center can be in while within reach of the collider
-                local r = c.radius + state.radius
-                local x0, x1 = cellOf(state, c.pos[1] - r), cellOf(state, c.pos[1] + r)
-                local y0, y1 = cellOf(state, c.pos[2] - r), cellOf(state, c.pos[2] + r)
-                for x = x0, x1 do
-                    for y = y0, y1 do
-                        local key = cellKey(x, y)
-                        local cell = cells[key]
-                        if not cell then
-                            cell = {}
-                            cells[key] = cell
-                        end
-                        cell[#cell + 1] = c
-                    end
-                end
-            end
+            for _, c in ipairs(list) do addToCells(cells, c, state.radius, state.cellSize) end
         end
     end
     return state
 end
 
----Forget the assignment: the next step assigns from scratch (as at a fight's start) and reports every pool
----object, so all of them are set again (after a replay restart, a frame jump, a mod reload)
----@param state AtmoPlayPoolState
+---Forget the assignment: the next step assigns from scratch and reports every pool object
 function Pool.reset(state)
     for _, entry in ipairs(state.entries) do
         entry.target = nil
@@ -152,7 +130,7 @@ local function before(a, b)
     return a.collider.index < b.collider.index
 end
 
----Keeps `list` the `limit` nearest candidates, sorted (binary insert; most colliders are out of reach)
+---Keeps `list` the `limit` nearest candidates, sorted
 local function insertNearest(list, candidate, limit)
     local low, high = 1, #list
     while low <= high do
@@ -165,22 +143,17 @@ local function insertNearest(list, candidate, limit)
 end
 
 ---The colliders a group wants this frame, nearest first
----@param state AtmoPlayPoolState
----@param group string
----@param centers number[][]
 ---@return { collider: AtmoPlayCollider, distance: number }[]
 local function wanted(state, group, centers)
     local limit = #state.groups[group]
     local radius = state.radius
-    -- the colliders to look at: with the grid, those registered in the players' cells (each once); the
-    -- result doesn't depend on their order (nearest first, ties by index)
     local candidates = state.targets[group] or {}
-    if state.cells then
-        local cells = state.cells[group] or {}
+    if state.cells then -- those registered in the centers' cells, each once
+        local cells, size = state.cells[group] or {}, state.cellSize
         local seen = {}
         candidates = {}
         for _, p in ipairs(centers) do
-            local cell = cells[cellKey(cellOf(state, p[1]), cellOf(state, p[2]))]
+            local cell = cells[cellKey(math.floor(p[1] / size), math.floor(p[2] / size))]
             for _, c in ipairs(cell or {}) do
                 if not seen[c] then
                     seen[c] = true
@@ -210,8 +183,7 @@ local function wanted(state, group, centers)
 end
 
 ---One frame of rule 1
----@param state AtmoPlayPoolState
----@param centers number[][] every player's center
+---@param centers number[][]
 ---@return AtmoPlayPoolChange[] changes in group order, then id order
 function Pool.step(state, centers)
     local changes = {}
@@ -228,7 +200,6 @@ function Pool.step(state, centers)
                 free[#free + 1] = entry
             end
         end
-        -- held entries aren't dirty: a reset clears every target, so after one all entries are free
         local cursor = 1
         for _, entry in ipairs(free) do
             while list[cursor] and held[list[cursor].collider] do cursor = cursor + 1 end
@@ -247,34 +218,16 @@ end
 
 ---------------------------------------------------------------------------------------------------- making a pool
 
----Per group, the most colliders a player can have in reach at once: what the pool has to cover. Sampled
----at every collider's position (players stand on and around the map's objects), counting the colliders
----whose bounding sphere is within `reach` (a 2D grid finds the candidates, the distance check is 3D)
----@param colliders AtmoPlayCollider[]
----@param reach number the pool rule's radius
+---Per group, the most colliders a player can have in reach at once, sampled at every collider's position
 ---@return table<string, integer> peak per group
 local function demandPeaks(colliders, reach)
     local size = math.max(reach * 2, 1)
     local grid = {}
-    local function cell(v) return math.floor(v / size) end
-    for _, c in ipairs(colliders) do
-        local r = c.radius + reach
-        for x = cell(c.pos[1] - r), cell(c.pos[1] + r) do
-            for y = cell(c.pos[2] - r), cell(c.pos[2] + r) do
-                local key = cellKey(x, y)
-                local list = grid[key]
-                if not list then
-                    list = {}
-                    grid[key] = list
-                end
-                list[#list + 1] = c
-            end
-        end
-    end
+    for _, c in ipairs(colliders) do addToCells(grid, c, reach, size) end
     local peaks = {}
     for _, sample in ipairs(colliders) do
         local p, counts = sample.pos, {}
-        for _, c in ipairs(grid[cellKey(cell(p[1]), cell(p[2]))] or {}) do
+        for _, c in ipairs(grid[cellKey(math.floor(p[1] / size), math.floor(p[2] / size))] or {}) do
             local dx, dy, dz = p[1] - c.pos[1], p[2] - c.pos[2], p[3] - c.pos[3]
             local r = c.radius + reach
             if dx * dx + dy * dy + dz * dz <= r * r then counts[c.group] = (counts[c.group] or 0) + 1 end
@@ -290,13 +243,11 @@ end
 ---@field objects { id: integer, group: string }[] the pool objects to write, by id
 ---@field groups { group: string, colliders: integer, peak: integer, pool: integer }[] most needed first
 
----The pool a playable mod gets (MGE's Save, the offline builder): the free ids split by group (Colliders.groupKey:
----what a pool object can't change once loaded), one per group first (most needed first), then in
----proportion to each group's peak demand (always to the group with the highest peak / (pool + 1)), never
----more than a group has colliders. Splitting by collider count instead starves a group of few but big
----objects (a map's floors) that are near the players all the time. Deterministic: ties by group name
----@param colliders AtmoPlayCollider[] the atmo's (Colliders.build)
----@param free integer[] free ids, in the order they're handed out
+---The pool a playable mod gets: the free ids split by group, one per group first (most needed first), then always to
+---the group with the highest peak / (pool + 1), never more than a group has colliders. By peak demand, not by
+---collider count: a group of few big floors is near the players all the time. Ties by group name
+---@param colliders AtmoPlayCollider[]
+---@param free integer[] free ids in the order they're handed out
 ---@param radius number the pool rule's radius
 ---@return AtmoPlayPoolPlan
 function Pool.plan(colliders, free, radius)

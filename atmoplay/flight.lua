@@ -1,80 +1,60 @@
--- Drawn flight (docs/atmo-play-plan.md, section 7): a small rigid-body step for props that move while no pool
--- object carries them (thrust props, props let go while moving). Pure Lua, no engine calls.
--- Measured in game (probe_thrust.lua): a match frame is 0.006 s, stepped as `v += a * dt`, then `pos += v * dt`;
--- a thrust line is a force for one step on its push frames (dv = F / mass * dt); bounce rebounds the normal speed
--- by e = 0.096 x (bounce - 0.48); friction: the lower value of the two sides wins, -10000 is frictionless,
--- -9999 a ~2 N limit (`mu = friction + 10000`), 0 and up full grip.
--- Shapes: a box touches by its 8 corners, a sphere by its center, a pill (capsule along local z) by its two end
--- spheres; each pair is tried both ways (A's points against B's surface and B's against A's), so a static's
--- corner against a prop's face counts too. Edge against edge is missed. Contacts are solved with impulses
--- (ITERATIONS rounds: normal, bounce, friction as a Coulomb cone of MU capped by the game's friction limit), so
--- hits turn props (spin from where they're hit, world axes, rad/s as ODE's get_obj_angular_vel; the game has no
--- torque for objects: a taken prop's spin is set with set_obj_angular_vel, as RPH does).
--- It meets the static atmo, the ground (always at z = 0) and, with `collide`, the other flying props and the
--- still ones it runs into (woken: they fly too). Never carried props or players: near one a prop is real by then.
--- `simple` (the cheap level, for slower computers): every prop is a sphere of its smallest half side, hits don't
--- turn it (its spin slows by SIMPLE_SPIN_GRIP a frame while something grips it), one point a prop to test.
--- All flying props step together one frame at a time (Flight.step), in atmo order, so a fight and its replay
--- (and a rebuild that steps the same frames again) give the same numbers.
+-- Drawn flight (docs/atmo-play-plan.md, section 7): a small rigid-body step for props no pool object carries.
+-- Pure Lua, no engine calls. Steps as the game does (measured): dt 0.006, v += a dt then pos += v dt; a thrust is a
+-- one-step force on its push frames. Boxes touch by their corners (box-box by separating axes), spheres by their
+-- center, pills by their two end spheres; contacts are solved with impulses (normal, bounce, Coulomb friction capped
+-- by the game's limit). Props meet the ground (z = 0), the static atmo and, with `collide`, each other.
+-- All flights step together in atmo order: a fight, its replay and a rebuild give the same numbers.
 
-local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY, MGE's MGE.AtmoPlay)
+local NS = ATMOPLAY_LOADING
 
 ---@class AtmoPlayThrust
----@field every integer pushes on the steps from frames 0, N, 2N ... (into 1, N + 1 ...)
+---@field every integer pushes on the steps from frames 0, N, 2N ...
 ---@field force number[] x y z
 ---@field space integer 0 world axes, 1 the prop's own
 
 ---@class AtmoPlayFlight
----@field vel number[] linear velocity, per second
----@field ang number[] angular velocity, rad/s, world axes
+---@field vel number[] per second
+---@field ang number[] rad/s, world axes
 ---@field frame integer the frame its prop's pos is at
----@field still integer frames in a row at rest on something
----@field ax number? the rest anchor (pos at its last restless frame; ay, az), u1-u3 / w1-w3 its rows 1-2 (nil: no rows)
----@field rows number[][] its rotation (local to world) while it flies
+---@field still integer frames in a row at rest
+---@field ax number? rest anchor: pos at its last restless frame (ay, az), rows 1-2 in u1-u3 / w1-w3
+---@field rows number[][] rotation, local to world
 
 ---@class AtmoPlayFlightWorld
 ---@field gravity number[]
 ---@field cellSize number
 ---@field cells table<integer, AtmoPlayCollider[]>
----@field big AtmoPlayCollider[] colliders over too many cells: looked at every time
+---@field big AtmoPlayCollider[] colliders over too many cells: always looked at
 
 local Flight = {
     DT = 0.006,
     GRAVITY = { 0, 0, -9.82 },
-    MASS = 1, -- a prop without a mass line
+    MASS = 1, -- without a mass line
     NO_FRICTION = -10000,
-    -- gripping contacts: a Coulomb cone of this share (a flat box slid at 5 stops in ~0.25 s, as in game), and
-    -- the game's friction limit, (friction + 10000) x LIMIT_SHARE N per contact (the flat box's 4 corners: ~2 N)
-    MU = 2,
-    LIMIT_SHARE = 0.5,
+    MU = 2, -- Coulomb cone
+    LIMIT_SHARE = 0.5, -- the game's friction limit: (friction + 10000) x this N per contact
     ITERATIONS = 8,
-    -- the rounds after the first stop early once a whole round changes the impulses by less than this (N s): resting
-    -- boxes (4 corners on the ground) settle in a round or two, they took all 8 every frame. The same data gives the
-    -- same rounds: fights still equal their replays
-    SETTLE = 1e-7,
-    BOUNCE_MIN = 0.3, -- slower hits than this (normal speed) don't bounce: resting contacts stay quiet
-    SLOP = 0.002, -- this much overlap is left (no jitter at rest)
-    PUSH = 0.8, -- the share of the rest of an overlap pushed out each frame
-    SIMPLE_SPIN_GRIP = 0.11, -- simple: the share of the spin a gripping contact takes each frame
+    SETTLE = 1e-7, -- an island stops iterating once a round changes its impulses by less (N s)
+    BOUNCE_MIN = 0.3, -- slower hits don't bounce
+    SLOP = 0.002, -- overlap left alone (no jitter at rest)
+    PUSH = 0.8, -- share of the rest of an overlap pushed out each frame
+    SIMPLE_SPIN_GRIP = 0.11, -- simple: share of the spin a gripping contact takes a frame
     REST_SPEED = 0.05,
     REST_SPIN = 0.1,
-    REST_FRAMES = 10, -- this many frames at rest on something: the flight ends
-    -- at rest also when it went nowhere since its last restless frame (the anchor): within REST_DRIFT and REST_TURN
-    -- (its rows 1-2) over REST_FRAMES, ~0.17 u/s and ~0.5 rad/s on average, touching something. Piles jitter and creep
-    -- (neighbors pushing each other, ~0.04 u/s, spin above REST_SPIN): user's modmaker/test2, 360 boxes, gravity -30,
-    -- Full: 132 never rested by frame 600 (~7 ms a frame for good); with these 7. Tried: REST_SPEED's own drift
-    -- (0.003 / 0.006) left 132, 0.006 / 0.018 left 78
+    REST_FRAMES = 10, -- frames at rest that end a flight
+    -- also at rest when it stayed this close to its anchor (piles jitter and creep without settling)
     REST_DRIFT = 0.01,
     REST_TURN = 0.03,
-    LOWEST = -100, -- below this the flight ends (under the ground: fell through)
+    LOWEST = -100, -- fell through the ground: the flight ends
     CELL = 8,
-    MAX_CELLS = 64, -- a collider over more cells than this goes in `big`
+    MAX_CELLS = 64,
+    IDENTITY = { r0 = 1, r1 = 0, r2 = 0, r3 = 0, r4 = 0, r5 = 1, r6 = 0, r7 = 0, r8 = 0, r9 = 0, r10 = 1, r11 = 0 },
 }
 
 local cellKey = NS.Pool.cellKey
 local sqrt, abs, min, max = math.sqrt, math.abs, math.min, math.max
 
----A thrust line ("<frames> x y z [space]") as a prop's thrust, nil without a push
+---"<frames> x y z [space]", nil without a push
 ---@param line string?
 ---@return AtmoPlayThrust?
 function Flight.parseThrust(line)
@@ -87,28 +67,20 @@ function Flight.parseThrust(line)
     return { every = every, force = force, space = (n[5] or 0) == 1 and 1 or 0 }
 end
 
----The rebound share of the normal speed for a bounce value (0 when it doesn't bounce)
----@param bounce number?
----@return number
+---Rebound share of the normal speed (measured: 0.096 x (bounce - 0.48))
 function Flight.restitution(bounce)
     return max(0, 0.096 * ((bounce or 0) - 0.48))
 end
 
----The friction impulse one contact can give in a frame (frictionA / B: the two sides' friction lines, nil: grip),
----nil without a limit of its own (only the Coulomb cone)
----@param frictionA number?
----@param frictionB number?
----@return number? limit 0 for frictionless
+---Friction impulse cap of one contact a frame: the lower friction of the two sides wins, -10000 is frictionless
+---@return number limit
 function Flight.frictionLimit(frictionA, frictionB)
     local f = min(frictionA or 0, frictionB or 0)
     if f <= Flight.NO_FRICTION then return 0 end
     return (f + 10000) * Flight.LIMIT_SHARE * Flight.DT
 end
 
----A thrust's force in world axes for a prop turned by `rot` (MatrixTB, local to world; Driver.matrixTB's layout)
----@param thrust AtmoPlayThrust
----@param rot table?
----@return number x, number y, number z
+---A thrust's force in world axes for a prop turned by `rot` (MatrixTB)
 function Flight.thrustWorld(thrust, rot)
     local f = thrust.force
     if thrust.space ~= 1 or not rot then return f[1], f[2], f[3] end
@@ -117,17 +89,12 @@ function Flight.thrustWorld(thrust, rot)
         rot.r8 * f[1] + rot.r9 * f[2] + rot.r10 * f[3]
 end
 
----Whether the step from `frame` to the next pushes (the game's thrust pushes into frames 1, N + 1, 2N + 1 ...)
----@param thrust AtmoPlayThrust
----@param frame integer
----@return boolean
+---Whether the step from `frame` pushes (into frames 1, N + 1 ...)
 function Flight.pushes(thrust, frame)
     return frame % thrust.every == 0
 end
 
----Gravity as a gamerule string ("0 0 -9.82"), nil when it isn't three numbers
----@param text string?
----@return number[]?
+---A gamerule gravity string, nil when it isn't three numbers
 function Flight.parseGravity(text)
     local n = {}
     for v in tostring(text or ""):gmatch("%S+") do n[#n + 1] = tonumber(v) end
@@ -137,10 +104,7 @@ end
 
 ---------------------------------------------------------------------------------------------------- shapes
 
----The points a shape touches by, in its own axes: { x, y, z, radius }
----@param shape string
----@param sides number[]
----@return number[][]
+---The points a shape touches by, local: { x, y, z, radius }
 local function localPoints(shape, sides)
     if shape == "sphere" then return { { 0, 0, 0, sides[1] } } end
     if shape == "cylinder" then
@@ -157,33 +121,56 @@ local function localPoints(shape, sides)
     return out
 end
 
----The inverse of a shape's inertia in its own axes (per unit mass: divided by the mass after)
+---Local points moved to pos and turned by rows m, written into `out` (its tables reused)
+local function worldPointsInto(pos, pts, m, out)
+    local px, py, pz = pos[1], pos[2], pos[3]
+    local m11, m12, m13, m21, m22, m23, m31, m32, m33 =
+        m[1][1], m[1][2], m[1][3], m[2][1], m[2][2], m[2][3], m[3][1], m[3][2], m[3][3]
+    for i = 1, #pts do
+        local l = pts[i]
+        local q = out[i]
+        if not q then
+            q = {}
+            out[i] = q
+        end
+        local lx, ly, lz = l[1], l[2], l[3]
+        q[1] = px + m11 * lx + m12 * ly + m13 * lz
+        q[2] = py + m21 * lx + m22 * ly + m23 * lz
+        q[3] = pz + m31 * lx + m32 * ly + m33 * lz
+        q[4] = l[4]
+    end
+    for i = #pts + 1, #out do out[i] = nil end
+    return out
+end
+
+---Inverse inertia in the shape's own axes
 local function inverseInertia(shape, sides, mass)
-    local x, y, z
     if shape == "sphere" then
         local i = 0.4 * mass * sides[1] ^ 2
         return { 1 / i, 1 / i, 1 / i }
     elseif shape == "cylinder" then
-        -- ODE's capsule (dMassSetCapsule): a cylinder of radius r and length l with two half spheres, its mass shared by
-        -- volume. The box around the pill (the first version) turned ~1.5x too hard: drawn cylinders rolled ~11% short of
-        -- the game's (docs/atmo-play-plan.md, real against drawn)
+        -- ODE's capsule: a cylinder and two half spheres, the mass shared by volume
         local r, l = sides[1], sides[2]
         local m1, m2 = math.pi * r * r * l, 4 / 3 * math.pi * r ^ 3
         local k = mass / (m1 + m2)
         local along = k * (m1 * 0.5 * r * r + m2 * 0.4 * r * r)
         local across = k * (m1 * (0.25 * r * r + l * l / 12) + m2 * (0.4 * r * r + 0.375 * r * l + 0.25 * l * l))
         return { 1 / across, 1 / across, 1 / along }
-    else
-        x, y, z = sides[1], sides[2], sides[3]
     end
+    local x, y, z = sides[1], sides[2], sides[3]
     local k = mass / 12
     return { 1 / (k * (y * y + z * z)), 1 / (k * (x * x + z * z)), 1 / (k * (x * x + y * y)) }
 end
 
----A prop's body data for a level, made once each (its shape and size don't change): its shape as it touches,
----points, mass and inertia. Set as prop.body, the one the solver uses
----@param prop AtmoPlayCollider
----@param simple boolean? the cheap level: a sphere of the smallest half side that hits don't turn
+---The sphere a prop flies as on the simple level: its smallest half side, a sphere's or pill's radius
+local function radiusOf(prop)
+    local s = prop.sides
+    if prop.shape == "sphere" or prop.shape == "cylinder" then return s[1] end
+    return min(s[1], s[2], s[3]) / 2
+end
+
+---A prop's body for a level (made once each, set as prop.body): touching shape, points, mass, inertia
+---@param simple boolean? a sphere that hits don't turn
 local function bodyOf(prop, simple)
     local cache = prop.bodies
     if not cache then
@@ -193,11 +180,11 @@ local function bodyOf(prop, simple)
     local key = simple and "simple" or "shapes"
     local b = cache[key]
     if not b then
-        -- the mass its object has in the game (dynamics.lua reads it for a prop without a mass line), else its line
+        -- flightMass: the game's own mass for a prop without a mass line (dynamics.lua)
         local mass = prop.flightMass or prop.mass or Flight.MASS
         if mass <= 0 then mass = Flight.MASS end
         if simple then
-            local r = Flight.radiusOf(prop)
+            local r = radiusOf(prop)
             b = { shape = "sphere", sides = { r, r, r }, points = { { 0, 0, 0, r } }, invMass = 1 / mass, mass = mass,
                 invI = { 0, 0, 0 } }
         else
@@ -209,24 +196,14 @@ local function bodyOf(prop, simple)
     prop.body = b
     return b
 end
-
----The sphere a prop flies as on the simple level: its smallest half side (flat props sit low), a sphere's
----radius, a pill's
----@param prop AtmoPlayCollider
----@return number
-function Flight.radiusOf(prop)
-    local s = prop.sides
-    if prop.shape == "sphere" or prop.shape == "cylinder" then return s[1] end
-    return min(s[1], s[2], s[3]) / 2
-end
 Flight.bodyOf = bodyOf
 
----A MatrixTB (local to world, Driver.matrixTB's layout) as rows
+---MatrixTB as rows
 local function rowsOf(m)
     return { { m.r0, m.r1, m.r2 }, { m.r4, m.r5, m.r6 }, { m.r8, m.r9, m.r10 } }
 end
 
----Rows m back to a rotation (Gram-Schmidt on its columns: steps add up rounding), in place
+---Gram-Schmidt on the columns, in place (steps add up rounding)
 local function orthonormalize(m)
     local ax, ay, az = m[1][1], m[2][1], m[3][1]
     local n = sqrt(ax * ax + ay * ay + az * az)
@@ -241,7 +218,7 @@ local function orthonormalize(m)
     m[1][3], m[2][3], m[3][3] = ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
 end
 
----Rows m turned by angular velocity w for dt (Rodrigues, world axes): Q * m, in place
+---Rows m turned by angular velocity w for dt (Rodrigues), in place
 local function turn(m, wx, wy, wz, dt)
     local w = sqrt(wx * wx + wy * wy + wz * wz)
     if w < 1e-12 then return end
@@ -257,8 +234,7 @@ local function turn(m, wx, wy, wz, dt)
     end
 end
 
----Where a point is against a shape at pos turned by frame (rows, local to world): its distance out of the surface
----(negative inside) and the way out
+---A point against a shape at pos with rows f: its distance out of the surface (negative inside) and the way out
 ---@return number distance, number nx, number ny, number nz
 local function surfaceAt(shape, sides, pos, f, x, y, z)
     local dx, dy, dz = x - pos[1], y - pos[2], z - pos[3]
@@ -267,11 +243,10 @@ local function surfaceAt(shape, sides, pos, f, x, y, z)
         if d < 1e-9 then return -sides[1], 0, 0, 1 end
         return d - sides[1], dx / d, dy / d, dz / d
     end
-    -- into the shape's own axes (frame is local to world, so its transpose)
     local lx = dx * f[1][1] + dy * f[2][1] + dz * f[3][1]
     local ly = dx * f[1][2] + dy * f[2][2] + dz * f[3][2]
     local lz = dx * f[1][3] + dy * f[2][3] + dz * f[3][3]
-    local ox, oy, oz, d -- the way out, local
+    local ox, oy, oz, d
     if shape == "cylinder" then
         local half = sides[2] / 2
         local qz = max(-half, min(half, lz))
@@ -289,8 +264,7 @@ local function surfaceAt(shape, sides, pos, f, x, y, z)
         local len = sqrt(ex * ex + ey * ey + ez * ez)
         if len > 1e-9 then
             ox, oy, oz, d = ex / len, ey / len, ez / len, len
-        else
-            -- inside: out through the nearest face
+        else -- inside: out through the nearest face
             local px, py, pz = hx - abs(lx), hy - abs(ly), hz - abs(lz)
             if px <= py and px <= pz then
                 ox, oy, oz, d = lx < 0 and -1 or 1, 0, 0, -px
@@ -305,59 +279,127 @@ local function surfaceAt(shape, sides, pos, f, x, y, z)
         f[3][1] * ox + f[3][2] * oy + f[3][3] * oz
 end
 
-local OVERLAP_MARGIN = 0.01 -- deeper than this in each other: overlapping (touching faces aren't)
+---@param c AtmoPlayCollider
+function Flight.surface(c, x, y, z)
+    return surfaceAt(c.shape, c.sides, c.pos, c.frame, x, y, z)
+end
 
----Whether two shapes (shape, sides, pos, frame: rows local to world) overlap: a touch point of one inside the
----other, or one's center inside the other. Props that already overlap where the map places them (a generated shape
----of overlapping boxes) never push each other apart (dynamics.lua: prop.ignore)
+---------------------------------------------------------------------------------------------------- box against box
+
+-- Separating axes, Gottschalk's way: R_ij = |A_i . B_j| once, then each of the 15 axes is a few products (the axes
+-- are orthonormal). Upvalues hold the pair being tested: no tables or closures a call
+local A1x, A1y, A1z, A2x, A2y, A2z, A3x, A3y, A3z
+local B1x, B1y, B1z, B2x, B2y, B2z, B3x, B3y, B3z
+local hA1, hA2, hA3, hB1, hB2, hB3, Dx, Dy, Dz
+local R11, R12, R13, R21, R22, R23, R31, R32, R33
+local best, Nx, Ny, Nz -- least overlap so far and its normal (out of B, toward A)
+local edgeBias -- edge axes win only when clearly better (faces give steadier contacts)
+
+---A face axis (unit l): r both boxes' reach along it, dist the centers' gap
+local function faceAxis(r, dist, lx, ly, lz)
+    local over = r - abs(dist)
+    if over < 0 then return false end
+    if over < best then
+        best = over
+        if dist > 0 then Nx, Ny, Nz = -lx, -ly, -lz else Nx, Ny, Nz = lx, ly, lz end
+    end
+    return true
+end
+
+---An edge axis l = A_i x B_j (not unit), r the reach scaled by its length
+local function edgeAxis(lx, ly, lz, r)
+    local len = sqrt(lx * lx + ly * ly + lz * lz)
+    if len < 1e-6 then return true end
+    local dist = (Dx * lx + Dy * ly + Dz * lz) / len
+    local over = r / len - abs(dist)
+    if over < 0 then return false end
+    if over < (edgeBias and best * 0.95 - 1e-4 or best) then
+        best = over
+        if dist > 0 then Nx, Ny, Nz = -lx / len, -ly / len, -lz / len else Nx, Ny, Nz = lx / len, ly / len, lz / len end
+    end
+    return true
+end
+
+---Loads a pair (rows fa / fb, sides, positions) and tries all 15 axes: false when apart, else `best` and N are set
+local function separate(fa, fb, sa, sb, pa, pb, bias)
+    A1x, A1y, A1z, A2x, A2y, A2z, A3x, A3y, A3z =
+        fa[1][1], fa[2][1], fa[3][1], fa[1][2], fa[2][2], fa[3][2], fa[1][3], fa[2][3], fa[3][3]
+    B1x, B1y, B1z, B2x, B2y, B2z, B3x, B3y, B3z =
+        fb[1][1], fb[2][1], fb[3][1], fb[1][2], fb[2][2], fb[3][2], fb[1][3], fb[2][3], fb[3][3]
+    hA1, hA2, hA3, hB1, hB2, hB3 = sa[1] / 2, sa[2] / 2, sa[3] / 2, sb[1] / 2, sb[2] / 2, sb[3] / 2
+    Dx, Dy, Dz = pb[1] - pa[1], pb[2] - pa[2], pb[3] - pa[3]
+    best, Nx, Ny, Nz, edgeBias = math.huge, 0, 0, 1, bias
+    R11 = abs(A1x * B1x + A1y * B1y + A1z * B1z)
+    R12 = abs(A1x * B2x + A1y * B2y + A1z * B2z)
+    R13 = abs(A1x * B3x + A1y * B3y + A1z * B3z)
+    R21 = abs(A2x * B1x + A2y * B1y + A2z * B1z)
+    R22 = abs(A2x * B2x + A2y * B2y + A2z * B2z)
+    R23 = abs(A2x * B3x + A2y * B3y + A2z * B3z)
+    R31 = abs(A3x * B1x + A3y * B1y + A3z * B1z)
+    R32 = abs(A3x * B2x + A3y * B2y + A3z * B2z)
+    R33 = abs(A3x * B3x + A3y * B3y + A3z * B3z)
+    -- faces, A_i then B_i (this order decides ties)
+    return faceAxis(hA1 + hB1 * R11 + hB2 * R12 + hB3 * R13, Dx * A1x + Dy * A1y + Dz * A1z, A1x, A1y, A1z)
+        and faceAxis(hA1 * R11 + hA2 * R21 + hA3 * R31 + hB1, Dx * B1x + Dy * B1y + Dz * B1z, B1x, B1y, B1z)
+        and faceAxis(hA2 + hB1 * R21 + hB2 * R22 + hB3 * R23, Dx * A2x + Dy * A2y + Dz * A2z, A2x, A2y, A2z)
+        and faceAxis(hA1 * R12 + hA2 * R22 + hA3 * R32 + hB2, Dx * B2x + Dy * B2y + Dz * B2z, B2x, B2y, B2z)
+        and faceAxis(hA3 + hB1 * R31 + hB2 * R32 + hB3 * R33, Dx * A3x + Dy * A3y + Dz * A3z, A3x, A3y, A3z)
+        and faceAxis(hA1 * R13 + hA2 * R23 + hA3 * R33 + hB3, Dx * B3x + Dy * B3y + Dz * B3z, B3x, B3y, B3z)
+        -- edges A_i x B_j: A reaches over its other two axes, B over its other two
+        and edgeAxis(A1y * B1z - A1z * B1y, A1z * B1x - A1x * B1z, A1x * B1y - A1y * B1x,
+            hA2 * R31 + hA3 * R21 + hB2 * R13 + hB3 * R12)
+        and edgeAxis(A1y * B2z - A1z * B2y, A1z * B2x - A1x * B2z, A1x * B2y - A1y * B2x,
+            hA2 * R32 + hA3 * R22 + hB1 * R13 + hB3 * R11)
+        and edgeAxis(A1y * B3z - A1z * B3y, A1z * B3x - A1x * B3z, A1x * B3y - A1y * B3x,
+            hA2 * R33 + hA3 * R23 + hB1 * R12 + hB2 * R11)
+        and edgeAxis(A2y * B1z - A2z * B1y, A2z * B1x - A2x * B1z, A2x * B1y - A2y * B1x,
+            hA1 * R31 + hA3 * R11 + hB2 * R23 + hB3 * R22)
+        and edgeAxis(A2y * B2z - A2z * B2y, A2z * B2x - A2x * B2z, A2x * B2y - A2y * B2x,
+            hA1 * R32 + hA3 * R12 + hB1 * R23 + hB3 * R21)
+        and edgeAxis(A2y * B3z - A2z * B3y, A2z * B3x - A2x * B3z, A2x * B3y - A2y * B3x,
+            hA1 * R33 + hA3 * R13 + hB1 * R22 + hB2 * R21)
+        and edgeAxis(A3y * B1z - A3z * B1y, A3z * B1x - A3x * B1z, A3x * B1y - A3y * B1x,
+            hA1 * R21 + hA2 * R11 + hB2 * R33 + hB3 * R32)
+        and edgeAxis(A3y * B2z - A3z * B2y, A3z * B2x - A3x * B2z, A3x * B2y - A3y * B2x,
+            hA1 * R22 + hA2 * R12 + hB1 * R33 + hB3 * R31)
+        and edgeAxis(A3y * B3z - A3z * B3y, A3z * B3x - A3x * B3z, A3x * B3y - A3y * B3x,
+            hA1 * R23 + hA2 * R13 + hB1 * R32 + hB2 * R31)
+end
+
+local OVERLAP_MARGIN = 0.01 -- deeper than this: overlapping (touching faces aren't)
+
+---Whether two shapes (shape, sides, pos, frame) overlap. Props overlapping where the map places them never push
+---each other apart (dynamics.lua: prop.ignore)
 ---@return boolean
 function Flight.overlap(a, b)
     local dx, dy, dz = b.pos[1] - a.pos[1], b.pos[2] - a.pos[2], b.pos[3] - a.pos[3]
     local reach = (a.radius or 0) + (b.radius or 0)
     if dx * dx + dy * dy + dz * dz > reach * reach then return false end
+    if a.shape == "box" and b.shape == "box" then
+        return separate(a.frame, b.frame, a.sides, b.sides, a.pos, b.pos, false) and best > OVERLAP_MARGIN
+    end
     local function into(x, y)
-        local f, p = x.frame, x.pos
+        local p = x.pos
         if surfaceAt(y.shape, y.sides, y.pos, y.frame, p[1], p[2], p[3]) < -OVERLAP_MARGIN then return true end
-        for _, l in ipairs(localPoints(x.shape, x.sides)) do
-            local qx = p[1] + f[1][1] * l[1] + f[1][2] * l[2] + f[1][3] * l[3]
-            local qy = p[2] + f[2][1] * l[1] + f[2][2] * l[2] + f[2][3] * l[3]
-            local qz = p[3] + f[3][1] * l[1] + f[3][2] * l[2] + f[3][3] * l[3]
-            if surfaceAt(y.shape, y.sides, y.pos, y.frame, qx, qy, qz) < l[4] - OVERLAP_MARGIN then return true end
+        for _, q in ipairs(worldPointsInto(p, localPoints(x.shape, x.sides), x.frame, {})) do
+            if surfaceAt(y.shape, y.sides, y.pos, y.frame, q[1], q[2], q[3]) < q[4] - OVERLAP_MARGIN then return true end
         end
         return false
-    end
-    if a.shape == "box" and b.shape == "box" and Flight.boxesOverlap then
-        return Flight.boxesOverlap(a, b) > OVERLAP_MARGIN -- separating axes: faces crossing without a corner inside
     end
     return into(a, b) or into(b, a)
 end
 
----Where a point is against a collider (see surfaceAt)
----@param c AtmoPlayCollider
----@return number distance, number nx, number ny, number nz
-function Flight.surface(c, x, y, z)
-    return surfaceAt(c.shape, c.sides, c.pos, c.frame, x, y, z)
-end
-
 ---------------------------------------------------------------------------------------------------- the world
 
----The static atmo, listed by x / y cell for quick lookups; each collider gets its touch points in world axes
----@param colliders AtmoPlayCollider[]? static ones
+---The static atmo by x / y cell; each collider gets its touch points in world axes
+---@param colliders AtmoPlayCollider[]?
 ---@param gravity number[]?
 ---@return AtmoPlayFlightWorld
 function Flight.newWorld(colliders, gravity)
     local w = { gravity = gravity or Flight.GRAVITY, cellSize = Flight.CELL, cells = {}, big = {},
         empty = colliders == nil or #colliders == 0 }
     for _, c in ipairs(colliders or {}) do
-        if not c.points then
-            local f, pts = c.frame, {}
-            for _, l in ipairs(localPoints(c.shape, c.sides)) do
-                pts[#pts + 1] = { c.pos[1] + f[1][1] * l[1] + f[1][2] * l[2] + f[1][3] * l[3],
-                    c.pos[2] + f[2][1] * l[1] + f[2][2] * l[2] + f[2][3] * l[3],
-                    c.pos[3] + f[3][1] * l[1] + f[3][2] * l[2] + f[3][3] * l[3], l[4] }
-            end
-            c.points = pts
-        end
+        c.points = c.points or worldPointsInto(c.pos, localPoints(c.shape, c.sides), c.frame, {})
         local r = c.radius
         local x0, x1 = math.floor((c.pos[1] - r) / w.cellSize), math.floor((c.pos[1] + r) / w.cellSize)
         local y0, y1 = math.floor((c.pos[2] - r) / w.cellSize), math.floor((c.pos[2] + r) / w.cellSize)
@@ -380,19 +422,12 @@ function Flight.newWorld(colliders, gravity)
     return w
 end
 
----The static colliders whose bounding spheres reach a sphere at p of radius r (each once, in a stable order).
----Makes no tables: a collider already listed by this call carries the call's stamp
 local stamp = 0
-local function nearby(w, p, r, out)
-    if w.empty then
-        for i = 1, #out do out[i] = nil end
-        return 0
-    end
-    stamp = stamp + 1
-    local n, px, py, pz = 0, p[1], p[2], p[3]
-    local big = w.big
-    for k = 1, #big do
-        local c = big[k]
+
+---Adds to out[n + 1 ...] the colliders of `list` reaching a sphere at p of radius r, each once a call (stamped)
+local function reaching(list, px, py, pz, r, out, n)
+    for k = 1, #list do
+        local c = list[k]
         if c.flightStamp ~= stamp then
             c.flightStamp = stamp
             local q = c.pos
@@ -404,25 +439,23 @@ local function nearby(w, p, r, out)
             end
         end
     end
+    return n
+end
+
+---Writes into `out` the static colliders whose bounding spheres reach a sphere at p of radius r; returns how many
+local function nearby(w, p, r, out)
+    if w.empty then
+        for i = 1, #out do out[i] = nil end
+        return 0
+    end
+    stamp = stamp + 1
+    local px, py, pz = p[1], p[2], p[3]
+    local n = reaching(w.big, px, py, pz, r, out, 0)
     local size, cells = w.cellSize, w.cells
     for cx = math.floor((px - r) / size), math.floor((px + r) / size) do
         for cy = math.floor((py - r) / size), math.floor((py + r) / size) do
             local list = cells[cellKey(cx, cy)]
-            if list then
-                for k = 1, #list do
-                    local c = list[k]
-                    if c.flightStamp ~= stamp then
-                        c.flightStamp = stamp
-                        local q = c.pos
-                        local dx, dy, dz = q[1] - px, q[2] - py, q[3] - pz
-                        local reach = c.radius + r
-                        if dx * dx + dy * dy + dz * dz <= reach * reach then
-                            n = n + 1
-                            out[n] = c
-                        end
-                    end
-                end
-            end
+            if list then n = reaching(list, px, py, pz, r, out, n) end
         end
     end
     for i = n + 1, #out do out[i] = nil end
@@ -431,35 +464,11 @@ end
 
 ---------------------------------------------------------------------------------------------------- contacts
 
--- A contact (pooled: the tables are used again every frame): a (a flying prop), b (another, or nil: static /
--- ground), other (b, or the static collider: its bounce and friction), the point px py pz, the normal n (out of b,
--- into a's side), its depth, two tangents t1 t2, the bounce it aims for, the friction cap, the impulses so far
-
----A flying prop's touch points in world axes, written into `out` (its tables used again)
-local function worldPointsInto(pos, b, m, out)
-    local px, py, pz = pos[1], pos[2], pos[3]
-    local m11, m12, m13, m21, m22, m23, m31, m32, m33 =
-        m[1][1], m[1][2], m[1][3], m[2][1], m[2][2], m[2][3], m[3][1], m[3][2], m[3][3]
-    local pts = b.points
-    for i = 1, #pts do
-        local l = pts[i]
-        local q = out[i]
-        if not q then
-            q = {}
-            out[i] = q
-        end
-        local lx, ly, lz = l[1], l[2], l[3]
-        q[1] = px + m11 * lx + m12 * ly + m13 * lz
-        q[2] = py + m21 * lx + m22 * ly + m23 * lz
-        q[3] = pz + m31 * lx + m32 * ly + m33 * lz
-        q[4] = l[4]
-    end
-    for i = #pts + 1, #out do out[i] = nil end
-    return out
-end
-
-local pool, used = {}, 0 -- the contacts of the frame being stepped
-local coupledList = {} -- Flight.step's contacts solved in every round, kept (no list a step)
+-- Pooled contacts: a (flying prop), b (another flying prop or false), other (b or the static collider: bounce and
+-- friction), point p, normal n (out of b toward a), depth, tangents t1 t2, impulses so far. Empty fields hold false,
+-- never nil: a key set to nil is dropped by a collection, and setting it again can rebuild the table
+local pool, used = {}, 0
+local coupledList = {}
 
 local function addContact(a, b, px, py, pz, nx, ny, nz, depth, other)
     used = used + 1
@@ -468,10 +477,9 @@ local function addContact(a, b, px, py, pz, nx, ny, nz, depth, other)
         c = {}
         pool[used] = c
     end
-    c.a, c.b, c.other = a, b, other
+    c.a, c.b, c.other = a, b or false, other or false
     c.px, c.py, c.pz, c.nx, c.ny, c.nz, c.depth = px, py, pz, nx, ny, nz, depth
-    -- tangents: t1 = a x n, normalized; t2 = n x t1
-    local ax, ay, az
+    local ax, ay, az -- t1 = a x n, t2 = n x t1
     if abs(nx) < 0.6 then ax, ay, az = 1, 0, 0 else ax, ay, az = 0, 1, 0 end
     local t1x, t1y, t1z = ay * nz - az * ny, az * nx - ax * nz, ax * ny - ay * nx
     local l = sqrt(t1x * t1x + t1y * t1y + t1z * t1z)
@@ -481,94 +489,14 @@ local function addContact(a, b, px, py, pz, nx, ny, nz, depth, other)
     c.jn, c.jt1, c.jt2 = 0, 0, 0
 end
 
-local AXIS_TOL = 1e-4 -- a corner this close to a box's side still counts as inside it (faces flush)
+local AXIS_TOL = 1e-4 -- a corner this close to a box's side counts as inside (flush faces)
 
--- the pair boxBox is testing (upvalues: no tables or closures a call)
-local A1x, A1y, A1z, A2x, A2y, A2z, A3x, A3y, A3z
-local B1x, B1y, B1z, B2x, B2y, B2z, B3x, B3y, B3z
-local hA1, hA2, hA3, hB1, hB2, hB3, Dx, Dy, Dz
-local best, Nx, Ny, Nz
-
----One separating axis: false when the boxes are apart along it; else the least overlap so far (an edge axis only
----when clearly better: faces give steadier contacts) and the normal out of B, toward A
-local function satAxis(lx, ly, lz, edge)
-    local len = sqrt(lx * lx + ly * ly + lz * lz)
-    if len < 1e-6 then return true end
-    lx, ly, lz = lx / len, ly / len, lz / len
-    local ra = hA1 * abs(A1x * lx + A1y * ly + A1z * lz) + hA2 * abs(A2x * lx + A2y * ly + A2z * lz)
-        + hA3 * abs(A3x * lx + A3y * ly + A3z * lz)
-    local rb = hB1 * abs(B1x * lx + B1y * ly + B1z * lz) + hB2 * abs(B2x * lx + B2y * ly + B2z * lz)
-        + hB3 * abs(B3x * lx + B3y * ly + B3z * lz)
-    local dist = Dx * lx + Dy * ly + Dz * lz
-    local over = ra + rb - abs(dist)
-    if over < 0 then return false end
-    if over < (edge and best * 0.95 - 1e-4 or best) then
-        best = over
-        if dist > 0 then Nx, Ny, Nz = -lx, -ly, -lz else Nx, Ny, Nz = lx, ly, lz end
-    end
-    return true
-end
-
----How deep two boxes (shape, sides, pos, frame) overlap by separating axes: the least overlap over the 15 axes, 0
----or less when apart
----@return number
-function Flight.boxesOverlap(a, b)
-    local fa, fb = a.frame, b.frame
-    A1x, A1y, A1z, A2x, A2y, A2z, A3x, A3y, A3z =
-        fa[1][1], fa[2][1], fa[3][1], fa[1][2], fa[2][2], fa[3][2], fa[1][3], fa[2][3], fa[3][3]
-    B1x, B1y, B1z, B2x, B2y, B2z, B3x, B3y, B3z =
-        fb[1][1], fb[2][1], fb[3][1], fb[1][2], fb[2][2], fb[3][2], fb[1][3], fb[2][3], fb[3][3]
-    local sa, sb, pa, pb = a.sides, b.sides, a.pos, b.pos
-    hA1, hA2, hA3, hB1, hB2, hB3 = sa[1] / 2, sa[2] / 2, sa[3] / 2, sb[1] / 2, sb[2] / 2, sb[3] / 2
-    Dx, Dy, Dz = pb[1] - pa[1], pb[2] - pa[2], pb[3] - pa[3]
-    best = math.huge
-    local axes = {
-        { A1x, A1y, A1z }, { A2x, A2y, A2z }, { A3x, A3y, A3z }, { B1x, B1y, B1z }, { B2x, B2y, B2z }, { B3x, B3y, B3z } }
-    for _, l in ipairs(axes) do
-        if not satAxis(l[1], l[2], l[3]) then return 0 end
-    end
-    for i = 1, 3 do
-        for j = 4, 6 do
-            local u, v = axes[i], axes[j]
-            -- every axis counts the same here (edge = nil): the least overlap is the depth
-            if not satAxis(u[2] * v[3] - u[3] * v[2], u[3] * v[1] - u[1] * v[3], u[1] * v[2] - u[2] * v[1]) then
-                return 0
-            end
-        end
-    end
-    return best
-end
-
----Box against box by separating axes (their 3 + 3 faces and 9 edge pairs): the axis of least overlap is the
----normal; the contacts are each box's corners inside the other (flush faces too), or one point between the
----two when only edges cross. Corner tests alone miss flush faces of equal boxes (their corners sit on edges)
+---Box A against box B: contacts at each box's corners inside the other along the least-overlap axis, or one point
+---between the two when only edges cross
 local function boxBox(A, fa, ptsA, B, fb, ptsB, bodyB, other)
-    A1x, A1y, A1z, A2x, A2y, A2z, A3x, A3y, A3z =
-        fa[1][1], fa[2][1], fa[3][1], fa[1][2], fa[2][2], fa[3][2], fa[1][3], fa[2][3], fa[3][3]
-    B1x, B1y, B1z, B2x, B2y, B2z, B3x, B3y, B3z =
-        fb[1][1], fb[2][1], fb[3][1], fb[1][2], fb[2][2], fb[3][2], fb[1][3], fb[2][3], fb[3][3]
-    local sa, sb, pa, pb = A.sides, B.sides, A.pos, B.pos
-    hA1, hA2, hA3, hB1, hB2, hB3 = sa[1] / 2, sa[2] / 2, sa[3] / 2, sb[1] / 2, sb[2] / 2, sb[3] / 2
-    Dx, Dy, Dz = pb[1] - pa[1], pb[2] - pa[2], pb[3] - pa[3]
-    best, Nx, Ny, Nz = math.huge, 0, 0, 1
-    if not (satAxis(A1x, A1y, A1z) and satAxis(B1x, B1y, B1z) and satAxis(A2x, A2y, A2z) and satAxis(B2x, B2y, B2z)
-            and satAxis(A3x, A3y, A3z) and satAxis(B3x, B3y, B3z)) then
-        return
-    end
-    -- the 9 edge pairs: A's axis i x B's axis j
-    if not (satAxis(A1y * B1z - A1z * B1y, A1z * B1x - A1x * B1z, A1x * B1y - A1y * B1x, true)
-            and satAxis(A1y * B2z - A1z * B2y, A1z * B2x - A1x * B2z, A1x * B2y - A1y * B2x, true)
-            and satAxis(A1y * B3z - A1z * B3y, A1z * B3x - A1x * B3z, A1x * B3y - A1y * B3x, true)
-            and satAxis(A2y * B1z - A2z * B1y, A2z * B1x - A2x * B1z, A2x * B1y - A2y * B1x, true)
-            and satAxis(A2y * B2z - A2z * B2y, A2z * B2x - A2x * B2z, A2x * B2y - A2y * B2x, true)
-            and satAxis(A2y * B3z - A2z * B3y, A2z * B3x - A2x * B3z, A2x * B3y - A2y * B3x, true)
-            and satAxis(A3y * B1z - A3z * B1y, A3z * B1x - A3x * B1z, A3x * B1y - A3y * B1x, true)
-            and satAxis(A3y * B2z - A3z * B2y, A3z * B2x - A3x * B2z, A3x * B2y - A3y * B2x, true)
-            and satAxis(A3y * B3z - A3z * B3y, A3z * B3x - A3x * B3z, A3x * B3y - A3y * B3x, true)) then
-        return
-    end
+    local pa, pb = A.pos, B.pos
+    if not separate(fa, fb, A.sides, B.sides, pa, pb, true) then return end
     local nx, ny, nz = Nx, Ny, Nz
-    -- how far each box reaches along n
     local ra = hA1 * abs(A1x * nx + A1y * ny + A1z * nz) + hA2 * abs(A2x * nx + A2y * ny + A2z * nz)
         + hA3 * abs(A3x * nx + A3y * ny + A3z * nz)
     local rb = hB1 * abs(B1x * nx + B1y * ny + B1z * nz) + hB2 * abs(B2x * nx + B2y * ny + B2z * nz)
@@ -601,8 +529,7 @@ local function boxBox(A, fa, ptsA, B, fb, ptsB, bodyB, other)
             end
         end
     end
-    if used == before then
-        -- edges crossing: one point between the two boxes' nearest corners along n
+    if used == before then -- edges crossing: between the two boxes' nearest corners along n
         local k1 = (A1x * -nx + A1y * -ny + A1z * -nz) >= 0 and hA1 or -hA1
         local k2 = (A2x * -nx + A2y * -ny + A2z * -nz) >= 0 and hA2 or -hA2
         local k3 = (A3x * -nx + A3y * -ny + A3z * -nz) >= 0 and hA3 or -hA3
@@ -619,9 +546,8 @@ local function boxBox(A, fa, ptsA, B, fb, ptsB, bodyB, other)
     end
 end
 
----Contacts between flying prop A (its world points) and a shape B (static collider or flying prop: shape,
----sides, pos, rows f, and its world points), each way. bodyB: nil for a static one. A touches as its body's
----shape (a sphere on the simple level)
+---Contacts between flying prop A and shape B (static collider, or flying prop bodyB), A's points against B's
+---surface and B's against A's. A touches as its body's shape (a sphere on the simple level)
 local function pairContacts(A, ptsA, B, f, ptsB, bodyB, other)
     local fa, shapeA, sidesA = A.flight.rows, A.body.shape, A.body.sides
     local shapeB, sidesB = B.shape, B.sides
@@ -638,16 +564,16 @@ local function pairContacts(A, ptsA, B, f, ptsB, bodyB, other)
     for k = 1, #ptsB do
         local q = ptsB[k]
         local d, nx, ny, nz = surfaceAt(shapeA, sidesA, pa, fa, q[1], q[2], q[3])
-        if d < q[4] then
-            -- the way out of A is into B: the normal out of B is its opposite
-            addContact(A, bodyB, q[1], q[2], q[3], -nx, -ny, -nz, q[4] - d, other)
-        end
+        if d < q[4] then addContact(A, bodyB, q[1], q[2], q[3], -nx, -ny, -nz, q[4] - d, other) end
     end
 end
 
 ---------------------------------------------------------------------------------------------------- solving
 
----A flying prop's inverse inertia in world axes for this frame (R * diag(invI) * R^T, 9 numbers by rows)
+-- Touch points and world inertia are worked out once a step, only for props something touches
+local stepStamp = 0
+
+---Inverse inertia in world axes (R diag(invI) R^T, 9 numbers by rows)
 local function worldInertia(fl, b)
     local m, i = fl.rows, b.invI
     local iw = fl.iw
@@ -656,7 +582,7 @@ local function worldInertia(fl, b)
         fl.iw = iw
     end
     local i1, i2, i3 = i[1], i[2], i[3]
-    if i1 == i2 and i2 == i3 then -- the same in every axis (a sphere, the simple level): any rotation keeps it
+    if i1 == i2 and i2 == i3 then -- isotropic: any rotation keeps it
         iw[1], iw[2], iw[3], iw[4], iw[5], iw[6], iw[7], iw[8], iw[9] = i1, 0, 0, 0, i1, 0, 0, 0, i1
         return
     end
@@ -670,68 +596,15 @@ local function worldInertia(fl, b)
     end
 end
 
----How hard it is to change the speed along direction d at point p (1 / effective mass); 0 for no prop
-local function resistance(prop, px, py, pz, dx, dy, dz)
-    if not prop then return 0 end
-    local q, i = prop.pos, prop.flight.iw
-    local rx, ry, rz = px - q[1], py - q[2], pz - q[3]
-    local cx, cy, cz = ry * dz - rz * dy, rz * dx - rx * dz, rx * dy - ry * dx -- r x d
-    local ix = i[1] * cx + i[2] * cy + i[3] * cz
-    local iy = i[4] * cx + i[5] * cy + i[6] * cz
-    local iz = i[7] * cx + i[8] * cy + i[9] * cz
-    -- (I^-1 (r x d)) x r . d
-    return prop.body.invMass + (iy * rz - iz * ry) * dx + (iz * rx - ix * rz) * dy + (ix * ry - iy * rx) * dz
-end
-
----The relative velocity of a's and b's material at the contact point
-local function relVel(c)
-    local a, px, py, pz = c.a, c.px, c.py, c.pz
-    local fl, q = a.flight, a.pos
-    local v, w = fl.vel, fl.ang
-    local rx, ry, rz = px - q[1], py - q[2], pz - q[3]
-    local vx = v[1] + w[2] * rz - w[3] * ry
-    local vy = v[2] + w[3] * rx - w[1] * rz
-    local vz = v[3] + w[1] * ry - w[2] * rx
-    local b = c.b
-    if b then
-        fl, q = b.flight, b.pos
-        v, w = fl.vel, fl.ang
-        rx, ry, rz = px - q[1], py - q[2], pz - q[3]
-        vx = vx - (v[1] + w[2] * rz - w[3] * ry)
-        vy = vy - (v[2] + w[3] * rx - w[1] * rz)
-        vz = vz - (v[3] + w[1] * ry - w[2] * rx)
-    end
-    return vx, vy, vz
-end
-
----An impulse j at point p on a prop, times sign (+ on a, - on b)
-local function push(prop, px, py, pz, jx, jy, jz, sign)
-    local fl, q = prop.flight, prop.pos
-    local inv = prop.body.invMass * sign
-    local v, w, i = fl.vel, fl.ang, fl.iw
-    v[1], v[2], v[3] = v[1] + jx * inv, v[2] + jy * inv, v[3] + jz * inv
-    local rx, ry, rz = px - q[1], py - q[2], pz - q[3]
-    local cx, cy, cz = ry * jz - rz * jy, rz * jx - rx * jz, rx * jy - ry * jx
-    w[1] = w[1] + (i[1] * cx + i[2] * cy + i[3] * cz) * sign
-    w[2] = w[2] + (i[4] * cx + i[5] * cy + i[6] * cz) * sign
-    w[3] = w[3] + (i[7] * cx + i[8] * cy + i[9] * cz) * sign
-end
-
--- the frame being stepped (Flight.step counts them): a flying prop's touch points and inertia in world axes are
--- worked out once a frame, and only when something is near enough to touch it (most flying props meet nothing)
-local stepStamp = 0
-
----A flying prop's touch points this frame (worked out the first time they're asked for)
 local function ptsOf(prop)
     local fl = prop.flight
     if fl.ptsAt ~= stepStamp then
-        fl.pts = worldPointsInto(prop.pos, prop.body, fl.rows, fl.pts or {})
+        fl.pts = worldPointsInto(prop.pos, prop.body.points, fl.rows, fl.pts or {})
         fl.ptsAt = stepStamp
     end
     return fl.pts
 end
 
----A flying prop's inverse inertia in world axes this frame (worked out the first time a contact needs it)
 local function inertiaOf(prop)
     local fl = prop.flight
     if fl.iwAt ~= stepStamp then
@@ -740,66 +613,188 @@ local function inertiaOf(prop)
     end
 end
 
+---A body's lever along d at a contact (r from its center): r x d, the spin a unit impulse gives (I^-1 (r x d)) and
+---its resistance (1 / effective mass)
+local function lever(prop, rx, ry, rz, dx, dy, dz)
+    local i = prop.flight.iw
+    local cx, cy, cz = ry * dz - rz * dy, rz * dx - rx * dz, rx * dy - ry * dx
+    local ix = i[1] * cx + i[2] * cy + i[3] * cz
+    local iy = i[4] * cx + i[5] * cy + i[6] * cz
+    local iz = i[7] * cx + i[8] * cy + i[9] * cz
+    return cx, cy, cz, ix, iy, iz, prop.body.invMass + cx * ix + cy * iy + cz * iz
+end
+
+---A contact's constants for this step's rounds: velocity tables, levers along n, t1, t2 (a: a*, ai*; b: b*, bi*),
+---resistances, bounce target and friction cap
 local function prepare(c)
     local a, b, px, py, pz = c.a, c.b, c.px, c.py, c.pz
+    local nx, ny, nz, t1x, t1y, t1z, t2x, t2y, t2z = c.nx, c.ny, c.nz, c.t1x, c.t1y, c.t1z, c.t2x, c.t2y, c.t2z
     inertiaOf(a)
-    if b then inertiaOf(b) end
-    c.kn = resistance(a, px, py, pz, c.nx, c.ny, c.nz) + resistance(b, px, py, pz, c.nx, c.ny, c.nz)
-    c.kt1 = resistance(a, px, py, pz, c.t1x, c.t1y, c.t1z) + resistance(b, px, py, pz, c.t1x, c.t1y, c.t1z)
-    c.kt2 = resistance(a, px, py, pz, c.t2x, c.t2y, c.t2z) + resistance(b, px, py, pz, c.t2x, c.t2y, c.t2z)
-    local vx, vy, vz = relVel(c)
-    local vn = vx * c.nx + vy * c.ny + vz * c.nz
+    local fa, q = a.flight, a.pos
+    local va, wa = fa.vel, fa.ang
+    c.va, c.wa, c.ima = va, wa, a.body.invMass
+    local rx, ry, rz = px - q[1], py - q[2], pz - q[3]
+    local kn, kt1, kt2
+    c.anx, c.any, c.anz, c.ainx, c.ainy, c.ainz, kn = lever(a, rx, ry, rz, nx, ny, nz)
+    c.a1x, c.a1y, c.a1z, c.ai1x, c.ai1y, c.ai1z, kt1 = lever(a, rx, ry, rz, t1x, t1y, t1z)
+    c.a2x, c.a2y, c.a2z, c.ai2x, c.ai2y, c.ai2z, kt2 = lever(a, rx, ry, rz, t2x, t2y, t2z)
+    local vn = nx * va[1] + ny * va[2] + nz * va[3] + c.anx * wa[1] + c.any * wa[2] + c.anz * wa[3]
+    if b then
+        inertiaOf(b)
+        local fb = b.flight
+        local vb, wb = fb.vel, fb.ang
+        q = b.pos
+        c.vb, c.wb, c.imb = vb, wb, b.body.invMass
+        rx, ry, rz = px - q[1], py - q[2], pz - q[3]
+        local k
+        c.bnx, c.bny, c.bnz, c.binx, c.biny, c.binz, k = lever(b, rx, ry, rz, nx, ny, nz)
+        kn = kn + k
+        c.b1x, c.b1y, c.b1z, c.bi1x, c.bi1y, c.bi1z, k = lever(b, rx, ry, rz, t1x, t1y, t1z)
+        kt1 = kt1 + k
+        c.b2x, c.b2y, c.b2z, c.bi2x, c.bi2y, c.bi2z, k = lever(b, rx, ry, rz, t2x, t2y, t2z)
+        kt2 = kt2 + k
+        vn = vn - (nx * vb[1] + ny * vb[2] + nz * vb[3] + c.bnx * wb[1] + c.bny * wb[2] + c.bnz * wb[3])
+    else
+        c.vb, c.wb = false, false
+    end
+    c.kn, c.kt1, c.kt2 = kn, kt1, kt2
     local o = c.other
     local e = Flight.restitution(max(a.bounce or 0, o and o.bounce or 0))
     c.bias = vn < -Flight.BOUNCE_MIN and -e * vn or 0
     c.limit = Flight.frictionLimit(a.friction, o and o.friction)
 end
 
+---One round on a contact: normal impulse, then friction; returns how much it changed
 local function solve(c)
-    local a, b, px, py, pz = c.a, c.b, c.px, c.py, c.pz
+    local va, wa, vb, wb = c.va, c.wa, c.vb, c.wb
     local nx, ny, nz = c.nx, c.ny, c.nz
-    local vx, vy, vz = relVel(c)
-    local vn = vx * nx + vy * ny + vz * nz
+    local va1, va2, va3, wa1, wa2, wa3 = va[1], va[2], va[3], wa[1], wa[2], wa[3]
+    local vb1, vb2, vb3, wb1, wb2, wb3
+    local vn = nx * va1 + ny * va2 + nz * va3 + c.anx * wa1 + c.any * wa2 + c.anz * wa3
+    if vb then
+        vb1, vb2, vb3, wb1, wb2, wb3 = vb[1], vb[2], vb[3], wb[1], wb[2], wb[3]
+        vn = vn - (nx * vb1 + ny * vb2 + nz * vb3 + c.bnx * wb1 + c.bny * wb2 + c.bnz * wb3)
+    end
     local dj = (c.bias - vn) / c.kn
     local old = c.jn
-    local jn = max(old + dj, 0)
+    local jn = old + dj
+    if jn < 0 then jn = 0 end
     c.jn = jn
     dj = jn - old
     if dj ~= 0 then
-        push(a, px, py, pz, nx * dj, ny * dj, nz * dj, 1)
-        if b then push(b, px, py, pz, nx * dj, ny * dj, nz * dj, -1) end
+        local k = dj * c.ima
+        va1, va2, va3 = va1 + nx * k, va2 + ny * k, va3 + nz * k
+        wa1, wa2, wa3 = wa1 + c.ainx * dj, wa2 + c.ainy * dj, wa3 + c.ainz * dj
+        if vb then
+            k = dj * c.imb
+            vb1, vb2, vb3 = vb1 - nx * k, vb2 - ny * k, vb3 - nz * k
+            wb1, wb2, wb3 = wb1 - c.binx * dj, wb2 - c.biny * dj, wb3 - c.binz * dj
+        end
     end
-    -- friction: the cone (MU x the normal impulse so far), capped by the game's limit
     local cap = Flight.MU * jn
     local limit = c.limit
     if limit and limit < cap then cap = limit end
-    vx, vy, vz = relVel(c)
     local t1x, t1y, t1z, t2x, t2y, t2z = c.t1x, c.t1y, c.t1z, c.t2x, c.t2y, c.t2z
-    local d1 = -(vx * t1x + vy * t1y + vz * t1z) / c.kt1
-    local d2 = -(vx * t2x + vy * t2y + vz * t2z) / c.kt2
+    local u1 = t1x * va1 + t1y * va2 + t1z * va3 + c.a1x * wa1 + c.a1y * wa2 + c.a1z * wa3
+    local u2 = t2x * va1 + t2y * va2 + t2z * va3 + c.a2x * wa1 + c.a2y * wa2 + c.a2z * wa3
+    if vb then
+        u1 = u1 - (t1x * vb1 + t1y * vb2 + t1z * vb3 + c.b1x * wb1 + c.b1y * wb2 + c.b1z * wb3)
+        u2 = u2 - (t2x * vb1 + t2y * vb2 + t2z * vb3 + c.b2x * wb1 + c.b2y * wb2 + c.b2z * wb3)
+    end
     local o1, o2 = c.jt1, c.jt2
-    local j1, j2 = o1 + d1, o2 + d2
+    local j1, j2 = o1 - u1 / c.kt1, o2 - u2 / c.kt2
     local len = sqrt(j1 * j1 + j2 * j2)
     if len > cap then
         local k = cap > 0 and cap / len or 0
         j1, j2 = j1 * k, j2 * k
     end
     c.jt1, c.jt2 = j1, j2
-    d1, d2 = j1 - o1, j2 - o2
+    local d1, d2 = j1 - o1, j2 - o2
     if d1 ~= 0 or d2 ~= 0 then
         local jx, jy, jz = t1x * d1 + t2x * d2, t1y * d1 + t2y * d2, t1z * d1 + t2z * d2
-        push(a, px, py, pz, jx, jy, jz, 1)
-        if b then push(b, px, py, pz, jx, jy, jz, -1) end
+        local k = c.ima
+        va1, va2, va3 = va1 + jx * k, va2 + jy * k, va3 + jz * k
+        wa1 = wa1 + c.ai1x * d1 + c.ai2x * d2
+        wa2 = wa2 + c.ai1y * d1 + c.ai2y * d2
+        wa3 = wa3 + c.ai1z * d1 + c.ai2z * d2
+        if vb then
+            k = c.imb
+            vb1, vb2, vb3 = vb1 - jx * k, vb2 - jy * k, vb3 - jz * k
+            wb1 = wb1 - c.bi1x * d1 - c.bi2x * d2
+            wb2 = wb2 - c.bi1y * d1 - c.bi2y * d2
+            wb3 = wb3 - c.bi1z * d1 - c.bi2z * d2
+        end
+    elseif dj == 0 then
+        return 0
     end
-    return abs(dj) + abs(d1) + abs(d2) -- how much this round changed it
+    va[1], va[2], va[3], wa[1], wa[2], wa[3] = va1, va2, va3, wa1, wa2, wa3
+    if vb then vb[1], vb[2], vb[3], wb[1], wb[2], wb[3] = vb1, vb2, vb3, wb1, wb2, wb3 end
+    return abs(dj) + abs(d1) + abs(d2)
+end
+
+-- Islands: props joined by contacts with each other (a ground or static contact joins nothing). Each island's rounds
+-- stop on its own, so a busy pile elsewhere doesn't change its numbers
+local islandOrder, islandStarts, islandOf, islandNext = {}, {}, {}, {}
+
+---Union-find on the flights (fields stamped by this step)
+local function rootOf(fl)
+    if fl.ufAt ~= stepStamp then
+        fl.ufAt, fl.uf = stepStamp, fl
+        return fl
+    end
+    local r = fl
+    while r.uf ~= r do
+        r.uf = r.uf.uf
+        r = r.uf
+    end
+    return r
+end
+
+---The contacts grouped by island into islandOrder, keeping their order within each
+---@return integer[] starts each island's first slot (starts[count + 1]: one past the last)
+---@return integer count
+local function islands(coupled, nc)
+    for k = 1, nc do
+        local c = coupled[k]
+        local ra = rootOf(c.a.flight)
+        if c.b then
+            local rb = rootOf(c.b.flight)
+            if ra ~= rb then rb.uf = ra end
+        end
+    end
+    local count = 0
+    for k = 1, nc do
+        local r = rootOf(coupled[k].a.flight)
+        if r.islAt ~= stepStamp then
+            r.islAt = stepStamp
+            count = count + 1
+            r.isl = count
+            islandNext[count] = 0
+        end
+        local isl = r.isl
+        islandOf[k] = isl
+        islandNext[isl] = islandNext[isl] + 1
+    end
+    local at = 1 -- counting sort
+    for isl = 1, count do
+        islandStarts[isl] = at
+        at = at + islandNext[isl]
+        islandNext[isl] = islandStarts[isl]
+    end
+    islandStarts[count + 1] = at
+    for k = 1, nc do
+        local isl = islandOf[k]
+        local slot = islandNext[isl]
+        islandOrder[slot] = coupled[k]
+        islandNext[isl] = slot + 1
+    end
+    for k = nc + 1, #islandOrder do islandOrder[k] = nil end
+    return islandStarts, count
 end
 
 ---------------------------------------------------------------------------------------------------- stepping
 
----A new flight for a prop at its pos and rotation
----@param vel number[]? per second (copied)
----@param frame integer the frame its pos is at
----@param ang number[]? angular velocity, rad/s (copied)
+---A new flight from the prop's pose now (vel, ang copied)
 ---@return AtmoPlayFlight
 function Flight.start(vel, frame, ang)
     vel, ang = vel or { 0, 0, 0 }, ang or { 0, 0, 0 }
@@ -809,30 +804,24 @@ end
 
 ---@class AtmoPlayFlightOptions
 ---@field collide boolean? flying props hit each other and wake the still ones they run into
----@field simple boolean? the cheap level: props fly as spheres hits don't turn
----@field neighbors (fun(prop: table, reach: number): table[])? collide: the still props (no flight, not carried)
----whose centers may be within reach of prop's, in atmo order
----@field wake (fun(prop: table, frame: integer))? collide: a still prop starts flying (its flight made by the caller,
----then added to the list being stepped)
+---@field simple boolean? props fly as spheres that hits don't turn
+---@field neighbors (fun(prop: table, reach: number): table[])? collide: still props near prop, in atmo order
+---@field wake (fun(prop: table, frame: integer))? collide: gives a still prop a flight and adds it to the list
 
----The pairs of flying props whose bounding spheres meet, by sweeping along the axis they spread most on (props in a
----line or a wall along x would all overlap on x: 1.7k props in a line along y, 1.5 million pairs a frame). The order
----along that axis is kept from the last frame and put right with an insertion sort (props move little a frame: nearly
----free), ties by atmo index, so it's the same whatever order it starts from (fights and their replays). Props that hit
----no props (Atmo off) aren't swept. For each list position, the later positions it meets, in list order
----@param w AtmoPlayFlightWorld keeps the orders
----@param bodies table[]
----@param n integer the first n are swept (props woken later in the frame are tried one by one)
----@return table<integer, integer[]>
+-- The sweep's pairs: partnerLists[i] (later list positions i meets), valid while partnerAt[i] is the sweep's stamp
 local sweepStamp = 0
+local partnerLists, partnerAt, partnerFirsts = {}, {}, {}
 
+---Pairs of flying props whose bounding spheres meet, by a sweep along the axis they spread most on. The order is kept
+---from the last step and fixed by insertion sort (ties by atmo index: the same from any start). Props that hit no
+---props aren't swept
+---@param n integer the first n bodies are swept (ones woken later are tried one by one)
 local function sweepPairs(w, bodies, n)
     sweepStamp = sweepStamp + 1
     local stamp = sweepStamp
     local minP, maxP = { math.huge, math.huge, math.huge }, { -math.huge, -math.huge, -math.huge }
     for k = 1, n do
         local b = bodies[k]
-        -- this sweep's fields on the prop (a stamp marks the ones swept now: no tables made a frame)
         b.sweepAt, b.sweepPos, b.sweepSeen = stamp, k, false
         local p = b.pos
         for a = 1, 3 do
@@ -844,17 +833,19 @@ local function sweepPairs(w, bodies, n)
     for a = 2, 3 do
         if maxP[a] - minP[a] > maxP[axis] - minP[axis] then axis = a end
     end
-    -- last frame's order on this axis, without the props gone, the new ones at its end
+    -- last step's order on this axis without the props gone, then the new ones
     w.sweepOrders = w.sweepOrders or {}
-    local prev = w.sweepOrders[axis] or {}
-    local order, m = {}, 0
-    for _, b in ipairs(prev) do
+    local order = w.sweepOrders[axis] or {}
+    local m, old = 0, #order
+    for i = 1, old do
+        local b = order[i]
         if b.sweepAt == stamp and not b.noHits then
             m = m + 1
             order[m] = b
             b.sweepSeen = true
         end
     end
+    for i = old, m + 1, -1 do order[i] = nil end
     for k = 1, n do
         local b = bodies[k]
         if not b.noHits and not b.sweepSeen then
@@ -866,7 +857,6 @@ local function sweepPairs(w, bodies, n)
         local b = order[i]
         b.sweepLo = b.pos[axis] - (b.radius or 1)
     end
-    -- insertion sort by (lo, atmo index)
     for i = 2, m do
         local b = order[i]
         local lb, ib = b.sweepLo, b.index or 0
@@ -881,7 +871,7 @@ local function sweepPairs(w, bodies, n)
         order[j + 1] = b
     end
     w.sweepOrders[axis] = order
-    local partners = {}
+    local firsts = 0
     for oi = 1, m do
         local A = order[oi]
         local pa, ra = A.pos, A.radius or 1
@@ -897,27 +887,32 @@ local function sweepPairs(w, bodies, n)
                 local ib = B.sweepPos
                 local first, second = ia, ib
                 if ib < ia then first, second = ib, ia end
-                local list = partners[first]
-                if not list then
-                    list = {}
-                    partners[first] = list
+                local list = partnerLists[first]
+                if partnerAt[first] ~= stamp then
+                    partnerAt[first] = stamp
+                    if list then
+                        for k = #list, 1, -1 do list[k] = nil end
+                    else
+                        list = {}
+                        partnerLists[first] = list
+                    end
+                    firsts = firsts + 1
+                    partnerFirsts[firsts] = first
                 end
                 list[#list + 1] = second
             end
         end
     end
-    for _, list in pairs(partners) do table.sort(list) end
-    return partners
+    for k = 1, firsts do table.sort(partnerLists[partnerFirsts[k]]) end
+    return true
 end
 
----Whether two props pass through each other: one of them doesn't hit props ("prop_hits 0"), or they overlapped
----where the map placed them (prop.ignore: a generated shape isn't blown apart)
+---Props that pass through each other: prop_hits 0, or overlapping where the map placed them (`ignore` is keyed by
+---the props; a prediction's copy stands for its prop through `of`)
 local function passes(A, B)
-    -- a prediction's copy (Flight.newPrediction) stands for its prop: `ignore` is keyed by the props
     return A.noHits or B.noHits or (A.ignore ~= nil and A.ignore[B.of or B] == true)
 end
 
----Contacts between flying props A and B when their bounding spheres meet
 local function pairBodies(A, B)
     if passes(A, B) then return end
     local pa, pb = A.pos, B.pos
@@ -928,16 +923,13 @@ local function pairBodies(A, B)
     end
 end
 
----One frame for every flying prop, from `frame` to the next, together. `bodies` is in atmo order; woken props are
----added to its end. A prop that came to rest or fell under the map has its flight cleared (the caller drops it)
----@param w AtmoPlayFlightWorld
----@param bodies table[] props with a flight
----@param frame integer
+---One frame for every flying prop together. `bodies` is in atmo order; woken props are added to its end. A prop that
+---came to rest or fell under the map has its flight cleared (the caller drops it)
 ---@param opts AtmoPlayFlightOptions?
 function Flight.step(w, bodies, frame, opts)
     opts = opts or {}
     local dt, g, simple = Flight.DT, w.gravity, opts.simple and true or false
-    -- 1. moved on: gravity and thrust, then position and rotation; this frame's inertia and touch points
+    -- 1. gravity and thrust, then position and rotation
     for _, prop in ipairs(bodies) do
         local fl, b = prop.flight, bodyOf(prop, simple)
         fl.rows = fl.rows or rowsOf(prop.rot or Flight.IDENTITY)
@@ -954,9 +946,7 @@ function Flight.step(w, bodies, frame, opts)
             local k = b.invMass * dt
             v[1], v[2], v[3] = v[1] + fx * k, v[2] + fy * k, v[3] + fz * k
         end
-        -- one position table a flight, made at its first step (never the atmo's own or one an event keeps) and moved in
-        -- place: a new table a frame for every flying prop was garbage. prop.moves counts the steps: "did it move"
-        -- checks compare it, not the table (dynamics.lua's drawn copies and movedProp)
+        -- one pos table per flight, moved in place (never the atmo's or an event's); prop.moves tells it moved
         local p = prop.pos
         if p ~= fl.posBuf then
             p = { p[1], p[2], p[3] }
@@ -965,8 +955,7 @@ function Flight.step(w, bodies, frame, opts)
         end
         p[1], p[2], p[3] = p[1] + v[1] * dt, p[2] + v[2] * dt, p[3] + v[3] * dt
         prop.moves = (prop.moves or 0) + 1
-        -- a sphere looks the same however it's turned: its rotation isn't kept up (its spin still rolls it: contacts
-        -- use its inertia, the same in every axis), unless a thrust on its own axes turns with it
+        -- a sphere's rotation isn't kept up (it looks the same), unless a thrust on its own axes turns with it
         local seen = prop.shape ~= "sphere" or (thrust ~= nil and thrust.space == 1)
         if seen and (a[1] ~= 0 or a[2] ~= 0 or a[3] ~= 0) then
             turn(m, a[1], a[2], a[3], dt)
@@ -975,12 +964,12 @@ function Flight.step(w, bodies, frame, opts)
         end
         fl.touching, fl.gripping, fl.contacts = false, false, 0
     end
-    stepStamp = stepStamp + 1 -- touch points and inertia: this frame's, when first needed (ptsOf, inertiaOf)
+    stepStamp = stepStamp + 1
     -- 2. contacts: the ground, the static atmo, and (collide) each other and the still props run into
     used = 0
     local n0 = #bodies
     local collide = opts.collide
-    local partners = collide and n0 > 1 and sweepPairs(w, bodies, n0) or nil
+    local swept = collide and n0 > 1 and sweepPairs(w, bodies, n0) or false
     local near = w.near
     if not near then
         near = {}
@@ -991,7 +980,7 @@ function Flight.step(w, bodies, frame, opts)
         local A = bodies[i]
         local fl = A.flight
         local reach = A.radius or 1
-        if A.pos[3] - reach < 0 then -- a touch point can reach the ground (all are within its bounding sphere)
+        if A.pos[3] - reach < 0 then
             local ptsA = ptsOf(A)
             for k = 1, #ptsA do
                 local q = ptsA[k]
@@ -1003,15 +992,14 @@ function Flight.step(w, bodies, frame, opts)
             pairContacts(A, ptsOf(A), c, c.frame, c.points, nil, c)
         end
         if collide then
-            -- the later props it meets: those swept, then any woken this frame (after the swept ones)
-            local list = partners and partners[i]
+            local list = swept and partnerAt[i] == sweepStamp and partnerLists[i]
             if list then
                 for k = 1, #list do pairBodies(A, bodies[list[k]]) end
             end
             if not A.noHits then
                 for j = (i < n0 and n0 or i) + 1, #bodies do pairBodies(A, bodies[j]) end
             end
-            -- a moving prop wakes the still ones it runs into (they join the list: their own turn comes later)
+            -- a moving prop wakes the still ones it runs into (they join the list)
             if fl.still == 0 and not A.noHits and opts.neighbors and opts.wake then
                 for _, S in ipairs(opts.neighbors(A, reach)) do
                     if not S.flight and not S.entry and not passes(A, S) then
@@ -1022,14 +1010,14 @@ function Flight.step(w, bodies, frame, opts)
                             local before = used
                             local sRows = rowsOf(S.rot or Flight.IDENTITY)
                             local sb = bodyOf(S, simple)
-                            local sPts = worldPointsInto(sp, sb, sRows, S.wakePts or {})
+                            local sPts = worldPointsInto(sp, sb.points, sRows, S.wakePts or {})
                             S.wakePts = sPts
                             pairContacts(A, ptsOf(A), S, sRows, sPts, S, S)
                             if used > before then
-                                opts.wake(S, frame) -- gives it a flight and adds it to `bodies`
+                                opts.wake(S, frame)
                                 local sf = S.flight
                                 sf.rows, sf.touching, sf.gripping = sRows, false, false
-                                sf.pts, sf.ptsAt = worldPointsInto(S.pos, sb, sRows, {}), stepStamp
+                                sf.pts, sf.ptsAt = worldPointsInto(S.pos, sb.points, sRows, {}), stepStamp
                             end
                         end
                     end
@@ -1054,9 +1042,7 @@ function Flight.step(w, bodies, frame, opts)
             if b then b.gripping = true end
         end
     end
-    -- the first round solves every contact; a prop's only contact, against the ground or the static atmo, is
-    -- settled by it (nothing else moves that prop: another round changes nothing), so later rounds solve only the
-    -- rest (a box resting on several corners, props touching each other). A rolling sphere: one contact, one round
+    -- round 1 settles a prop's only static contact by itself; later rounds go island by island
     local coupled, nc = coupledList, 0
     for k = 1, used do
         local c = pool[k]
@@ -1066,14 +1052,20 @@ function Flight.step(w, bodies, frame, opts)
             coupled[nc] = c
         end
     end
-    for i = nc + 1, #coupled do coupled[i] = nil end
-    local settle = Flight.SETTLE
-    for _ = 2, Flight.ITERATIONS do
-        local change = 0
-        for k = 1, nc do change = change + solve(coupled[k]) end
-        if change < settle then break end
+    for k = nc + 1, #coupled do coupled[k] = nil end
+    if nc > 0 then
+        local starts, count = islands(coupled, nc)
+        local ordered, settle, rounds = islandOrder, Flight.SETTLE, Flight.ITERATIONS
+        for isl = 1, count do
+            local from, to = starts[isl], starts[isl + 1] - 1
+            for _ = 2, rounds do
+                local change = 0
+                for k = from, to do change = change + solve(ordered[k]) end
+                if change < settle then break end
+            end
+        end
     end
-    -- 4. overlaps pushed apart (positions only), shared by inverse mass
+    -- 4. overlaps pushed apart, shared by inverse mass
     local slop, share = Flight.SLOP, Flight.PUSH
     for k = 1, used do
         local c = pool[k]
@@ -1088,21 +1080,15 @@ function Flight.step(w, bodies, frame, opts)
                 pb[1], pb[2], pb[3] = pb[1] - nx * s * ib, pb[2] - ny * s * ib, pb[3] - nz * s * ib
             end
         end
-    end
-    -- the pool keeps its tables, not the props
-    for k = 1, used do
-        local c = pool[k]
-        c.a, c.b, c.other = nil, nil, nil
+        c.a, c.b, c.other, c.va, c.wa, c.vb, c.wb = false, false, false, false, false, false, false
     end
     -- 5. rotations shown, rest and falls
     for _, prop in ipairs(bodies) do
         local fl = prop.flight
+        local m = fl.rows
         if fl.turned then
-            -- one rotation table a flight, written in place: a new one a frame (12 keys, ~700 bytes) for every turning prop
-            -- was most of the garbage (768 thrust props: ~0.5 MB a frame; the game collected 140 MB at the match's end in
-            -- one go, a 1.3 s freeze). Who keeps a prop's rotation copies it (dynamics.lua's events); pos tables are still
-            -- new each frame, so "did it move" checks by table (drawn copies, MGE's moved props) still see a change
-            local tb, m = fl.tb, fl.rows
+            -- one rotation table per flight, written in place (who keeps a rotation copies it)
+            local tb = fl.tb
             if not tb then
                 tb = { r3 = 0, r7 = 0, r11 = 0 }
                 fl.tb = tb
@@ -1119,17 +1105,15 @@ function Flight.step(w, bodies, frame, opts)
             local keep = 1 - Flight.SIMPLE_SPIN_GRIP
             a[1], a[2], a[3] = a[1] * keep, a[2] * keep, a[3] * keep
         end
-        local speed = sqrt(v[1] * v[1] + v[2] * v[2] + v[3] * v[3])
-        local spin = sqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3])
-        local p, m = prop.pos, fl.rows
+        local p = prop.pos
         local calm = false
         if fl.touching and not prop.thrust then
-            calm = speed < Flight.REST_SPEED and spin < Flight.REST_SPIN
-            if not calm and fl.ax then
-                -- or it went nowhere since the anchor (jittering in a pile)
+            calm = sqrt(v[1] * v[1] + v[2] * v[2] + v[3] * v[3]) < Flight.REST_SPEED
+                and sqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3]) < Flight.REST_SPIN
+            if not calm and fl.ax then -- or it went nowhere since the anchor
                 local dx, dy, dz = p[1] - fl.ax, p[2] - fl.ay, p[3] - fl.az
                 calm = dx * dx + dy * dy + dz * dz <= Flight.REST_DRIFT * Flight.REST_DRIFT
-                if calm and m and fl.u1 then
+                if calm and fl.u1 then
                     local r1, r2 = m[1], m[2]
                     local t1, t2, t3 = r1[1] - fl.u1, r1[2] - fl.u2, r1[3] - fl.u3
                     local t4, t5, t6 = r2[1] - fl.w1, r2[2] - fl.w2, r2[3] - fl.w3
@@ -1141,24 +1125,14 @@ function Flight.step(w, bodies, frame, opts)
             fl.still = fl.still + 1
         else
             fl.still = 0
-            -- the anchor: here, now (kept in snapshots and shadows: rewinds and ghosts rest at the same frames)
             fl.ax, fl.ay, fl.az = p[1], p[2], p[3]
-            if m then
-                fl.u1, fl.u2, fl.u3, fl.w1, fl.w2, fl.w3 = m[1][1], m[1][2], m[1][3], m[2][1], m[2][2], m[2][3]
-            else
-                fl.u1 = nil
-            end
+            fl.u1, fl.u2, fl.u3, fl.w1, fl.w2, fl.w3 = m[1][1], m[1][2], m[1][3], m[2][1], m[2][2], m[2][3]
         end
-        if fl.still >= Flight.REST_FRAMES or prop.pos[3] < Flight.LOWEST then prop.flight = nil end
+        if fl.still >= Flight.REST_FRAMES or p[3] < Flight.LOWEST then prop.flight = nil end
     end
 end
 
----Flies one prop alone (no other props) from its flight's frame to `toFrame`
----@param w AtmoPlayFlightWorld
----@param prop table with .flight, .pos, .rot (MatrixTB), .shape, .sides, .radius, .thrust, .mass, .bounce, .friction
----@param toFrame integer
----@param opts AtmoPlayFlightOptions?
----@return boolean flying false: the flight ended (at rest, or fell under the map)
+---Flies one prop alone to `toFrame`; false once its flight ended
 function Flight.advance(w, prop, toFrame, opts)
     local list = { prop }
     while prop.flight and prop.flight.frame < toFrame do Flight.step(w, list, prop.flight.frame, opts) end
@@ -1167,26 +1141,22 @@ end
 
 ---------------------------------------------------------------------------------------------------- prediction
 
--- Move predictions (the ghosts of drawn props, as the game shows its objects' next frames): the flights stepped on
--- ahead on copies ("shadows": a prop's fields, with its own pos and flight), so the props and their flights stay as
--- they are. What a step keeps on a prop (sweep fields, touch points, inertia) lands on the copy. The world's caches
--- (sweep orders, the near list) are the prediction's own too
+-- Ghosts: the flights stepped ahead on copies ("shadows": the prop's fields with their own pos and flight), so the
+-- props stay as they are. The prediction's world has its own caches (sweep orders, near list)
 
 ---@class AtmoPlayPrediction
----@field world table the flight world with its own caches
+---@field world table
 ---@field frame integer the frame the props are at (pose 0)
----@field steps integer frames stepped so far (poses 0..steps)
----@field done boolean every flight ended (at rest, fell): the last poses hold from there
+---@field steps integer frames stepped so far
+---@field done boolean every flight ended
 ---@field poses table<table, AtmoPlayPredictedPoses> by prop
----@field ring integer frames of poses kept (a ring: frame k in slot k % ring)
----@field props table[] the props with poses, in the order they got them
----@field list table[] the copies still flying
+---@field ring integer frames of poses kept (frame k in slot k % ring)
+---@field props table[] props with poses
+---@field list table[] copies still flying
 ---@field shadows table<table, table> copies by prop
 ---@field opts AtmoPlayFlightOptions
----@field base integer the flights' frame now, counted from `frame` (Dynamics.predict keeps a prediction while they
----follow it): poses before it are dropped
+---@field base integer the flights' frame now, counted from `frame`
 
----The copy of a prop a prediction steps
 local function shadowOf(pr, prop)
     local sh = pr.shadows[prop]
     if sh then return sh end
@@ -1209,14 +1179,13 @@ end
 
 ---@class AtmoPlayPredictedPoses
 ---@field pos number[] x y z of frame k at slot (k % ring) * 3
----@field rot number[]? r0 r1 r2 r4 r5 r6 r8 r9 r10 at slot (k % ring) * 9; nil: fixedRot every frame
----@field fixedRot table? a sphere's rotation (its looks don't change; it isn't kept up while it flies)
----@field first integer the first frame kept
----@field last integer the last frame predicted
----@field tb table the MatrixTB predictedPose fills and returns
+---@field rot number[]? r0 r1 r2 r4 r5 r6 r8 r9 r10 at slot (k % ring) * 9; nil: fixedRot
+---@field fixedRot table? a sphere's rotation (not kept up while it flies)
+---@field first integer
+---@field last integer
+---@field tb table the MatrixTB predictedPose fills
 
--- A prediction's poses are numbers in two lists a prop, in a ring of `ring` frames (the ghost's window): a table per
--- prop and frame (768 props x 100 frames, a position and a rotation each) was ~150,000 live tables for the GC
+-- Poses are numbers in two flat lists per prop (a table per prop and frame was too much for the GC)
 local function posesFor(pr, sh, k)
     local th = sh.thrust
     local fixed = sh.shape == "sphere" and not (th and th.space == 1)
@@ -1227,7 +1196,6 @@ local function posesFor(pr, sh, k)
     return p
 end
 
----Frame k's pose into its ring slot
 local function writePose(pr, p, k, pos, rot)
     local slot = k % pr.ring
     local i, list = slot * 3, p.pos
@@ -1243,18 +1211,13 @@ local function writePose(pr, p, k, pos, rot)
     if k - p.first >= pr.ring then p.first = k - pr.ring + 1 end
 end
 
----A copy's pose now as its prop's pose `pr.steps` frames ahead
 local function record(pr, sh)
     local p = pr.poses[sh.of] or posesFor(pr, sh, pr.steps)
     writePose(pr, p, pr.steps, sh.pos, sh.rot)
 end
 
----A prediction of `bodies` (flying props, atmo order) from `frame` on; Flight.predictStep moves it ahead
----@param w AtmoPlayFlightWorld
----@param bodies table[]
----@param frame integer
----@param opts AtmoPlayFlightOptions? as the flights are stepped (neighbors: the still props near a prop's pos)
----@param ring integer? frames of poses kept (default 128): at least the frames read ahead of the flights, plus one
+---A prediction of `bodies` (flying props, atmo order) from `frame` on
+---@param ring integer? frames of poses kept (default 128)
 ---@return AtmoPlayPrediction
 function Flight.newPrediction(w, bodies, frame, opts, ring)
     local pw = {}
@@ -1273,7 +1236,6 @@ function Flight.newPrediction(w, bodies, frame, opts, ring)
     pr.opts = { collide = opts.collide, simple = opts.simple }
     local neighbors = opts.neighbors
     if opts.collide and neighbors then
-        -- the still props near the copy, as copies (one woken in the prediction has a flight: not still any more)
         pr.opts.neighbors = function(A, reach)
             local out = {}
             for _, S in ipairs(neighbors(A, reach)) do
@@ -1285,11 +1247,11 @@ function Flight.newPrediction(w, bodies, frame, opts, ring)
             return out
         end
         pr.opts.wake = function(S, at)
-            -- still until now: its pose for the frames before (those the ring holds)
+            -- still until now: its pose for the frames the ring holds
             local from = math.max(0, pr.steps - pr.ring + 1)
             local p = posesFor(pr, S, from)
             for k = from, pr.steps do writePose(pr, p, k, S.pos, S.rot) end
-            S.pos = { S.pos[1], S.pos[2], S.pos[3] } -- its own table: this step pushes it in place
+            S.pos = { S.pos[1], S.pos[2], S.pos[3] }
             S.flight = Flight.start(nil, at)
             pr.list[#pr.list + 1] = S
         end
@@ -1300,9 +1262,7 @@ end
 
 local function byAtmoIndex(a, b) return (a.index or 0) < (b.index or 0) end
 
----Moves a prediction `count` frames ahead (fewer when every flight ends)
----@param pr AtmoPlayPrediction
----@param count integer
+---Moves a prediction `count` frames ahead (fewer once every flight ended)
 function Flight.predictStep(pr, count)
     for _ = 1, count do
         if pr.done then return end
@@ -1317,27 +1277,22 @@ function Flight.predictStep(pr, count)
                 last = sh.index or 0
             end
         end
-        if not sorted then table.sort(kept, byAtmoIndex) end -- woken ones join in atmo order, as the flights do
+        if not sorted then table.sort(kept, byAtmoIndex) end
         pr.list = kept
         pr.done = #kept == 0
     end
 end
 
----Drops the poses before frame `base` of the prediction (the flights are past them); a prop's last pose stays
----@param pr AtmoPlayPrediction
----@param base integer
+---Drops the poses before frame `base` (a prop's last pose stays)
 function Flight.predictTrim(pr, base)
     for _, p in pairs(pr.poses) do
         local from = math.min(base, p.last)
-        if from > p.first then p.first = from end -- the ring's slots are written over as it goes on
+        if from > p.first then p.first = from end
     end
 end
 
----A prop's predicted pose `k` frames ahead (k can be partway between two frames: the position blended, the nearer
----rotation). Past the frames predicted so far (or after its flight ended) its last pose. nil: no prediction for it
----@param pr AtmoPlayPrediction
----@param prop table
----@param k number
+---A prop's predicted pose `k` frames ahead (fractional k blends the position, takes the nearer rotation); past the
+---frames predicted, its last pose. nil without a prediction for it
 ---@return number? x, number? y, number? z, table? rot MatrixTB
 function Flight.predictedPose(pr, prop, k)
     local p = pr.poses[prop]
@@ -1364,8 +1319,6 @@ function Flight.predictedPose(pr, prop, k)
     end
     return x, y, z, rot
 end
-
-Flight.IDENTITY = { r0 = 1, r1 = 0, r2 = 0, r3 = 0, r4 = 0, r5 = 1, r6 = 0, r7 = 0, r8 = 0, r9 = 0, r10 = 1, r11 = 0 }
 
 NS.Flight = Flight
 return Flight

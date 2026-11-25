@@ -1,37 +1,30 @@
--- Atmo Play drawing the atmo itself (`/atmoplay draw own`, the default): one loop in draw3d over the plain shapes,
--- only the ones on screen. The game's atmo draws every element every frame from Lua (UIElement3D, each its own
--- display call), seen or not; how much is drawn is what costs fps on big maps (MGE found the same: its atmo is
--- drawn with the same on-screen test, mge/utils/highlight.lua).
---   * own: boxes, spheres and pills that stay put: pos, rot, size, color, no_depth, min_level / max_level.
---     Listed by x / y cell; a cell off screen skips all of its shapes at once, then each shape is tested.
---   * the game's: everything else (custom models, count / random lines, rotate / move, drawfunc / framefunc,
---     parent and the parents, size_dojo, queue_player, player lines) and the header (shader, opt lines), written
---     to the cache atmo as before.
---   * props (no static bit): drawn where they are now (dynamics.lua: pos / rot), not while carried (their object
---     shows them); no drawn copies in the game's atmo to move each frame.
--- Not drawn, as before: "visible 0" (solid, not drawn).
+-- Atmo Play drawing the atmo itself (`draw own`, the default): the plain shapes, only those on screen, from one draw3d
+-- loop (the game's atmo draws every element every frame, seen or not). Static shapes are listed by x / y cell, so a
+-- cell off screen skips all of its shapes. The game's atmo keeps everything else (models, random, animated, scripted,
+-- parented, player lines) and the header. Props are drawn where they are now, not while carried.
+-- Not drawn by anyone: "visible 0" and alpha 0.
 
-local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY)
+local NS = ATMOPLAY_LOADING
 
 local Colliders = NS.Colliders
 local Driver = NS.Driver
 
 ---@class AtmoPlayDrawItem
----@field index integer place among the atmo's entities (a prop's: Dynamics' byIndex)
+---@field index integer place among the atmo's entities
 ---@field shape "box"|"sphere"|"capsule"
 ---@field pos number[]
 ---@field size number[] as the game draws it: box sides, sphere radius first, pill radius then length
----@field rot table MatrixTB (Driver.matrixTB), shared by every shape with the same rot line
----@field color number[] r g b a, as the game reads it (above 2 is 0-256)
+---@field rot table MatrixTB, shared by every shape with the same rot line
+---@field color number[] r g b a as the game reads it
 ---@field noDepth boolean?
 ---@field minLevel integer
 ---@field maxLevel integer
----@field radius number a sphere around pos (the on-screen test)
+---@field radius number
 
 ---@class AtmoPlayDrawer
 local Drawer = {
-    CELL = 16, -- x / y cell size of the static shapes' grid
-    -- keys that leave a shape to the game: it draws them differently (random, animated, scripted, relative...)
+    CELL = 16,
+    -- keys that leave a shape to the game (random, animated, scripted, relative...)
     GAME_KEYS = {
         parent = true, count = true, rpos = true, randompos = true, rsize = true, randomsize = true,
         rotate = true, move = true, drawfunc = true, framefunc = true, size_dojo = true, queue_player = true,
@@ -42,14 +35,7 @@ local Drawer = {
 local cellKey = NS.Pool.cellKey
 local numbers = Colliders.numbers
 
----@param line string a trimmed line
----@return string? key, string? value
-local function keyValue(line)
-    local key, value = line:match("^([%a_]+)%s+(.-)%s*$")
-    return key, value
-end
-
----A color line as the game reads it: 4 numbers, the first three over 256 when any is above 2
+---A color line as the game reads it: the first three over 256 when any is above 2
 local function colorOf(value)
     local c = numbers(value)
     local r, g, b, a = c[1] or 1, c[2] or 1, c[3] or 1, c[4] or 1
@@ -57,58 +43,26 @@ local function colorOf(value)
     return { r, g, b, a }
 end
 
----What the game would do with one entity's lines: nil when Atmo Play draws it, else why the game keeps it
----@param e { props: table<string, string>, player: boolean, model: boolean }
+---Why the game draws an entity, nil when Atmo Play does
 ---@param parents table<string, boolean> names some entity is parented to
----@param name string
 ---@return string? reason
-local function gameReason(e, parents, name)
+local function gameReason(e, parents)
     if e.player then return "player" end
-    if e.model then return "model" end
-    if parents[name] then return "parent" end
+    if tostring(e.props.shape or ""):match("^custom") then return "model" end
+    if parents[e.name] then return "parent" end
     for key in pairs(e.props) do
         if Drawer.GAME_KEYS[key] then return key end
     end
     return nil
 end
 
----Splits an atmo's lines: the plain shapes Atmo Play draws, and the lines the game's atmo keeps (the header and
----the other entities, as they were). "visible 0" entities go nowhere (solid, not drawn), nor do shapes of alpha 0
----(the game's UIElement3D draws only alpha above 0). Props are always Atmo Play's: they move, and with its own
----drawing nothing moves a copy in the game's atmo (a prop with rcolor, size_dojo, queue_player, a player line or a
----child is drawn plainly, its child left to the game)
----@param atmoLines string[] the atmo (a playable mod's #@ lines, without the prefix)
----@param props table<integer, any>? the props by atmo index (Dynamics' byIndex)
+---Splits an atmo: the plain shapes Atmo Play draws, and the lines the game's atmo keeps (the header and the other
+---entities as they were). Props are always Atmo Play's (they move)
+---@param atmoLines string[]
+---@param props table<integer, any>? the props by atmo index
 ---@return { items: AtmoPlayDrawItem[], gameLines: string[], own: integer, game: integer, hidden: integer }
 function Drawer.split(atmoLines, props)
-    -- entities as the game's parser sees them (colliders.lua's rules: one per env_obj, "player N" ignores the
-    -- lines after it, size is sides), each with its own lines
-    local header, entities = {}, {}
-    local current, ignoring = nil, false
-    for _, raw in ipairs(atmoLines) do
-        local line = raw:gsub("^%s*", ""):gsub("[\r\n]", "")
-        local name = line:match("^env_obj (.*)$")
-        if name then
-            current = { name = name, lines = { raw }, props = {}, player = false, model = false }
-            entities[#entities + 1] = current
-            ignoring = false
-        elseif not current then
-            header[#header + 1] = raw
-        else
-            current.lines[#current.lines + 1] = raw
-            if line:match("^player %d") then
-                ignoring, current.player = true, true
-            elseif not ignoring then
-                local key, value = keyValue(line)
-                if key then
-                    if key == "size" then key = "sides" end
-                    if key == "col" or key == "colour" then key = "color" end
-                    current.props[key] = value
-                    if key == "shape" and tostring(value):match("^custom") then current.model = true end
-                end
-            end
-        end
-    end
+    local entities, header = Colliders.entities(atmoLines)
     local parents = {}
     for _, e in ipairs(entities) do
         if e.props.parent then parents[e.props.parent] = true end
@@ -120,9 +74,9 @@ function Drawer.split(atmoLines, props)
         local p = e.props
         local isProp = props ~= nil and props[index] ~= nil
         local alpha = colorOf(p.color)[4]
-        if (p.visible and p.visible:match("^0")) or (alpha <= 0 and not gameReason(e, parents, e.name)) then
+        if (p.visible and p.visible:match("^0")) or (alpha <= 0 and not gameReason(e, parents)) then
             hidden = hidden + 1
-        elseif not isProp and (gameReason(e, parents, e.name) or not p.pos) then
+        elseif not isProp and (gameReason(e, parents) or not p.pos) then
             game = game + 1
             for _, line in ipairs(e.lines) do gameLines[#gameLines + 1] = line end
         else
@@ -132,15 +86,7 @@ function Drawer.split(atmoLines, props)
                 or "box"
             local s = numbers(p.sides)
             local size = { s[1] or 1, s[2] or 1, s[3] or 1 }
-            local ax, ay, az = math.abs(size[1]), math.abs(size[2]), math.abs(size[3])
-            local radius
-            if shape == "sphere" then
-                radius = ax
-            elseif shape == "capsule" then
-                radius = ay / 2 + ax
-            else
-                radius = math.sqrt(ax * ax + ay * ay + az * az) / 2
-            end
+            local radius = Colliders.radius(shape, { math.abs(size[1]), math.abs(size[2]), math.abs(size[3]) })
             local rotLine = p.rot or ""
             local rot = rots[rotLine]
             if not rot then
@@ -148,8 +94,7 @@ function Drawer.split(atmoLines, props)
                 rots[rotLine] = rot
             end
             local pos = numbers(p.pos)
-            -- one color table per color line: drawing sets the color only when it changes
-            local colorLine = p.color or ""
+            local colorLine = p.color or "" -- one table per color line: drawing sets the color only when it changes
             local color = colors[colorLine]
             if not color then
                 color = colorOf(p.color)
@@ -168,7 +113,7 @@ end
 ---------------------------------------------------------------------------------------------------- the drawer
 
 ---@param split table Drawer.split's
----@param props table<integer, table>? the props by atmo index (Dynamics' byIndex): drawn where they are now
+---@param props table<integer, table>? the props by atmo index
 ---@return table drawer
 function Drawer.new(split, props)
     local d = { cells = {}, cellList = {}, moving = {}, count = #split.items, drawn = 0 }
@@ -192,8 +137,7 @@ function Drawer.new(split, props)
             end
         end
     end
-    -- each cell as a sphere around its shapes' bounds (the on-screen test of a cell)
-    for _, cell in ipairs(d.cellList) do
+    for _, cell in ipairs(d.cellList) do -- a sphere around each cell's shapes
         local lo, hi = cell.lo, cell.hi
         cell.pos = { (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2, (lo[3] + hi[3]) / 2 }
         cell.radius = math.sqrt((hi[1] - lo[1]) ^ 2 + (hi[2] - lo[2]) ^ 2 + (hi[3] - lo[3]) ^ 2) / 2
@@ -211,18 +155,17 @@ local function normalize(v)
     return { v[1] / l, v[2] / l, v[3] / l }
 end
 
----Screen position of a point `e` out from `target` along `dir` (nil off screen or behind)
+---Screen position of a point `e` out from `target` along `dir`, nil off screen
 local function screenAt(target, dir, e)
     local x, y, z = get_screen_pos(target[1] + dir[1] * e, target[2] + dir[2] * e, target[3] + dir[3] * e)
-    if x == nil or z ~= 0 then return nil end -- z 0: on screen (draw3d only)
+    if x == nil or z ~= 0 then return nil end
     return x, y
 end
 
--- the shares of the target's distance the projection is measured at, farthest first (MGE's world_select.lua)
-local MEASURE_SHARES = { 0.25, 0.05 }
+local MEASURE_SHARES = { 0.25, 0.05 } -- of the target's distance, farthest first (MGE's world_select.lua)
 
----The camera's view this frame (as MGE's WorldSelect.measureProjectionNow): eye, axes and the screen mapping
----of sideways / depth, measured with get_screen_pos around the camera's target. nil: draw everything
+---This frame's camera: eye, axes and the screen mapping, measured with get_screen_pos around its target. nil: draw
+---everything
 ---@return table?
 function Drawer.measureView()
     local ok, info = pcall(get_camera_info)
@@ -254,15 +197,14 @@ function Drawer.measureView()
     return nil
 end
 
----Whether a sphere at x y z of radius r can show on screen (MGE's onScreen): in front of the camera and
----overlapping the screen, with a margin. No view: true
+---Whether a sphere can show on screen (with a margin); true without a view
 local function onScreen(v, x, y, z, r)
     if not v then return true end
     local e, f = v.eye, v.forward
     local rx, ry, rz = x - e[1], y - e[2], z - e[3]
     local depth = rx * f[1] + ry * f[2] + rz * f[3]
-    if depth < -r then return false end -- behind the camera
-    if depth <= r then return true end -- around the camera
+    if depth < -r then return false end
+    if depth <= r then return true end
     local right, up = v.right, v.up
     local a = (rx * right[1] + ry * right[2] + rz * right[3]) / depth
     local b = (rx * up[1] + ry * up[2] + rz * up[3]) / depth
@@ -274,7 +216,7 @@ Drawer.onScreen = onScreen
 
 ---------------------------------------------------------------------------------------------------- drawing
 
-local lastColor = nil -- the color set last (drawItem sets it only when it changes)
+local lastColor = nil -- set_color only when it changes
 
 local function drawItem(item, x, y, z, rot)
     local c, s = item.color, item.size
@@ -291,8 +233,7 @@ local function drawItem(item, x, y, z, rot)
     end
 end
 
----Draws the shapes that can show this frame (draw3d)
----@param d table Drawer.new's
+---draw3d: the shapes that can show this frame
 ---@param view table? Drawer.measureView's (nil: every shape)
 ---@param level integer the game's graphics level (0-2)
 ---@return integer drawn
@@ -315,8 +256,7 @@ function Drawer.draw(d, view, level)
             end
         end
     end
-    -- props: where they are now, not while an object carries them (it shows them)
-    for _, item in ipairs(d.moving) do
+    for _, item in ipairs(d.moving) do -- props where they are, not while carried (their object shows them)
         local prop = item.prop
         if not prop.entry and level >= item.minLevel and level <= item.maxLevel then
             local p = prop.pos

@@ -1,7 +1,6 @@
--- Minimal 3x3 matrix helpers (row-major number[][]), standard right-handed rotations. Copied from MGE's
--- mge/utils/mat3.lua (only what Atmo Play needs)
+-- 3x3 matrices (row-major number[][]), right-handed rotations: what Atmo Play needs of MGE's mge/utils/mat3.lua
 
-local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY, MGE's MGE.AtmoPlay)
+local NS = ATMOPLAY_LOADING
 
 ---@class AtmoPlayMat3
 local Mat3 = {}

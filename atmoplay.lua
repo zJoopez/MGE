@@ -1,11 +1,9 @@
--- Atmo Play: makes big atmo maps solid. Load it once (/ls atmoplay/atmoplay.lua, or the folder it's in),
--- then load playable mods (/lm). Their atmo is drawn and a pool of hidden objects follows the players, in
--- fights and replays. Its window has the options and Quit (hidden, a small "AP" button opens it). Made by MGE (World tab: Playable),
--- developed in MGE's repo: docs/atmo-play-plan.md there.
+-- Atmo Play: makes big atmo maps solid. Load it once (/ls atmoplay/atmoplay.lua), then load playable mods (/lm,
+-- made by MGE's World > Playable): their atmo is drawn and pools of hidden objects follow the players. Its window has
+-- the options and Quit. Developed in MGE's repo (docs/atmo-play-plan.md).
 
 ---@class ATMOPLAY
----@field scriptPath string the modules' folder under data/script ("atmoplay/atmoplay/" released, "mgeDev/atmoplay/",
----"mge/atmoplay/" with MGE)
+---@field scriptPath string the modules' folder under data/script
 ---@field running boolean
 ---@field Mat3 AtmoPlayMat3
 ---@field Format AtmoPlayFormat
@@ -15,8 +13,7 @@
 ---@field Runtime AtmoPlayRuntime
 ---@field quit fun()
 
--- a /ls while it runs restarts it (also picks up changed code): the old one puts the player's things back and
--- hands on the player's atmo (one picked this session isn't in atmo.cfg)
+-- a /ls while it runs restarts it: the old one puts things back and hands on the player's atmo
 local playerAtmo = nil
 if ATMOPLAY then
     local runtime = ATMOPLAY.Runtime
@@ -27,8 +24,7 @@ if ATMOPLAY then
     if ATMOPLAY.quit then pcall(ATMOPLAY.quit) end
 end
 
--- the folder this file is in, under data/script ("atmoplay/" released, "mge/" with MGE, "mgeDev/"); the
--- modules are in its atmoplay/ subfolder
+-- the folder this file is in, under data/script; the modules are in its atmoplay/ subfolder
 local function isRoot(dir)
     local file = io.open(dir .. "atmoplay/runtime.lua", "r")
     if file then file:close() end
@@ -49,14 +45,13 @@ end
 
 ATMOPLAY = { scriptPath = findRoot() .. "atmoplay/", running = false }
 
--- the modules register on the namespace they're given (ATMOPLAY_LOADING while they load), so MGE can load
--- the same ones into its own table while Atmo Play runs
+-- modules register on ATMOPLAY_LOADING while they load (MGE loads the same ones into its own table)
 local ok, err = pcall(function()
     for _, module in ipairs({ "mat3.lua", "format.lua", "colliders.lua", "pool.lua", "driver.lua", "flight.lua", "dynamics.lua", "drawer.lua", "runtime.lua", "ui.lua" }) do
         ATMOPLAY_LOADING = ATMOPLAY
         dofile(ATMOPLAY.scriptPath .. module)
     end
-    -- the debug log (/atmoplay log): dev only, the releases don't have the file
+    -- dev builds only: the release zip has no debuglog.lua
     local file = io.open(ATMOPLAY.scriptPath .. "debuglog.lua", "r")
     if file then
         file:close()
@@ -74,7 +69,7 @@ end
 function ATMOPLAY.quit()
     if not ATMOPLAY then return end
     ATMOPLAY.running = false
-    pcall(ATMOPLAY.Runtime.quit) -- quietly: the player quit it (its window goes, their atmo comes back)
+    pcall(ATMOPLAY.Runtime.quit)
     ATMOPLAY = nil
 end
 

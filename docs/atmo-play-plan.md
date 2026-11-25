@@ -949,6 +949,25 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     ones passed through them (a dropped tower fell through itself): every prop is listed now. Still open: at
     gravity -30 a falling stack sinks into itself (box 2 ends 0.16 above box 1, not 0.5): the 8 solver rounds
     don't hold a heavy stack; at -9.82 it holds.
+  - **Solver refactor (2026-11-25, offline bench, Lua 5.1, GC on, 300 frames; dynamics through a fake engine).**
+    The solver was most of every heavy case (63% of a frame for 1.7k boxes on the ground). Three changes:
+    (1) a contact's levers (r x d, I^-1 (r x d) for n, t1, t2, both bodies) and resistances are worked out once in
+    prepare; a round is arithmetic on them (it was 2 relVel + up to 4 push calls, each redoing the cross products).
+    (2) Rounds after the first stop island by island (props joined by contacts with each other; union-find on
+    the flights, stamped): SETTLE compared the change summed over the WHOLE world, so with hundreds of props
+    every contact took all 8 rounds. Results equal one island stepped alone (test). Found too: SETTLE (1e-7) is
+    absolute, tuned on test2's mass 0.0001 boxes (~0.5% of their weight impulse a frame); a mass 1 box on 4
+    corners never gets below it (and needs 7 rounds even at 1% relative): left as is, a relative tolerance would
+    change the physics. (3) Box-box separating axes the Gottschalk way (R_ij = A_i . B_j once, 4 |R| terms an edge
+    axis): 5.8 -> 3.8 us a touching pair; 200,000 random pairs equal the old contacts except 989 exact ties (the
+    same least overlap, another axis of it). Also less garbage: the sweep's pair lists and order kept between
+    steps, stillNear's lists kept (stamps, not seen tables), pooled contacts' empty fields hold false, not nil (a
+    key set to nil is dropped by a collection and setting it again can rebuild the table).
+    ms a frame before -> after (Low / Medium / High): 360-box pile (test2) 0.33 / 12.7 / 8.1 -> 0.28 / 2.5 / 4.3
+    (Medium also rests sooner in this run: the rounding change moves a chaotic pile); 1.7k thrust boxes sliding on
+    the ground 9.2 / 84 / 91 -> 8.9 / 55 / 57; 2.6k rolling spheres 13.1 / 13.1 / 14.5 -> 11.4 / 11.3 / 13.5; 100
+    thrust props over 5k static boxes 0.45 / 2.1 / 2.2 -> 0.39 / 1.4 / 1.4. Garbage on High: pile 117 -> 42 KB a
+    frame, line 439 -> 244, spheres 141 -> 77. Not checked in game yet.
 
 ## Still open (checked during Phases 1-2, in game)
 
@@ -984,6 +1003,11 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
   were removed from `tools/atmoplay` with their logs, mods and replays; git history keeps the scripts, and
   this doc keeps what they measured. The builder and `build_playable.lua` stay. The driver now places a
   static pool object only where it isn't already (position, rotation and size read from the object).
+- **Cleanup (2026-11-25):** the later probes (probe_thrust, probe_timing, probe_replay + compare_replay,
+  probe_dynamic + compare_dynamic; last in commit abffcf8) were removed the same way: their results are in
+  this doc (sections 6-7), git history keeps the scripts. probe_timing's "ours" column read 0 in every line of
+  its last log, so its wrappers had stopped catching the props' calls; `/atmoplay time` (debuglog.lua) measures
+  the same parts.
 - **R5, cost:** offline on the dust2 mod (5,501 colliders, 208 pool objects, 2 players walking through the
   middle), the pool step takes **0.15 ms per frame** with the grid (1.33 ms looking at every collider),
   building the grid 9 ms, reading the colliders ~120 ms (once per mod switch). In game: `/atmoplay`.

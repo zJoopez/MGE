@@ -1,16 +1,12 @@
--- The in-game part (docs/atmo-play-plan.md, part 2): on every match_begin it looks at the loaded mod; a playable
--- mod's atmo is drawn through the game's atmosphere manager, and in fights its pool is moved onto the
--- atmo objects nearest the players. Replays need nothing from it but the drawing: the game records every
--- env object change (EOBJ lines) and replays them. Facts it relies on (measured, see the plan):
---   * /lm and open_replay are synchronous: match_begin runs inside them, the world already exists
---   * object changes made in match_begin are recorded under FRAME 0, changes made between physics steps
---     (draw2d) under the step they affect: their replay is exact, cached or not. Changes made in
---     enter_frame are recorded one step late, so the pool is never moved there
---   * moving objects during a replay crashed the game at the replay's end: in replays nothing is moved
+-- The in-game part (docs/atmo-play-plan.md, part 2): on every match_begin it looks at the loaded mod. A playable mod's
+-- atmo is drawn, and in fights its pools follow the players (driver.lua, dynamics.lua). Replays need only the drawing:
+-- the game records and replays every object change. Measured facts it relies on:
+--   * /lm and open_replay run match_begin inside them, with the world already there
+--   * changes made between physics steps (draw2d) are recorded under the step they affect; enter_frame's a step late
 --   * the game's io.open handles lack :lines() and fail on "../" paths: files go through Files
---   * Atmospheres.LoadAtmo of 5k objects takes ~0.3 s: the atmo is loaded only when the mod changes
+--   * loading a 5k-object atmo takes ~0.3 s: it's loaded only when the mod changes
 
-local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY, MGE's MGE.AtmoPlay)
+local NS = ATMOPLAY_LOADING
 
 local Format = NS.Format
 local Colliders = NS.Colliders
@@ -29,26 +25,26 @@ local Runtime = {
 
 ---@class AtmoPlayLoaded
 ---@field path string the mod file under data/mod
----@field name string shown in messages
+---@field name string
 ---@field file AtmoPlayModFile
 ---@field colliders AtmoPlayCollider[]
 ---@field stats table Colliders.build's
 ---@field pool AtmoPlayPoolState
----@field driver AtmoPlayDriver moves the pool (driver.lua)
----@field missing integer pool objects not in the world (the mod file changed since /lm?)
----@field dynamics table? the props and their pool (dynamics.lua), nil without props
+---@field driver AtmoPlayDriver
+---@field missing integer pool objects not in the world (the file changed since /lm)
+---@field dynamics table? nil without props
 
 local state = {
-    modName = nil, ---@type string? the mod gamerule last seen at match_begin
+    modName = nil, ---@type string? the mod gamerule last seen
     loaded = nil, ---@type AtmoPlayLoaded?
-    drawnByUs = false, -- the cache atmo is loaded (the player's atmo comes back when a normal mod loads)
-    ourLoad = false, -- Atmospheres.LoadAtmo is called by Atmo Play right now (not the player's pick)
-    playerAtmo = nil, ---@type string? the player's atmo: the last one loaded by others, or atmo.cfg's
-    cacheBefore = nil, ---@type number? the player's replaycache, while a mod with props has it off
+    drawnByUs = false, -- the cache atmo is loaded
+    ourLoad = false, -- Atmospheres.LoadAtmo is Atmo Play's call right now
+    playerAtmo = nil, ---@type string? the player's own atmo (what comes back)
+    cacheBefore = nil, ---@type number? the player's replaycache while a mod with props has it off
 }
 Runtime.state = state
 
----Dev builds only (debuglog.lua's /atmoplay time): told what each drawn frame cost. nil in releases: nothing measured
+---Dev builds only (debuglog.lua's timing); nil in releases
 ---@type { frame: fun(poolMs: number, propsMs: number, copiesMs: number), own: fun(ms: number, shapes: integer), stop: fun() }?
 Runtime.measure = nil
 
@@ -67,8 +63,6 @@ local function readLines(path)
     return lines
 end
 
----@param path string
----@param lines string[]
 ---@return boolean
 local function writeLines(path, lines)
     local file = Files.Open(path, FILES_MODE_WRITE)
@@ -80,23 +74,18 @@ end
 
 ---------------------------------------------------------------------------------------------------- settings
 
--- The player's settings, kept in atmoplay.cfg next to atmoplay.lua (not in the release zip: an update keeps it).
--- One "key value" a line:
---   flight shapes      how drawn props fly (Dynamics.LEVELS): simple (spheres, cheapest), shapes (their real
---                      shapes), full (real shapes that hit each other: the most work a frame)
---   draw own           who draws the atmo: own (Atmo Play: its plain shapes, only those on screen; drawer.lua),
---                      game (the game's atmo manager draws every one, as before)
---   ghosts on          the flying props' move predictions while a turn waits (Dynamics.drawGhosts): off saves
---                      their work (the prediction runs the props' flights ahead, as much as playing them)
---   farprops move      flying props far from every player: move (all fly) or pause (they wait where they are until
---                      someone comes near, less work)
---   ui on              Atmo Play's window (ui.lua) open when it starts (off: only its small launcher button)
---   uipos 10 120       where the window was dragged to (screen pixels)
+-- atmoplay.cfg next to atmoplay.lua (not in the release zip), one "key value" a line:
+--   flight shapes      Detail: simple / shapes / full
+--   draw own           own (Atmo Play draws the plain shapes on screen, drawer.lua) or game (the game's atmo draws all)
+--   ghosts on          flying props' move predictions while a turn waits
+--   farprops move      move, or pause flights far from every player
+--   ui on              the window open at start (off: only its launcher button)
+--   uipos 10 120       where the window was dragged to
 Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, draw = "own", ghosts = true, pauseFar = false, ui = true,
     uiPos = nil }
 Runtime.DRAW_MODES = { own = true, game = true }
 
----@return string the settings file, a data/script path
+---@return string data/script path
 function Runtime.settingsPath()
     return tostring(NS.scriptPath or "atmoplay/"):gsub("atmoplay/$", "") .. "atmoplay.cfg"
 end
@@ -115,7 +104,6 @@ function Runtime.loadSettings()
             local x, y = tostring(line):match("^%s*%S+%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)")
             if x then Runtime.settings.uiPos = { tonumber(x), tonumber(y) } end
         end
-
     end
 end
 
@@ -131,9 +119,7 @@ function Runtime.saveSettings()
     end
 end
 
----The mod gamerule as a file under data/mod: it keeps the /lm folder ("modmaker/x.tbm"); find_mod for
----names the game found elsewhere. nil for the built-in classic (no .tbm, no file)
----@param name string?
+---The mod gamerule as a file under data/mod (it keeps the /lm folder; find_mod for others). nil for built-in classic
 ---@return string?
 local function resolveModPath(name)
     name = tostring(name or "")
@@ -152,8 +138,7 @@ local function manager()
     return nil
 end
 
----Load an atmo through the game's manager, as Atmo Play (not remembered as the player's choice)
----@param name string? nil unloads
+---Loads an atmo through the game's manager as Atmo Play (not remembered as the player's); nil unloads
 local function loadAtmo(name)
     local m = manager()
     if not m then return false end
@@ -165,15 +150,14 @@ local function loadAtmo(name)
     return ok
 end
 
----Remembers the atmos others load (the main menu's Atmos list, other scripts): that's what comes back
----when a normal mod loads. The original is kept in a global so a reload doesn't wrap the wrapper
+---Remembers the atmos others load (what comes back when a normal mod loads). The originals are kept in globals so a
+---restart doesn't wrap the wrapper
 local function wrapAtmoLoading()
     local m = manager()
     if not m then return end
     ATMOPLAY_LOADATMO = ATMOPLAY_LOADATMO or m.LoadAtmo
     local original = ATMOPLAY_LOADATMO
-    ---Another atmo (the player's pick, another script) replaced ours: Atmo Play's own drawing of the mod's shapes
-    ---stops with it (else they stayed drawn over the new atmo)
+    ---Another atmo replaced ours: our own drawing stops with it
     local function replaced()
         if state.drawnByUs then state.drawnByUs = false end
         if state.drawer then
@@ -206,7 +190,7 @@ local function unwrapAtmoLoading()
     ATMOPLAY_LOADATMO, ATMOPLAY_UNLOAD = nil, nil
 end
 
----The player's default atmo (data/atmospheres/atmo.cfg's first line), what the game loaded at start
+---The player's default atmo: atmo.cfg's first line
 ---@return string?
 local function defaultAtmo()
     local lines = readLines(Runtime.ATMO_FOLDER .. "atmo.cfg")
@@ -222,17 +206,11 @@ local function restorePlayerAtmo()
     if name and name:lower() ~= "default.atmo" then loadAtmo(name) else loadAtmo(nil) end
 end
 
----------------------------------------------------------------------------------------------------- pool
-
----Start the loaded pool over (driver.lua)
 local function resetPool()
     if state.loaded and state.loaded.driver then Driver.reset(state.loaded.driver) end
 end
 
----------------------------------------------------------------------------------------------------- debug log
-
--- the dev-only debug log (debuglog.lua, /atmoplay log): not in the releases, where NS.DebugLog is nil and these do
--- nothing
+---The dev debug log's calls (debuglog.lua); nothing in releases
 local function debugCall(name, ...)
     local log = NS.DebugLog
     if log then log[name](...) end
@@ -240,11 +218,10 @@ end
 
 ---------------------------------------------------------------------------------------------------- mods
 
----Draws a mod's atmo: the drawn part written as the cache atmo and loaded through the game's manager. With
----`draw own` the cache keeps only what the game must draw (and the header: shader lines), Atmo Play draws the
----plain shapes itself (drawer.lua, state.drawer), the props where they are (no copies to move in the game's atmo)
+---Draws a mod's atmo through the game's manager (written as the cache atmo). With `draw own` the cache keeps only what
+---the game must draw; Atmo Play draws the plain shapes (state.drawer)
 ---@param atmoLines string[]
----@param dynamics table? the props (dynamics.lua)
+---@param dynamics table? the props
 ---@return boolean drawn
 local function drawModAtmo(atmoLines, dynamics)
     state.drawer = nil
@@ -260,8 +237,7 @@ local function drawModAtmo(atmoLines, dynamics)
         state.drawer.left = split.game
     end
     if dynamics then
-        -- own: no copies in the game's atmo; game: its copies found again (the atmo is loaded again below)
-        dynamics.noCopies = state.drawer ~= nil
+        dynamics.noCopies = state.drawer ~= nil -- own: no copies in the game's atmo; game: found again after the load
         dynamics.holder, dynamics.dirtyAll = nil, true
     end
     if not writeLines(Runtime.ATMO_FOLDER .. Runtime.CACHE_ATMO, lines) then
@@ -273,8 +249,7 @@ local function drawModAtmo(atmoLines, dynamics)
     return drawn
 end
 
----Reads a playable mod and draws its atmo. nil when the mod isn't playable (or can't be read)
----@param path string
+---Reads a playable mod and draws its atmo; nil when it isn't playable
 ---@return AtmoPlayLoaded?
 local function loadPlayable(path)
     local lines = readLines(Runtime.MOD_FOLDER .. path)
@@ -282,16 +257,12 @@ local function loadPlayable(path)
     local file = Format.read(lines)
     if not file.header then return nil end
     local name = path:match("([^/]+)%.tbm$") or path
-    -- MGE open: it draws the atmo itself and moves a playable mod's pool (the same driver.lua); two drivers
-    -- would move the same objects
-    if Runtime.mgeRunning() then return nil end
-    -- a drawn mod (MGE's Default): its atmo is only drawn, there are no pools (driver nil: the hooks skip it)
+    if Runtime.mgeRunning() then return nil end -- MGE plays it itself (two drivers would move the same objects)
     if Format.isDrawOnly(file.header) then
         local drawn = drawModAtmo(file.atmo)
         return { path = path, name = name, file = file, drawn = drawn, drawOnly = true }
     end
-    -- the pool objects that are in the world: one the file names but the world lacks (the file changed since /lm) is
-    -- left out, not moved every frame on an id that isn't there
+    -- pool objects the world lacks (the file changed since /lm) are left out
     local missing = 0
     local function present(list)
         local out = {}
@@ -307,26 +278,19 @@ local function loadPlayable(path)
         say(name .. ": " .. tostring(err))
         return nil
     end
-    -- the pool objects are in the world right after /lm (each written with its group's flag and bounce)
     local driver = Driver.new(pool)
     driver.onDrive = NS.DebugLog and NS.DebugLog.onDrive
-    -- the mod's own dynamic objects: the static pool keeps a floor under them too
-    local skip = {}
+    local skip = {} -- the static pool keeps a floor under the mod's own dynamic objects too
     for _, object in ipairs(file.dynamic) do skip[object.id] = true end
     driver.follow = Driver.dynamicIds(skip)
-    -- props (proof of concept): their own pool, and the static pool covers the carried ones
     local dynamics
     if #props > 0 then
-        -- follow: the mod's own dynamic objects push props too. Without a dynamic pool (props that never become
-        -- real, or no ids left) they still fly drawn (thrust, hits)
         dynamics = Dynamics.new(dynamicObjects, props, { dradius = file.header.dradius, follow = driver.follow,
             statics = colliders, level = Runtime.settings.flight, noCopies = Runtime.settings.draw == "own",
             pauseFar = Runtime.settings.pauseFar })
         driver.moreCenters = function() return Dynamics.centers(dynamics) end
-
     end
     local drawn = drawModAtmo(file.atmo, dynamics)
-
     if missing > 0 then
         say(missing .. " pool objects missing: load the mod again (/lm)")
     end
@@ -334,9 +298,7 @@ local function loadPlayable(path)
         driver = driver, missing = missing, drawn = drawn, dynamics = dynamics }
 end
 
----Props are followed in replays by watching their pool objects, and cached replays misplace teleported
----dynamic objects (measured: 33-88 units off), so a mod with props has the replay cache off while it's
----loaded; the player's setting comes back when it leaves
+---Cached replays misplace teleported dynamic objects: a mod with props has the replay cache off while it's loaded
 local function replayCacheOff()
     local ok, value = pcall(get_option, "replaycache")
     if not ok or tonumber(value) == 0 then return end
@@ -353,15 +315,13 @@ end
 local function leavePlayable()
     if state.loaded and state.loaded.dynamics then pcall(Dynamics.restoreCopies, state.loaded.dynamics) end
     state.loaded, state.drawer = nil, nil
-    if Runtime.measure then Runtime.measure.stop() end -- a measurement doesn't run on into the next mod
+    if Runtime.measure then Runtime.measure.stop() end
     restoreReplayCache()
     restorePlayerAtmo()
 end
 
----A mod file's whole text (nil without one): match_begin compares it with the text last read, so a mod changed and
----loaded again under its name (an MGE edit, a rebuild, "/lm again") is read again. Lua keeps one copy of each string:
----the comparison costs a hash, not a walk through the text
----@param name string? the mod gamerule
+---A mod file's whole text: compared with the last one read, so a mod changed under its name is read again (strings
+---are interned: the compare is cheap)
 ---@return string?
 local function readRaw(name)
     local path = resolveModPath(name)
@@ -373,30 +333,27 @@ local function readRaw(name)
     return raw
 end
 
----The mod changed (or a forced reload): leave the old playable mod, read the new one
----@param raw string? its text, if already read (readRaw)
+---Leaves the old playable mod, reads the new one
+---@param raw string? its text, if already read
 local function switchMod(name, raw)
     state.modName = name
     state.modRaw = raw or readRaw(name)
     if state.loaded then leavePlayable() end
     local path = resolveModPath(name)
     if path then state.loaded = loadPlayable(path) end
-    -- the replay cache only misplaces pool objects: without any, nothing to protect
     if state.loaded and state.loaded.dynamics and #state.loaded.dynamics.entries > 0 then replayCacheOff() end
 end
 
 ---------------------------------------------------------------------------------------------------- hooks
 
----MGE is open: it draws and plays playable mods itself (the same driver.lua), so Atmo Play moves nothing then. A
----mod Atmo Play had loaded before MGE started stays loaded, untouched, until MGE closes (two drivers would move the
----same objects)
+---MGE plays playable mods itself while it's open: Atmo Play moves nothing then
 ---@return boolean
 function Runtime.mgeRunning()
     local mge = rawget(_G, "MGE")
     return type(mge) == "table" and mge.running == true
 end
 
----Runs a dynamics.lua call; an error stops the props (proof of concept), not the static pool
+---Runs a dynamics.lua call; an error stops the props, not the static pool
 local function runDynamics(fn, ws)
     local loaded = state.loaded
     if not (loaded and loaded.dynamics) then return end
@@ -411,21 +368,16 @@ end
 local function onMatchBegin()
     debugCall("event", "match_begin")
     if Runtime.mgeRunning() then
-        -- MGE plays it. Forgotten: after MGE closes, the mod is read again (MGE may have changed it, or Atmo Play
-        -- started while MGE had it open and never read it)
-        state.modName = nil
+        state.modName = nil -- read again once MGE closes
         return
     end
     local name = get_game_rules().mod
     local raw = readRaw(name)
     if name ~= state.modName or raw ~= state.modRaw then switchMod(name, raw) end
-    -- a fight: the pool is placed now (recorded under FRAME 0); a replay has it in its own FRAME 0. Props
-    -- first: the static pool covers the props they carry
     if state.loaded then
         local ws = get_world_state()
-        runDynamics(Dynamics.matchBegin, ws)
+        runDynamics(Dynamics.matchBegin, ws) -- props first: the static pool covers the carried ones
         if state.loaded.driver then Driver.matchBegin(state.loaded.driver, ws) end
-        -- a replay that opened cached (its mod loaded inside open_replay, after the cache was made)
         if ws.replay_mode > 0 and state.loaded.dynamics and get_replay_cache and (get_replay_cache() or 0) > 0 then
             say("replay opened cached: props may be off, open it again")
         end
@@ -433,10 +385,8 @@ local function onMatchBegin()
     debugCall("flush")
 end
 
--- what the props cost this drawn frame (pre_draw and draw2d both run them), only while Runtime.measure measures
-local frameProps, frameCopies = 0, 0
+local frameProps, frameCopies = 0, 0 -- what the props cost this drawn frame, while measured
 
----Dynamics.draw (its cost added to this drawn frame's while measured)
 local function drawProps(ws)
     runDynamics(Dynamics.draw, ws)
     if Runtime.measure then
@@ -445,10 +395,7 @@ local function drawProps(ws)
     end
 end
 
----pre_draw, before anything is drawn: replays are watched here. The game has moved the pool objects to this frame
----already, and draw3d (where the props and the game's atmo copies are drawn) comes before draw2d: watched in
----draw2d, a prop let go was drawn by nobody for one frame (its object parked, the prop still "carried") and a
----taken one twice. Fights stay in draw2d, between physics steps (the moves are recorded there)
+---pre_draw: replays are watched here (before draw3d draws the props; in draw2d a swap showed one frame late)
 local function onPreDraw()
     if state.loaded and not Runtime.mgeRunning() then
         local ws = get_world_state()
@@ -456,34 +403,29 @@ local function onPreDraw()
     end
 end
 
----enter_frame: every physics frame, drawn or not (the probe: draw2d at frame t, then enter_frame at t with the same
----state, then the step to t + 1; a frame the game doesn't draw still has its enter_frame). Replays are watched here
----too, so no let-go or take falls between two drawn frames: each is seen at its own frame, as the fight made it, and
----the drawn flights start exactly as in the fight (watched only when drawn, they started from an older pose and
----drifted: overlaps with the recorded objects, piles flickering while they settled)
+---enter_frame, every physics frame drawn or not: replays watched here too (every take and release at its own frame),
+---and far props' samples in fights and replays alike
 local function onEnterFrame()
     if state.loaded and not Runtime.mgeRunning() then
         local ws = get_world_state()
         if ws.replay_mode > 0 then drawProps(ws) end
-        -- where the players are this frame, for far props' pauses (fights and replays alike: the same pauses)
         local dynamics = state.loaded.dynamics
         if dynamics and dynamics.pauseFar then runDynamics(Dynamics.sample, ws) end
     end
 end
 
----Between physics steps: in a fight, the pools follow the players once per new frame (driver.lua,
----dynamics.lua); in replays the props' drawn copies follow their objects
+---draw2d, between physics steps: fights move the pools here
 local function onDraw2d()
     if state.drawFallback then
         state.drawFallback = nil
-        Runtime.settings.draw = "game" -- this session (not saved)
+        Runtime.settings.draw = "game" -- this session only
         local loaded = state.loaded
         if loaded and loaded.file then loaded.drawn = drawModAtmo(loaded.file.atmo, loaded.dynamics) end
     end
     if state.loaded and not Runtime.mgeRunning() then
         local ws = get_world_state()
         debugCall("frame", ws)
-        drawProps(ws) -- a replay's frame was watched in pre_draw: this only draws the copies
+        drawProps(ws)
         local measure = Runtime.measure
         local t = measure and os.clock()
         if state.loaded.driver then Driver.draw(state.loaded.driver, ws) end
@@ -495,7 +437,7 @@ local function onDraw2d()
     end
 end
 
----The game's graphics level (0-2), as the atmo manager reads it for min_level / max_level
+---The game's graphics level (0-2), as the atmo manager reads it
 local function graphicsLevel()
     local settings = rawget(_G, "Settings")
     if type(settings) == "table" and settings.GetLevel then
@@ -505,30 +447,27 @@ local function graphicsLevel()
     return 2
 end
 
----draw3d: Atmo Play's own drawing of the atmo (draw own)
+---draw3d: our own atmo drawing, then the props' ghosts (after it: a see-through ghost drawn first hid its prop)
 local function onDraw3d()
-    -- this frame's view: the ghosts and our atmo drawing skip what's off screen
     local view = (state.drawer or (state.loaded and state.loaded.dynamics)) and Drawer.measureView() or nil
     local drawer = state.drawer
     if drawer and not Runtime.mgeRunning() then
         local t = Runtime.measure and os.clock()
         local ok, drawn = pcall(Drawer.draw, drawer, view, graphicsLevel())
         if not ok then
-            -- the game's atmo holds only what it draws: it takes the whole atmo back (in draw2d, not mid-draw)
+            -- the game's atmo takes the whole atmo back (in draw2d, not mid-draw)
             say("drawing failed, the game draws the atmo this session: " .. tostring(drawn))
             state.drawer, state.drawFallback = nil, true
         elseif Runtime.measure then
             Runtime.measure.own((os.clock() - t) * 1000, drawn)
         end
     end
-    -- the flying props' ghosts while the fight waits for the turn, as the game shows its objects' (either draw mode).
-    -- After the atmo: drawn first, a see-through ghost on or in front of its prop hid the prop behind it
     local loaded = state.loaded
     if loaded and loaded.dynamics and Runtime.settings.ghosts and not Runtime.mgeRunning() then
         local onScreen = view and function(x, y, z, r) return Drawer.onScreen(view, x, y, z, r) end or nil
         local ok, err = pcall(Dynamics.drawGhosts, loaded.dynamics, get_world_state(), onScreen)
         if not ok and not state.ghostError then
-            state.ghostError = true -- once a session
+            state.ghostError = true
             say("prop ghosts failed: " .. tostring(err))
         end
     end
@@ -541,10 +480,9 @@ local function onLeaveGame()
 end
 
 ---------------------------------------------------------------------------------------------------- the player's settings
--- Set from the window (ui.lua), silently: its lit buttons show them. Kept in atmoplay.cfg
+-- Set from the window (ui.lua), silently, and kept in atmoplay.cfg
 
----How drawn props fly (Dynamics.LEVELS); a playable mod running takes it from its next fight
----@param level string
+---Detail; a running mod takes it from its next fight
 function Runtime.setFlight(level)
     level = Dynamics.level(level)
     Runtime.settings.flight = level
@@ -553,8 +491,7 @@ function Runtime.setFlight(level)
     if loaded and loaded.dynamics then Dynamics.setLevel(loaded.dynamics, level) end
 end
 
----The flying props' move predictions while a turn waits; off frees the prediction's memory at once
----@param on boolean
+---Ghosts; off frees the predictions at once
 function Runtime.setGhosts(on)
     Runtime.settings.ghosts = on and true or false
     Runtime.saveSettings()
@@ -562,8 +499,7 @@ function Runtime.setGhosts(on)
     if not on and loaded and loaded.dynamics then Dynamics.dropPrediction(loaded.dynamics) end
 end
 
----Flying props far from every player pause (or all move); a playable mod running takes it from its next fight
----@param on boolean
+---Far props pause; a running mod takes it from its next fight
 function Runtime.setFarProps(on)
     Runtime.settings.pauseFar = on and true or false
     Runtime.saveSettings()
@@ -571,8 +507,7 @@ function Runtime.setFarProps(on)
     if loaded and loaded.dynamics then Dynamics.setPauseFar(loaded.dynamics, Runtime.settings.pauseFar) end
 end
 
----The window open, or hidden behind its launcher button; kept for the next start
----@param open boolean
+---The window open, or hidden behind its launcher
 function Runtime.setWindow(open)
     Runtime.settings.ui = open and true or false
     Runtime.saveSettings()
@@ -581,9 +516,6 @@ function Runtime.setWindow(open)
     end
 end
 
----Where the window was dragged to, kept for the next start
----@param x number
----@param y number
 function Runtime.setWindowPos(x, y)
     Runtime.settings.uiPos = { math.floor(x + 0.5), math.floor(y + 0.5) }
     Runtime.saveSettings()
@@ -594,7 +526,7 @@ function Runtime.stop()
     if ATMOPLAY and ATMOPLAY.quit then ATMOPLAY.quit() end
 end
 
----What the dev tools (debuglog.lua: status, /atmoplay reload, draw, time) reach in here
+---What the dev tools (debuglog.lua) reach in here
 Runtime.dev = {
     state = state,
     reload = function()
@@ -609,18 +541,17 @@ Runtime.dev = {
 
 ---------------------------------------------------------------------------------------------------- start / quit
 
----The atmo that's the player's (what Quit gives back): handed on by a restart (atmoplay.lua)
+---The player's atmo (handed on by a restart: one picked this session isn't in atmo.cfg)
 ---@return string?
 function Runtime.playerAtmo()
     return state.playerAtmo
 end
 
----@param playerAtmo string? a restart's: the player's atmo the old one had (one picked this session isn't in
----atmo.cfg: read from there, a restart and then Quit gave the start's atmo back instead of the player's pick)
+---@param playerAtmo string? a restart's
 function Runtime.start(playerAtmo)
     remove_hooks(Runtime.HOOKS)
     Runtime.loadSettings()
-    state.playerAtmo = playerAtmo or defaultAtmo() -- a restart quits first, which gives the player's atmo back
+    state.playerAtmo = playerAtmo or defaultAtmo()
     wrapAtmoLoading()
 
     add_hook("match_begin", Runtime.HOOKS, onMatchBegin)
@@ -629,36 +560,32 @@ function Runtime.start(playerAtmo)
     add_hook("draw2d", Runtime.HOOKS, onDraw2d)
     add_hook("draw3d", Runtime.HOOKS, onDraw3d)
     add_hook("leave_game", Runtime.HOOKS, onLeaveGame)
-    if NS.DebugLog then -- dev builds: the /atmoplay command (debuglog.lua), and hooks only logged
+    if NS.DebugLog then -- dev builds: the /atmoplay command, and hooks only logged
         add_hook("command", Runtime.HOOKS, NS.DebugLog.command)
         add_hook("end_game", Runtime.HOOKS, function() debugCall("event", "end_game") end)
         add_hook("new_game", Runtime.HOOKS, function() debugCall("event", "new_game") end)
+        -- "unload" isn't an end: the game fires it when it loads its own scripts (the menu) too
+        add_hook("unload", Runtime.HOOKS, function() debugCall("event", "unload") end)
     end
-    -- "unload" isn't an end: the game fires it when it loads its own scripts too (opening the menu, the
-    -- replay save overlay ('f') when the menu isn't loaded), and hooks stay. The game's chat scripts only
-    -- rebuild their UI on it. Atmo Play keeps running; its window's Quit (or /ls again) stops it
-    if NS.DebugLog then add_hook("unload", Runtime.HOOKS, function() debugCall("event", "unload") end) end
 
-    -- the mod that's loaded now
     switchMod(get_game_rules().mod)
     if NS.UI then
-        if Runtime.settings.ui then NS.UI.show() else NS.UI.hide() end -- hidden by choice: its launcher
+        if Runtime.settings.ui then NS.UI.show() else NS.UI.hide() end
     end
 end
 
 function Runtime.quit()
-    if Runtime.measure then Runtime.measure.stop() end -- the game's UIElement3D.drawVisuals back
+    if Runtime.measure then Runtime.measure.stop() end
     remove_hooks(Runtime.HOOKS)
-    debugCall("stop") -- the engine's own setters back
+    debugCall("stop")
     if state.loaded then
-        leavePlayable() -- pool objects stay where they are until the next /lm; the atmo goes back
+        leavePlayable() -- pool objects stay until the next /lm; the atmo goes back
     end
     unwrapAtmoLoading()
     if NS.UI then NS.UI.close() end
 end
 
----Runs a dev command as if typed (tests; there's none in releases)
----@param text string
+---Runs a dev command as if typed (tests; none in releases)
 function Runtime.command(text)
     if NS.DebugLog then return NS.DebugLog.command(text) end
 end

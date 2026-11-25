@@ -1,5 +1,5 @@
--- atmoplay/flight.lua: drawn flight against the numbers measured in game (tools/atmoplay/probe_thrust.lua,
--- docs/atmo-play-plan.md section 7: data/mod/mge_tests/atmoplay_probe.tbm and atmoplay_probe_friction.tbm)
+-- atmoplay/flight.lua: drawn flight against the numbers measured in game (docs/atmo-play-plan.md section 7:
+-- data/mod/mge_tests/atmoplay_probe.tbm and atmoplay_probe_friction.tbm)
 local T = ...
 local Flight = ATMOPLAY.Flight
 local Colliders = ATMOPLAY.Colliders
@@ -259,6 +259,34 @@ T.test("collide: two props flying at each other meet; without it they pass", fun
     c.flight.vel, d.flight.vel = { 5, 0, 0 }, { -5, 0, 0 }
     run(w, { c, d }, 200, false)
     T.ok(c.pos[1] > d.pos[1], "collide off: through each other")
+end)
+
+T.test("solver: an island's rounds don't depend on props elsewhere (each stops on its own)", function()
+    -- a light turned box (test2's mass: its own rounds settle under SETTLE) tipping onto the ground, alone and beside
+    -- sliding thrust boxes far away (their islands never settle in ITERATIONS rounds): the same numbers to the last bit.
+    -- Rounds stopped by the whole world's change gave the box all ITERATIONS whenever the others were busy
+    local function tipping()
+        local p = prop({ 0, 0, 1 }, { rot = Driver.matrixTB(Colliders.frameOf({ 30, 20, 0 })), mass = 0.0001 })
+        p.index = 1
+        return p
+    end
+    local w = Flight.newWorld({}, { 0, 0, -9.82 })
+    local alone = tipping()
+    run(w, { alone }, 150, true)
+    local beside = tipping()
+    local list = { beside }
+    for i = 1, 3 do
+        local s = prop({ 50, i * 2, 0.25 }, { thrust = Flight.parseThrust("20 3 0 2") })
+        s.index = i + 1
+        s.flight.vel = { 2, 0, 0 }
+        list[#list + 1] = s
+    end
+    run(w, list, 150, true)
+    T.ok(alone.flight ~= nil and alone.flight.contacts > 0, "still settling on the ground at frame 150")
+    for k = 1, 3 do T.eq(beside.pos[k], alone.pos[k], "pos " .. k) end
+    for _, key in ipairs({ "r0", "r1", "r2", "r4", "r5", "r6", "r8", "r9", "r10" }) do
+        T.eq(beside.rot[key], alone.rot[key], "rot " .. key)
+    end
 end)
 
 T.test("collide: a flying prop wakes the still one it runs into", function()

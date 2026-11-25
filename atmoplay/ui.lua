@@ -1,9 +1,7 @@
--- Atmo Play's window: everything a player sets, in MGE's look (a plain UIElement panel with a dark bar to drag it by,
--- buttons lit for the current choice): Detail (the flight level), Ghosts, Far props and Quit, set through the runtime's silent setters (no chat
--- command or message for any of them). Fixed labels, nothing drawn or refreshed per frame: the lit buttons change on a
--- click or when it's shown. The bar's cross hides it behind a small "AP" button where it was, which opens it again;
--- atmoplay.cfg `ui` keeps whether it's open. Only atmoplay.lua loads this file (MGE has its own window)
-local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOPLAY)
+-- Atmo Play's window, in MGE's look: Detail, Ghosts, Far props and Quit through the runtime's silent setters, the
+-- current choices lit. Nothing is redrawn per frame. The cross hides it behind a small "AP" button. Only atmoplay.lua
+-- loads this file (MGE has its own window)
+local NS = ATMOPLAY_LOADING
 
 ---@class AtmoPlayUI
 local UI = {
@@ -14,15 +12,14 @@ local UI = {
     PAD = 8,
     LABEL_W = 70,
     TEXT_SCALE = 0.6,
-    LAUNCHER_W = 32, -- the "AP" button: small, always there while the window is hidden
+    LAUNCHER_W = 32, -- the "AP" button shown while the window is hidden
     window = nil, ---@type UIElement?
     launcher = nil, ---@type UIElement?
-    pos = nil, ---@type number[]? where it was dragged to (kept while the game runs)
-    dragging = false, ---@type boolean the bar held: the camera's mouse movement is off until it's let go
+    pos = nil, ---@type number[]? where it was dragged to
+    dragging = false, ---@type boolean the bar held (the camera's mouse movement is off)
 }
 
----Where the window (and its launcher) goes: where it was dragged to this session, else atmoplay.cfg's, else the
----default; kept on the screen
+---Where the window and its launcher go, kept on the screen
 ---@return number[]
 function UI.position()
     local p = UI.pos or NS.Runtime.settings.uiPos or { 10, 120 }
@@ -35,14 +32,13 @@ local function mix(a, b, t)
     return { a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t, 1 }
 end
 
----MGE's colors (mge/ui/widgets.lua), mixed from the game's menu colors so they follow its theme
+---MGE's colors, mixed from the game's menu colors (they follow its theme)
 local function colors()
     local d = TB_MENU_DEFAULT_DARKEST_COLOR
     local b = TB_MENU_DEFAULT_BG_COLOR
     return {
         bg = b, -- the buttons
-        panel = { b[1] * 0.85, b[2] * 0.85, b[3] * 0.85, 1 }, -- the window behind them: darker, as MGE's tab panels
-        -- (Widgets.TAB_PANEL_SOLID), else the buttons didn't stand out from it
+        panel = { b[1] * 0.85, b[2] * 0.85, b[3] * 0.85, 1 }, -- darker, so the buttons stand out
         hover = mix(TB_MENU_DEFAULT_BG_COLOR, TB_MENU_DEFAULT_LIGHTER_COLOR, 0.4),
         active = mix(TB_MENU_DEFAULT_BG_COLOR, TB_MENU_DEFAULT_LIGHTEST_COLOR, 0.5),
         pressed = d,
@@ -50,8 +46,7 @@ local function colors()
     }
 end
 
----A button as MGE makes one: the label added without override, so the button still draws its own background,
----hover and lit color (with override the text replaced all of it: the buttons showed as bare text)
+---A button as MGE makes one: the label without override, so the button keeps drawing its background and hover
 local function button(parent, x, y, w, h, label, onClick, c, globalid)
     local opts = {
         pos = { x, y },
@@ -82,7 +77,7 @@ end
 ---A row: its label left, buttons sharing the rest. choices: { label, setter, value, isOn() }
 local function choiceRow(parent, y, label, choices, c)
     local text = parent:addChild({ pos = { 0, y }, size = { UI.LABEL_W, UI.ROW_H } })
-    text:addAdaptedText(true, label, nil, nil, FONTS.LMEDIUM, LEFTMID, UI.TEXT_SCALE) -- a plain label: override is fine
+    text:addAdaptedText(true, label, nil, nil, FONTS.LMEDIUM, LEFTMID, UI.TEXT_SCALE)
     local x0 = UI.LABEL_W
     local w = (parent.size.w - x0 - UI.GAP * (#choices - 1)) / #choices
     for i, choice in ipairs(choices) do
@@ -121,12 +116,12 @@ local function build()
     title:addAdaptedText(true, "Atmo Play", nil, nil, FONTS.LMEDIUM, LEFTMID, 0.7)
     bar:addMouseHandlers(function(_, x, y)
         disable_mouse_camera_movement()
-        UI.dragging = true -- UI.close gives the camera's mouse movement back if it's killed mid-drag (a /ls)
+        UI.dragging = true -- UI.close gives the camera's mouse back if killed mid-drag
         bar.pressedPos.x, bar.pressedPos.y = x - window.pos.x, y - window.pos.y
     end, function()
         enable_mouse_camera_movement()
         UI.dragging = false
-        if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end -- a drag ended: kept in atmoplay.cfg
+        if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end
     end, function(x, y)
         if bar.hoverState == BTN_DN then
             local nx = math.max(0, math.min(x - bar.pressedPos.x, WIN_W - window.size.w))
@@ -137,7 +132,7 @@ local function build()
     end, nil, function()
         enable_mouse_camera_movement()
         UI.dragging = false
-        if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end -- kept in atmoplay.cfg
+        if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end
     end)
     TBMenu:spawnCloseButton(bar, { x = -UI.BAR_H, y = 0, w = UI.BAR_H, h = UI.BAR_H }, function() run(Runtime.setWindow, false) end,
         { default = c.bar, hover = c.hover, pressed = c.pressed, ui = { 1, 1, 1, 1 } })
@@ -147,32 +142,28 @@ local function build()
         size = { UI.W - UI.PAD * 2, h - UI.BAR_H - UI.PAD * 2 },
     })
     local y = 0
-    -- how props fly while no pool object carries them (by how much work the computer can take): "Detail" to a player
     choiceRow(content, y, "Detail", {
         { "Low", Runtime.setFlight, "simple", function() return settings.flight == "simple" end },
         { "Medium", Runtime.setFlight, "shapes", function() return settings.flight == "shapes" end },
         { "High", Runtime.setFlight, "full", function() return settings.flight == "full" end },
     }, c)
     y = y + UI.ROW_H + UI.GAP
-    -- the flying props' move predictions while a turn waits
     choiceRow(content, y, "Ghosts", {
         { "On", Runtime.setGhosts, true, function() return settings.ghosts end },
         { "Off", Runtime.setGhosts, false, function() return not settings.ghosts end },
     }, c)
     y = y + UI.ROW_H + UI.GAP
-    -- flying props far from every player: all move, or those far pause until someone comes near (less work)
     choiceRow(content, y, "Far props", {
         { "Move", Runtime.setFarProps, false, function() return not settings.pauseFar end },
         { "Pause", Runtime.setFarProps, true, function() return settings.pauseFar end },
     }, c)
     y = y + UI.ROW_H + UI.GAP + UI.PAD
-    -- stops Atmo Play: the player's own atmo back
     button(content, 0, y, content.size.w, UI.ROW_H, "Quit Atmo Play", function() run(Runtime.stop) end, c)
 
     window:hide(true)
 end
 
----The small "AP" button that opens the window, where the window is (it shows only while the window is hidden)
+---The small "AP" button that opens the window
 local function buildLauncher()
     local pos = UI.position()
     UI.launcher = button(nil, pos[1], pos[2], UI.LAUNCHER_W, UI.ROW_H, "AP",
@@ -184,7 +175,7 @@ local function alive(e) return e ~= nil and not e.destroyed end
 
 ---The current choices lit, the launcher shown only while the window is hidden
 function UI.refresh()
-    if UI.closed then return end -- Atmo Play stopped (Quit): nothing comes back
+    if UI.closed then return end -- Atmo Play stopped
     local c = UI.colors
     for _, l in ipairs(UI.lit or {}) do
         if alive(l.btn) then l.btn.bgColor = l.isOn() and c.active or c.bg end
@@ -193,7 +184,7 @@ function UI.refresh()
         if not alive(UI.launcher) then pcall(buildLauncher) end
         if alive(UI.launcher) then
             local pos = UI.position()
-            UI.launcher:moveTo(pos[1], pos[2]) -- where the window was
+            UI.launcher:moveTo(pos[1], pos[2])
             UI.launcher:show(true)
         end
     elseif alive(UI.launcher) then
@@ -222,12 +213,12 @@ end
 
 function UI.hide()
     if alive(UI.window) then UI.window:hide(true) end
-    UI.refresh() -- the launcher, if it's on
+    UI.refresh()
 end
 
 ---Atmo Play stopping: the window and the launcher go
 function UI.close()
-    if UI.dragging then -- killed mid-drag: its mouse-up never comes
+    if UI.dragging then -- killed mid-drag: no mouse-up comes
         UI.dragging = false
         pcall(enable_mouse_camera_movement)
     end
