@@ -936,6 +936,11 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     active toggle be good enough").** A second number, `always`, kept a prop moving under Pause; the user's
     modmaker/test2 had it on all 360 boxes, so Pause did nothing there. Far props is the player's choice for
     their computer: it now pauses every prop far from them. An old `prop_motion 1 1` reads as Active.
+    **Move never overrides Active off (2026-11-25, user: "idea was to make move not affect objects that were
+    not meant to be moved before proximity").** It doesn't in the code: with either choice a prop with Active
+    off stays still until reached (taken, or hit by a flying prop); the `motion:` tests run with Move. The UI
+    text "Move: all of them fly" read as if Move started every prop: reworded (Far props only decides what
+    moving props do far from everyone). A first misreading exempted moving Active-off props from Pause; reverted.
   - **Piles and performance (2026-11-25, user: modmaker/test2 "quite ass"; 360 Active boxes 0.5 big, mass
     0.0001, friction 10000, gravity -30, in a 220-unit line from the spawn).** Offline (tools-like bench, Lua
     5.1, frames 1-600): Low and Medium rest every box by frame ~300 (they don't hit each other: each ring

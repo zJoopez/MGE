@@ -208,8 +208,8 @@ local function buildPlayableRow(holder)
     Rows.createToggleButtonRow("Atmo", holder, {
         { label = "Playable", active = on, onClick = function() Playable.setPlayable(true) end },
         { label = "Default", active = not on, onClick = function() Playable.setPlayable(false) end },
-    }, "Playable: the atmo is solid in fights (needs\nAtmo Play). Static objects move to the atmo.\n" ..
-        "Default: the atmo is only drawn; moved objects\ncome back while there are free ids.")
+    }, "Playable: static objects move to the atmo,\nsolid in fights (needs Atmo Play).\n" ..
+        "Default: atmo only drawn, objects come back.")
 end
 
 ---Export row: "clean" copies for players without Atmo Play. Save keeps the atmo inside the mod (Atmo Play draws it,
@@ -221,8 +221,7 @@ local function buildExportRow(holder)
     createToggleButtonRow("Export", holder, {
         { label = "Atmo", active = false, onClick = function() MGE.AtmoLayer.exportAtmo() end },
         { label = "Mod", active = false, onClick = function() MGE.exportCleanMod() end },
-    }, "Copies for players without Atmo Play, named\nexp_<name>. Atmo: an .atmo for the game's\n" ..
-        "Atmos menu. Mod: the mod without its atmo.")
+    }, "Copies without Atmo Play, named exp_<name>.\nAtmo: an .atmo file. Mod: the mod without it.")
 end
 
 ---@type EditorPanelModule

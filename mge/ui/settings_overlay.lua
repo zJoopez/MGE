@@ -306,10 +306,9 @@ addNumberSection("Atmo objects", ATMO_FIELDS, ATMO_INFO)
 -- Prop flight (utils/playable.lua, Atmo Play's flight.lua): how props fly while no object carries them, by how
 -- much work this computer can take. Atmo Play keeps its own (its window's Detail)
 do
-    local content = addRow(y, "Prop flight", "How props fly drawn in a playable mod:\n" ..
-        "Simple: as spheres, the least work.\nShapes: their real shapes, they tip and roll.\n" ..
-        "Full: real shapes that hit each other and\npush the props they run into: the most work.\n" ..
-        "From the next fight. Atmo Play: its window's Detail")
+    local content = addRow(y, "Prop flight", "How props fly in a playable mod:\n" ..
+        "Simple: as spheres, least work.\nShapes: real shapes.\n" ..
+        "Full: real shapes that hit each other, most work.")
     local Dynamics = MGE.AtmoPlay.Dynamics
     local labels = { simple = "Simple", shapes = "Shapes", full = "Full" }
     local buttons
@@ -336,10 +335,8 @@ end
 -- Prop ghosts (utils/playable.lua, Atmo Play's Dynamics.drawGhosts): the flying props' move predictions while a turn
 -- waits. They run the props' flights ahead, as much work as playing them: off for many thrust props on a slow computer
 do
-    local content = addRow(y, "Prop ghosts", "Ghosts of the flying props while a turn waits,\n" ..
-        "where the turn takes them (like the game's ghosts).\n" ..
-        "They fly the props ahead: as much work as\nplaying them. Off saves it with many thrust props.\n" ..
-        "Atmo Play: its window's Ghosts")
+    local content = addRow(y, "Prop ghosts", "Flying props' ghosts while a turn waits.\n" ..
+        "Off saves work with many flying props.")
     local buttons
     local function show()
         for i, on in ipairs({ true, false }) do
@@ -357,12 +354,11 @@ do
     y = y + GHOSTS_H
 end
 
--- Far props (utils/playable.lua, Atmo Play's Dynamics.FLY_RANGE): flying props far from every player and dynamic
--- object pause where they are until someone comes near, less work
+-- Far props (utils/playable.lua, Atmo Play's Dynamics.FLY_RANGE): moving props far from every player and dynamic
+-- object pause where they are until someone comes near, less work. Neither choice starts a prop: Active off waits
 do
-    local content = addRow(y, "Far props", "Flying props far from every player:\n" ..
-        "Move: all of them fly.\nPause: those far away wait where they are\nuntil someone comes near: less work.\n" ..
-        "From the next fight. Atmo Play: its window's Far props")
+    local content = addRow(y, "Far props", "Moving props far from every player:\n" ..
+        "Move: keep moving. Pause: wait until\nsomeone comes near (less work).")
     local buttons
     local function show()
         for i, on in ipairs({ false, true }) do

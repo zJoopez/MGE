@@ -314,6 +314,8 @@ function Dynamics.new(objects, props, params)
         prop.rot = prop.home.rot
         prop.drawnPos, prop.drawnRot = prop.home.pos, prop.home.rot
         prop.thrust = Flight.parseThrust(c.thrust)
+        -- Active: moves from frame 0 (prop_motion 1, or a thrust by default); else it waits until reached
+        prop.active = prop.startMode == 1 or (prop.startMode == nil and prop.thrust ~= nil)
         s.props[#s.props + 1] = prop
         s.byIndex[prop.index] = prop
         s.fallen = math.min(s.fallen or math.huge, c.pos[3] - Dynamics.FALL)
@@ -432,10 +434,8 @@ local function clear(s)
     for _, prop in ipairs(s.props) do
         prop.pos, prop.rot, prop.entry = prop.home.pos, prop.home.rot, nil
         prop.flight, prop.flying = nil, nil
-        -- active (prop_motion 1, or a thrust by default) flies from frame 0; a waiting thrust prop is dormant
-        local active = prop.startMode == 1 or (prop.startMode == nil and prop.thrust ~= nil)
-        prop.dormant = nil
-        if active then
+        prop.dormant = nil -- a waiting thrust prop is dormant until reached
+        if prop.active then
             prop.flight, prop.flying = Flight.start(nil, 0), true
             s.flying[#s.flying + 1] = prop
         elseif prop.thrust then

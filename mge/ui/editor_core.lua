@@ -251,8 +251,7 @@ local function buildLayerRow(holder)
     if atmoShown() then
         Rows.createToggleButtonRow("Atmo", holder, {
             { label = "To objects", active = false, onClick = function() MGE.AtmoLayer.toObjects() end },
-        }, "To objects: back into the game (as many as ids are free).\n" ..
-            "Save keeps the atmo inside the mod (World > Export\nwrites it as a separate .atmo file).")
+        }, "To objects: back into the game (free ids allowing).\nSave keeps the atmo inside the mod.")
     else
         Rows.createToggleButtonRow("Atmo", holder, {
             { label = "To atmo", active = false, onClick = function() MGE.AtmoLayer.toAtmo() end },

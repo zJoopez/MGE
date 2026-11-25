@@ -8,7 +8,7 @@
 --   Motion:    Active: it moves from the fight's first frame (falls, tumbles and settles under gravity, flies its
 --              thrust) before anything comes near; off: it sits still until something reaches it (a player or
 --              dynamic object takes it, a flying prop hits it). Default: active with a thrust, else waiting.
---              The player's Far props: Pause still pauses it far from everyone (their choice, for their computer)
+--              The player's Far props never starts a prop; Pause stops moving ones while they're far from everyone
 -- Other atmo lines (no_depth, min_level, count, rotate, parent...) aren't edited here: kept as they are.
 -- Playable (the whole mod) is on the World tab (ui/editor_misc.lua).
 -- Atmo objects aren't in the .tbm: changes here are an undo step, no reload.
@@ -85,16 +85,14 @@ local function buildAtmoRows(holder, selected)
         items[which] = { label = label, active = lit, onClick = function() setCollision(which, not lit) end }
     end
     Rows.createToggleButtonRow("Collision", holder, items,
-        "Props (Static off) in Atmo Play. Player / Dynamic:\nbecomes real near players / real dynamic objects\n" ..
-        "(real, it collides with everything real). Both off:\nnever real, needs no pool object. Atmo: flying\n" ..
-        "drawn, it hits other props. Overlapping ones\nnever push each other apart.")
+        "Props in Atmo Play. Player / Dynamic: becomes\nreal near players / dynamic objects (both off:\n" ..
+        "never real). Atmo: hits other flying props.")
     -- Motion: Active lit when every selected one starts active
     local active = sharedChoice(selected, startsActive) == true
     Rows.createToggleButtonRow("Motion", holder, {
         { label = "Active", active = active, onClick = function() setActive(not active) end },
-    }, "Props in Atmo Play. Active: moves from the first\nframe (falls, tumbles, flies its thrust) before\n" ..
-        "anything comes near. Off: still until a player,\na dynamic object or a flying prop reaches it.\n" ..
-        "Default: on with thrust. The player's Far props\n(Pause) still pauses it far from everyone.")
+    }, "Props in Atmo Play. Active: moves from the first\nframe. Off: still until something reaches it.\n" ..
+        "Default: on with thrust.")
 end
 
 ---@type EditorPanelModule

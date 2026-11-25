@@ -27,8 +27,9 @@ which opens it again:
   other (the most work). Used from the next fight.
 - **Ghosts**: the flying props' move predictions while a turn waits (like the game's ghosts). Off saves their
   work on maps with many thrust props.
-- **Far props**: Move (default) flies every prop. Pause lets props far from every player wait where they
-  are until someone comes near: less work on big maps.
+- **Far props**: what moving props do far from every player. Move (default): they keep moving. Pause: they
+  wait where they are until someone comes near: less work on big maps. Neither starts a prop: ones the
+  map's maker didn't set Active stay still until something reaches them.
   Used from the next fight; replays pause the same props at the same frames.
 - **Quit Atmo Play**: stops it and gives you your own atmo back.
 
