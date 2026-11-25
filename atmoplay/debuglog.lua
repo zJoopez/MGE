@@ -196,8 +196,7 @@ end
 
 ---------------------------------------------------------------------------------------------------- timing
 
--- /atmoplay time: TIMING_FRAMES drawn frames measured, then each part's average and worst ms: props, their drawn
--- copies, the static pool, Atmo Play's drawing and the game's atmo drawing (UIElement3D.drawVisuals wrapped meanwhile)
+-- /atmoplay time: TIMING_FRAMES drawn frames measured, then each part's average and worst ms: props, the static pool, Atmo Play's drawing and the game's atmo drawing (UIElement3D.drawVisuals wrapped meanwhile)
 DebugLog.TIMING_FRAMES = 300
 
 local timing = nil
@@ -224,20 +223,20 @@ local function reportTiming()
     local flying = state.loaded and state.loaded.dynamics and select(3, Dynamics.counts(state.loaded.dynamics)) or 0
     say(string.format("%d frames, ~%.0f fps, flight %s, %d flying now:", n, n / math.max(seconds, 1e-6),
         Runtime.settings.flight, flying))
-    say(line("props", t.props) .. ", " .. line("their copies", t.copies) .. ", " .. line("static pool", t.pool))
+    say(line("props", t.props) .. ", " .. line("static pool", t.pool))
     local ownLine = ""
     if t.draws > 0 then
         ownLine = ", " .. line("Atmo Play drawing", { sum = t.own.sum, max = t.own.max }):gsub("%(worst",
             string.format("(%.0f shapes of %d a frame, worst", t.shapes / t.draws, state.drawer and state.drawer.count or 0))
     end
     say(line("the game drawing the atmo", t.atmo) .. ownLine .. string.format(" (%.2f ms a frame in all)",
-        (t.props.sum + t.copies.sum + t.pool.sum + t.atmo.sum + t.own.sum) / n))
+        (t.props.sum + t.pool.sum + t.atmo.sum + t.own.sum) / n))
     stopTiming()
 end
 
 local function startTiming()
     stopTiming()
-    timing = { frames = 0, started = os.clock(), props = { sum = 0, max = 0 }, copies = { sum = 0, max = 0 },
+    timing = { frames = 0, started = os.clock(), props = { sum = 0, max = 0 },
         pool = { sum = 0, max = 0 }, atmo = { sum = 0, max = 0 }, own = { sum = 0, max = 0 }, shapes = 0, draws = 0 }
     local U = rawget(_G, "UIElement3D")
     if U and type(U.drawVisuals) == "function" then
@@ -256,11 +255,10 @@ local function startTiming()
         end
     end
     Runtime.measure = {
-        frame = function(poolMs, propsMs, copiesMs)
+        frame = function(poolMs, propsMs)
             if not timing then return end
             addTime(timing.pool, poolMs)
             addTime(timing.props, propsMs)
-            addTime(timing.copies, copiesMs)
             timing.frames = timing.frames + 1
             if timing.frames >= DebugLog.TIMING_FRAMES then reportTiming() end
         end,
@@ -276,7 +274,7 @@ end
 
 ---------------------------------------------------------------------------------------------------- the command
 
--- /atmoplay [status | reload | time | draw own|game | flight <level> | ghosts on|off | log | quit]
+-- /atmoplay [status | reload | time | flight <level> | ghosts on|off | log | quit]
 function DebugLog.command(text)
     local word, rest = tostring(text or ""):match("^%s*(%S+)%s*(.-)%s*$")
     if word ~= "atmoplay" then return end
@@ -286,11 +284,6 @@ function DebugLog.command(text)
         DebugLog.status()
     elseif key == "reload" then
         Runtime.dev.reload()
-    elseif key == "draw" and Runtime.DRAW_MODES[value] then
-        Runtime.settings.draw = value
-        Runtime.saveSettings()
-        Runtime.dev.redraw()
-        say("draw " .. value)
     elseif key == "time" then
         if not state.loaded or state.loaded.drawOnly then say("time: load a playable mod first") else startTiming() end
     elseif key == "flight" and Dynamics.level(value) == value then
@@ -304,7 +297,7 @@ function DebugLog.command(text)
     elseif key == "quit" then
         Runtime.stop()
     else
-        say("/atmoplay [status | reload | time | draw own|game | flight simple|shapes|full | ghosts on|off | log | quit]")
+        say("/atmoplay [status | reload | time | flight simple|shapes|full | ghosts on|off | log | quit]")
     end
     return 1
 end

@@ -233,13 +233,17 @@ local function drawItem(item, x, y, z, rot)
     end
 end
 
----draw3d: the shapes that can show this frame
----@param view table? Drawer.measureView's (nil: every shape)
+local visible = {} -- this frame's shapes on screen, reused
+local function nearer(a, b) return a.dist < b.dist end
+
+---draw3d: the shapes on screen, nearest the camera first (if the game caps draws, the near ones make it; the GPU
+---skips what they hide). Props where they are, not while carried (their object shows them)
+---@param view table? Drawer.measureView's (nil: every shape, unsorted)
 ---@param level integer the game's graphics level (0-2)
 ---@return integer drawn
 function Drawer.draw(d, view, level)
-    local drawn = 0
     lastColor = nil -- others drew in between
+    local n = 0
     for _, cell in ipairs(d.cellList) do
         local cp = cell.pos
         if onScreen(view, cp[1], cp[2], cp[3], cell.radius) then
@@ -249,25 +253,43 @@ function Drawer.draw(d, view, level)
                 if level >= item.minLevel and level <= item.maxLevel then
                     local p = item.pos
                     if onScreen(view, p[1], p[2], p[3], item.radius) then
-                        drawItem(item, p[1], p[2], p[3], item.rot)
-                        drawn = drawn + 1
+                        n = n + 1
+                        visible[n] = item
+                        item.at, item.atRot = p, item.rot
                     end
                 end
             end
         end
     end
-    for _, item in ipairs(d.moving) do -- props where they are, not while carried (their object shows them)
+    for _, item in ipairs(d.moving) do
         local prop = item.prop
         if not prop.entry and level >= item.minLevel and level <= item.maxLevel then
             local p = prop.pos
             if onScreen(view, p[1], p[2], p[3], item.radius) then
-                drawItem(item, p[1], p[2], p[3], prop.rot)
-                drawn = drawn + 1
+                n = n + 1
+                visible[n] = item
+                item.at, item.atRot = p, prop.rot
             end
         end
     end
-    d.drawn = drawn
-    return drawn
+    for i = #visible, n + 1, -1 do visible[i] = nil end
+    if view then
+        local e = view.eye
+        for i = 1, n do
+            local item = visible[i]
+            local p = item.at
+            local dx, dy, dz = p[1] - e[1], p[2] - e[2], p[3] - e[3]
+            item.dist = dx * dx + dy * dy + dz * dz
+        end
+        table.sort(visible, nearer)
+    end
+    for i = 1, n do
+        local item = visible[i]
+        local p = item.at
+        drawItem(item, p[1], p[2], p[3], item.atRot)
+    end
+    d.drawn = n
+    return n
 end
 
 NS.Drawer = Drawer

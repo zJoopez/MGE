@@ -159,7 +159,7 @@ run("a drawn mod (MGE's Default): its atmo drawn, nothing moved", function(game)
     game.lm("drawn.tbm")
     T.ok(Runtime.state.loaded and Runtime.state.loaded.drawOnly, "read as a drawn mod")
     T.eq(game.loads[#game.loads], "Atmo Play.atmo", "its atmo drawn")
-    T.eq(Runtime.state.drawer and Runtime.state.drawer.count, 4, "its plain shapes drawn by Atmo Play (draw own)")
+    T.eq(Runtime.state.drawer and Runtime.state.drawer.count, 4, "its plain shapes drawn by Atmo Play")
     T.eq(#game.play(30, false, 1), 0, "a fight moves nothing")
     game.fire("leave_game")
     T.eq(#game.play(10, true), 0, "nor a replay")
@@ -177,16 +177,9 @@ run("start: options untouched, normal mod left alone, playable mod drawn", funct
     T.ok(Runtime.state.loaded ~= nil, "arena is playable")
     T.eq(game.loads[#game.loads], "Atmo Play.atmo", "the cache atmo is loaded")
     local cache = game.files["../data/atmospheres/Atmo Play.atmo"]
-    T.ok(cache:find("shader dark", 1, true) ~= nil, "the cache keeps the header (draw own)")
+    T.ok(cache:find("shader dark", 1, true) ~= nil, "the cache keeps the header")
     T.ok(cache:find("env_obj wall", 1, true) == nil, "its plain shapes are Atmo Play's to draw")
     T.eq(Runtime.state.drawer.count, 4, "wall, floor, ball, far (clip is visible 0)")
-    ATMOPLAY.Runtime.command("atmoplay draw game")
-    cache = game.files["../data/atmospheres/Atmo Play.atmo"]
-    T.ok(cache:find("env_obj wall", 1, true) ~= nil, "draw game: the cache holds the atmo")
-    T.ok(cache:find("#@", 1, true) == nil, "without the prefix")
-    T.ok(cache:find("env_obj clip", 1, true) == nil, "invisible objects aren't drawn")
-    T.eq(Runtime.state.drawer, nil, "nothing drawn by Atmo Play")
-    ATMOPLAY.Runtime.command("atmoplay draw own")
     T.eq(#Runtime.state.loaded.pool.entries, 5, "pool objects")
     T.eq(Runtime.state.loaded.missing, 0, "all pool objects exist")
 end)
@@ -428,7 +421,7 @@ run("commands: time measures some frames, reports, and gives the game's drawing 
     assert(ok, err)
 end)
 
-run("draw own: draw3d draws the plain shapes on screen, nothing while MGE runs", function(game)
+run("drawing: draw3d draws the plain shapes on screen, nothing while MGE runs", function(game)
     local calls = {}
     local names = { "set_color", "draw_box_m", "draw_sphere_m", "draw_capsule_m", "get_camera_info", "get_screen_pos" }
     local saved = {}
@@ -507,7 +500,7 @@ run("replays are watched in pre_draw (before anything is drawn), fights in draw2
     assert(ok, err)
 end)
 
-run("draw own: another atmo stops our drawing; a drawing error gives the atmo back to the game", function(game)
+run("drawing: another atmo stops it; an error is said once and drawing goes on", function(game)
     local names = { "set_color", "draw_box_m", "draw_sphere_m", "draw_capsule_m", "get_camera_info" }
     local saved = {}
     for _, name in ipairs(names) do saved[name] = rawget(_G, name) end
@@ -524,11 +517,13 @@ run("draw own: another atmo stops our drawing; a drawing error gives the atmo ba
         game.lm("arena.tbm")
         T.ok(Runtime.state.drawer ~= nil, "drawing again")
         draw_box_m = function() error("bad shape") end
+        local said = #game.said
         game.fire("draw3d")
-        T.eq(Runtime.state.drawer, nil, "stopped")
-        game.fire("draw2d")
-        T.eq(Runtime.settings.draw, "game", "the game draws")
-        T.ok(game.files["../data/atmospheres/Atmo Play.atmo"]:find("env_obj wall", 1, true) ~= nil, "the whole atmo")
+        game.fire("draw3d")
+        T.eq(#game.said, said + 1, "said once")
+        T.ok(Runtime.state.drawer ~= nil, "still Atmo Play's drawing")
+        T.ok(game.files["../data/atmospheres/Atmo Play.atmo"]:find("env_obj wall", 1, true) == nil,
+            "the game's atmo never takes the plain shapes")
     end)
     for _, name in ipairs(names) do rawset(_G, name, saved[name]) end
     assert(ok, err)

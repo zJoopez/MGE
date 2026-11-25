@@ -633,6 +633,15 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     Offline (dust2-5k, 5,293 boxes, draw calls stubbed): from the middle 1,217-1,847 drawn, ~1.0-1.2 ms of
     Lua; looking across the whole map from a corner all 5,293 (2.2 ms). In game: to be measured
     (`/atmoplay time` has an Atmo Play drawing line). Not yet: a draw distance (the corner view draws all).
+    Near first (2026-11-25; the game draws only so many shapes a frame, fewer on higher graphics, as MGE's
+    AtmoLayer.maxAtmo notes): Atmo Play's drawer and MGE's drawAtmo cull first, then draw the shapes on screen
+    (props among them) nearest the camera first. dust2-5k, ~880 on screen: +0.4 ms a frame (table.sort; an
+    insertion sort on last frame's order was no faster; sorting whole cells was too coarse in game).
+    `draw game` removed (2026-11-25, user: Atmo Play didn't follow the camera; their atmoplay.cfg had `draw game`
+    from a dev test). Atmo Play always draws the plain shapes itself; the game's atmo keeps only what it can't
+    (models, animated, header). Gone with it: the props' copies in the game's atmo (dynamics.lua findItems /
+    drawCopies / restoreCopies, noCopies; MGE never used them), the draw fallback (an error is said once, drawing
+    goes on) and `/atmoplay draw`. An old `draw` line in atmoplay.cfg is ignored.
   - **Low fps (2026-11-22, user: capped at 30, props vanished mid flight).** Props run once a drawn frame; at 30 fps
     more match frames pass between two. Fights decide every take and release themselves (fine); replays watch the
     pool objects, and a let-go plus a take between two drawn frames never showed the object parked: the replay

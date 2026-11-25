@@ -618,62 +618,7 @@ T.test("the grid finds the same props as looking at every one (fights and replay
     T.eq(table.concat(watchGrid, "\n"), table.concat(watchFull, "\n"), "the same in the replay")
 end)
 
-T.test("drawn copies: hidden while carried (the object shows), back where they stay when released", function()
-    local s = setup(2)
-    local moves, items = {}, {}
-    local function holder()
-        local h = { child = {} }
-        for _, prop in ipairs(s.props) do
-            local p = prop.home.pos
-            local item = { shift = { x = p[1], y = p[2], z = p[3] }, name = prop.name, displayed = true }
-            function item:moveTo(x, y, z) moves[#moves + 1] = self.name; self.shift = { x = x, y = y, z = z } end
-            function item:hide() self.displayed = false end
-            function item:show() self.displayed = true end
-            h.child[#h.child + 1] = item
-            items[prop.name] = item
-        end
-        return h
-    end
-    local savedAtmo, savedUtils = rawget(_G, "Atmospheres"), rawget(_G, "Utils3D")
-    Atmospheres = { EntityHolder = holder() }
-    Utils3D = { MatrixTBToMatrix = function() return { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } } end,
-        MatrixToMatrixTB = function() return {} end }
-    local ok, err = pcall(function()
-        Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
-        T.eq(carried(s), "crateA crateB", "both taken")
-        T.ok(not items.crateA.displayed and not items.crateB.displayed, "their copies hidden")
-        T.ok(items.far.displayed, "the far one's copy shows")
-        T.eq(table.concat(world.objects[0].color, " "), "0.2 0.4 0.6 1", "crateA's object in crateA's color")
-        T.eq(table.concat(world.objects[1].color, " "), "1 1 1 1", "no color line: white")
-        world.objects[0].pos = { 1.1, 0, 1 }
-        Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
-        T.eq(#moves, 0, "a carried copy isn't moved: hidden")
-        world.players[1] = { 20, 0, 1 }
-        world.objects[1].pos = { 1.6, 0, 1 }
-        Dynamics.draw(s, { replay_mode = 0, match_frame = 2 })
-        T.eq(carried(s), "- -", "both released")
-        table.sort(moves)
-        T.eq(table.concat(moves, ","), "crateA,crateB", "drawn where they stay")
-        T.ok(items.crateA.displayed and items.crateB.displayed, "and shown")
-        moves = {}
-        Dynamics.draw(s, { replay_mode = 0, match_frame = 3 })
-        T.eq(#moves, 0, "released ones aren't redrawn again")
-        Atmospheres.EntityHolder = holder() -- the atmo loaded again: its copies at the atmo's poses
-        Dynamics.draw(s, { replay_mode = 0, match_frame = 4 })
-        table.sort(moves)
-        T.eq(table.concat(moves, ","), "crateA,crateB", "the moved ones drawn again on the new atmo")
-        -- taken again, then Atmo Play leaves the mod: every copy shown at the atmo's pose
-        world.players[1] = { 1.1, 0, 1 }
-        Dynamics.draw(s, { replay_mode = 0, match_frame = 5 })
-        T.ok(not items.crateA.displayed, "carried again: hidden")
-        Dynamics.restoreCopies(s)
-        T.ok(items.crateA.displayed, "restored: shown")
-    end)
-    Atmospheres, Utils3D = savedAtmo, savedUtils
-    if not ok then error(err) end
-end)
-
-T.test("replay: an object that took a prop is painted its color, the copy hidden", function()
+T.test("replay: an object that took a prop is painted its color", function()
     local s = setup(2)
     Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
     world.objects[0].pos = { 1, 0, 1 } -- object 0 appears at crateA

@@ -94,6 +94,37 @@ env_obj prop
     assert(ok, err)
 end)
 
+T.test("drawer: shapes on screen drawn nearest first, props among them", function()
+    local split = Drawer.split(T.lines([[
+env_obj far
+   shape box
+   pos 90 0 0
+env_obj near
+   shape box
+   pos 3 0 0
+env_obj mid
+   shape box
+   pos 40 0 0
+env_obj prop
+   shape box
+   pos 5 0 0
+   flag 0]]))
+    local prop = { pos = { 20, 0, 0 }, rot = split.items[4].rot }
+    local d = Drawer.new(split, { [4] = prop })
+    local view = { eye = { 0, 0, 0 }, forward = { 1, 0, 0 }, right = { 0, -1, 0 }, up = { 0, 0, 1 }, cx = 500, cy = 500,
+        m11 = 1000, m12 = 0, m21 = 0, m22 = -1000, w = 1000, h = 1000 }
+    local drawn = {}
+    local saved = { set_color, draw_box_m }
+    set_color = function() end
+    draw_box_m = function(x) drawn[#drawn + 1] = x end
+    local ok, err = pcall(function()
+        Drawer.draw(d, view, 2)
+        T.nearList(drawn, { 3, 20, 40, 90 }, 1e-12, "near to far, the prop where it is")
+    end)
+    set_color, draw_box_m = saved[1], saved[2]
+    assert(ok, err)
+end)
+
 T.test("drawer: props always Atmo Play's (even with rcolor); alpha 0 drawn by nobody", function()
     local split = Drawer.split(T.lines([[
 env_obj prop

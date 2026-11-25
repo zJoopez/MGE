@@ -517,7 +517,7 @@ function Playable.onMatchBegin()
     if #props > 0 then
         -- follow: the mod's own dynamic objects push props too. Without a dynamic pool (props that never become
         -- real) they still fly drawn (thrust, hits)
-        local params = { dradius = ModData.parsed.playable.dradius, noCopies = true, follow = driver.follow,
+        local params = { dradius = ModData.parsed.playable.dradius, follow = driver.follow,
             statics = colliders, level = Playable.flightLevel, pauseFar = Playable.pauseFar }
         dynamics = Dynamics.new(loaded.dynamicObjects or {}, props, params)
         local d = dynamics

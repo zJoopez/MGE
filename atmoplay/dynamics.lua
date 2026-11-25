@@ -6,7 +6,7 @@
 --   * props near a player, one of the mod's own dynamic objects, or a moving carried prop (chain) are wanted,
 --     ranked by tier, then by the gap LOOKAHEAD seconds ahead; each wanted one takes a free pool object of its group
 --   * a carried prop is let go when unwanted, at rest and untouched; a full pool frees its least wanted one
---   * while carried, the pool object is the prop on screen (painted its color), the drawn copy is hidden
+--   * while carried, the pool object is the prop on screen (painted its color); Atmo Play draws the free ones
 -- Props no object carries fly drawn (flight.lua). Replays move nothing: the pool objects are watched, takes and
 -- releases kept as events by frame so a rewind rebuilds the props from them (and snapshots).
 
@@ -25,10 +25,6 @@ local Flight = NS.Flight
 ---@field home { pos: number[], rot: table } the atmo's pose
 ---@field rot table MatrixTB now
 ---@field entry AtmoPlayDynEntry? the pool object carrying it
----@field item table? its drawn copy in the game's atmo
----@field copyHidden boolean?
----@field drawnPos number[] the pose its copy shows (compared by table)
----@field drawnRot table
 
 ---@class AtmoPlayDynEntry
 ---@field id integer env_obj id as the file writes it
@@ -254,8 +250,8 @@ end
 
 ---@param objects AtmoPlayPoolObject[] the dynamic pool (Format.read's `dynamic`)
 ---@param props AtmoPlayCollider[] Colliders.build's third result
----@param params { dradius: number?, noCopies: boolean?, noGrid: boolean?, follow: integer[]?, fromFrame: integer?, statics: AtmoPlayCollider[]?, gravity: number[]?, level: string?, pauseFar: boolean? }?
----noCopies: no drawn copies in the game's atmo to move; follow: the mod's own dynamic objects (0-based ids);
+---@param params { dradius: number?, noGrid: boolean?, follow: integer[]?, fromFrame: integer?, statics: AtmoPlayCollider[]?, gravity: number[]?, level: string?, pauseFar: boolean? }?
+---follow: the mod's own dynamic objects (0-based ids);
 ---statics: what flights hit; gravity: fixed (tests), else the gamerule's
 ---@return table state
 function Dynamics.new(objects, props, params)
@@ -263,7 +259,6 @@ function Dynamics.new(objects, props, params)
     local s = {
         radius = tonumber(params.dradius) or Dynamics.DEFAULT_RADIUS,
         entries = {}, groups = {}, groupKeys = {}, props = {}, byGroup = {}, byIndex = {},
-        noCopies = params.noCopies,
         noGrid = params.noGrid,
         level = Dynamics.level(params.level), -- a change waits for match_begin
         pauseFar = params.pauseFar and true or false, -- a change waits for match_begin
@@ -271,8 +266,7 @@ function Dynamics.new(objects, props, params)
         simFrame = 0, -- the frame every flight is at
         snapshots = {},
         grouped = {}, cells = {}, maxRadius = 0,
-        dirty = {}, dirtyAll = true, -- drawn copies to update
-        events = {}, lastFrame = nil, holder = nil,
+        events = {}, lastFrame = nil,
         follow = params.follow, followSizes = {},
         fromFrame = params.fromFrame or Driver.FIRST_FRAME,
         world = Flight.newWorld(params.statics, params.gravity), fixedGravity = params.gravity ~= nil,
@@ -312,7 +306,6 @@ function Dynamics.new(objects, props, params)
         prop.home = { pos = { c.pos[1], c.pos[2], c.pos[3] }, rot = matrixTB(c.frame) }
         prop.pos = { c.pos[1], c.pos[2], c.pos[3] }
         prop.rot = prop.home.rot
-        prop.drawnPos, prop.drawnRot = prop.home.pos, prop.home.rot
         prop.thrust = Flight.parseThrust(c.thrust)
         -- Active: moves from frame 0 (prop_motion 1, or a thrust by default); else it waits until reached
         prop.active = prop.startMode == 1 or (prop.startMode == nil and prop.thrust ~= nil)
@@ -352,80 +345,6 @@ function Dynamics.new(objects, props, params)
     return s
 end
 
----------------------------------------------------------------------------------------------------- drawn copies
-
----The props' items in the game's atmo (found by position among Atmospheres.EntityHolder's children), again
----whenever the atmo was loaded again
-local function findItems(s)
-    local m = rawget(_G, "Atmospheres")
-    local holder = type(m) == "table" and m.EntityHolder or nil
-    if holder == s.holder then return end
-    s.holder = holder
-    for _, prop in ipairs(s.props) do
-        prop.item, prop.drawnPos, prop.drawnRot, prop.copyHidden = nil, prop.home.pos, prop.home.rot, false
-    end
-    s.dirtyAll = true
-    if not holder or type(holder.child) ~= "table" then return end
-    local byKey = {}
-    for _, item in ipairs(holder.child) do
-        local p = item.shift or item.pos
-        if p then
-            local key = string.format("%.3f %.3f %.3f", p.x, p.y, p.z)
-            byKey[key] = byKey[key] or {}
-            table.insert(byKey[key], item)
-        end
-    end
-    for _, prop in ipairs(s.props) do
-        local h = prop.home.pos
-        local list = byKey[string.format("%.3f %.3f %.3f", h[1], h[2], h[3])]
-        if list and #list > 0 then prop.item = table.remove(list, 1) end
-    end
-end
-
----Puts a prop's drawn copy at a pose (rotation fields as UIElement3D's Rotate sets them)
-local function drawAt(prop, pos, rot)
-    local item = prop.item
-    if not item or item.destroyed or not Utils3D then return end
-    local m = Utils3D.MatrixTBToMatrix(rot)
-    local copy = { { m[1][1], m[1][2], m[1][3] }, { m[2][1], m[2][2], m[2][3] }, { m[3][1], m[3][2], m[3][3] } }
-    item.__rotMatrixSelf = m
-    item.rotMatrix = copy
-    item.rotMatrixTB = Utils3D.MatrixToMatrixTB(copy)
-    if Utils3D.GetEulerFromMatrix then item.rotXYZ = Utils3D.GetEulerFromMatrix(copy, EULER_XYZ) end
-    item:moveTo(pos[1], pos[2], pos[3], true)
-end
-
----A carried prop's copy is hidden (its object shows it: both drawn flickered); a free one shows its pose
-local function drawOne(prop)
-    local item = prop.item
-    if prop.entry then
-        if item and not item.destroyed and not prop.copyHidden then
-            item:hide(true)
-            prop.copyHidden = true
-        end
-        return
-    end
-    if prop.copyHidden then
-        if item and not item.destroyed then item:show(true) end
-        prop.copyHidden = false
-    end
-    if prop.drawnPos ~= prop.pos or prop.drawnRot ~= prop.rot or prop.drawnMoves ~= prop.moves then
-        drawAt(prop, prop.pos, prop.rot)
-        prop.drawnPos, prop.drawnRot, prop.drawnMoves = prop.pos, prop.rot, prop.moves
-    end
-end
-
----The copies of the props marked dirty since the last draw (or all of them)
-local function drawCopies(s)
-    if s.noCopies then
-        s.dirty, s.dirtyAll = {}, false
-        return
-    end
-    findItems(s)
-    for _, prop in ipairs(s.dirtyAll and s.props or s.dirty) do drawOne(prop) end
-    s.dirty, s.dirtyAll = {}, false
-end
-
 ---------------------------------------------------------------------------------------------------- flights
 
 ---Everything back to the atmo's poses, every object free (the world's objects aren't touched)
@@ -444,7 +363,6 @@ local function clear(s)
         gridPlace(s, prop)
     end
     for _, e in ipairs(s.entries) do e.prop, e.seen, e.speed, e.spin, e.vel, e.angVel, e.pushedTo = nil, nil, 0, 0, nil, nil, nil end
-    s.dirtyAll = true
     s.epoch = (s.epoch or 0) + 1 -- a new timeline: predictions start again
     s.prediction, s.predictionKey = nil, nil
     s.pendingPrediction, s.pendingKey = nil, nil
@@ -606,8 +524,6 @@ end
 ---Every flight stepped together, a frame at a time, up to `frame`; ones that rested, fell or are carried leave the list
 local function fly(s, frame)
     if s.simFrame >= frame then return end
-    local track = not s.noCopies -- moved props only matter for the game's atmo copies
-    local moved, movedList = track and {} or nil, track and {} or nil
     local list = nil
     if not s.flightOpts then
         s.neighborsFn = function(prop, reach) return stillNear(s, prop, reach) end
@@ -672,13 +588,7 @@ local function fly(s, frame)
         end
         s.simFrame = s.simFrame + 1
         -- re-listed after every step (a fight steps several frames a call, its replay one: the same either way)
-        for _, prop in ipairs(list) do
-            gridPlace(s, prop)
-            if track and not moved[prop] then
-                moved[prop] = true
-                movedList[#movedList + 1] = prop
-            end
-        end
+        for _, prop in ipairs(list) do gridPlace(s, prop) end
         s.flying = list
         if s.simFrame % Dynamics.SNAPSHOT_EVERY == 0 then snapshot(s) end
     end
@@ -694,9 +604,6 @@ local function fly(s, frame)
         end
     end
     for i = #flying, n + 1, -1 do flying[i] = nil end
-    if track then
-        for _, prop in ipairs(movedList) do s.dirty[#s.dirty + 1] = prop end
-    end
 end
 
 ---A take or release, kept by frame for rebuilds. `sim`: the flights' frame then (a rebuild puts it there)
@@ -709,7 +616,6 @@ local function event(s, frame, kind, e, prop)
     s.events[#s.events + 1] = { frame = frame, kind = kind, entry = e, prop = prop, pos = pos, rot = rot,
         vel = fl and copy3(fl.vel) or nil, ang = fl and copy3(fl.ang) or nil, flightFrame = fl and fl.frame or nil,
         sim = s.simFrame }
-    s.dirty[#s.dirty + 1] = prop
     if fl then s.flightStarts = (s.flightStarts or 0) + 1 end -- a new flight: predictions start again
 end
 
@@ -1317,25 +1223,20 @@ function Dynamics.matchBegin(s, ws)
     s.wasReplay = ws.replay_mode > 0
     s.lastFrame = not s.wasReplay and ws.match_frame or nil
     if not s.wasReplay and ws.match_frame >= (s.fromFrame or 0) then Dynamics.step(s, ws.match_frame, 0) end
-    drawCopies(s)
 end
 
----draw2d (and pre_draw / enter_frame in replays): fights step once per new frame, replays watch; copies follow
+---draw2d (and pre_draw / enter_frame in replays): fights step once per new frame, replays watch
 function Dynamics.draw(s, ws)
     local frame = ws.match_frame
     local clock = os.clock
     local t0 = clock()
-    s.lastSimMs, s.lastCopiesMs = 0, 0
+    s.lastSimMs = 0
     if ws.replay_mode > 0 then -- on every call: a color reset seen only at the next frame flashed the prop away
         for _, e in ipairs(s.entries) do
             if e.prop then keepDressed(e) end
         end
     end
-    if frame == s.lastFrame and ws.replay_mode > 0 == s.wasReplay then
-        drawCopies(s)
-        s.lastCopiesMs = (clock() - t0) * 1000
-        return
-    end
+    if frame == s.lastFrame and ws.replay_mode > 0 == s.wasReplay then return end
     if ws.replay_mode > 0 then
         if s.lastFrame and frame < s.lastFrame then Dynamics.rebuild(s, frame) end
         s.wasReplay = true
@@ -1350,9 +1251,7 @@ function Dynamics.draw(s, ws)
         if frame ~= s.lastFrame and frame >= (s.fromFrame or 0) then Dynamics.step(s, frame) end
     end
     s.lastFrame = frame
-    local t1 = clock()
-    drawCopies(s)
-    s.lastSimMs, s.lastCopiesMs = (t1 - t0) * 1000, (clock() - t1) * 1000
+    s.lastSimMs = (clock() - t0) * 1000
 end
 
 ---The carried props' centers: the static pool covers them too
@@ -1406,20 +1305,6 @@ function Dynamics.counts(s)
         if prop.flight and not prop.entry then flying = flying + 1 end
     end
     return carried, #s.props, flying
-end
-
----Every drawn copy back at the atmo's pose and shown (leaving the mod)
-function Dynamics.restoreCopies(s)
-    for _, prop in ipairs(s.props) do
-        if prop.copyHidden then
-            if prop.item and not prop.item.destroyed then prop.item:show(true) end
-            prop.copyHidden = false
-        end
-        if prop.drawnPos ~= prop.home.pos or prop.drawnRot ~= prop.home.rot then
-            drawAt(prop, prop.home.pos, prop.home.rot)
-        end
-        prop.drawnPos, prop.drawnRot = prop.home.pos, prop.home.rot
-    end
 end
 
 ---------------------------------------------------------------------------------------------------- ghosts

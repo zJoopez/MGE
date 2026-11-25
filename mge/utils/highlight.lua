@@ -216,7 +216,37 @@ end
 --- full true (the Atmo list): in their own color, the selected ones in the highlight color instead, where a
 ---   gizmo drag has them (AtmoLayer.liveGhost). Color only, no extra highlight draw: every one of
 ---   thousands selected shows, an outlined highlight had room for 256 at most
---- Only the ones that can show on screen (onScreen)
+--- Only the ones that can show on screen (onScreen), nearest the camera first: the game draws only so many shapes
+--- a frame, so the near ones make it
+
+-- drawAtmo's on-screen ghosts this frame (reused lists): ghost, color, alpha, grow, distance, and the draw order
+local visG, visC, visA, visGrow, visDist, visOrder = {}, {}, {}, {}, {}, {}
+local visN = 0
+local function nearerVis(i, j) return visDist[i] < visDist[j] end
+
+local function addVisible(g, c, alpha, grow)
+    visN = visN + 1
+    local n = visN
+    visG[n], visC[n], visA[n], visGrow[n], visOrder[n] = g, c, alpha, grow or 0, n
+    local e = view and view.eye
+    if e then
+        local p = g.pos
+        local dx, dy, dz = p[1] - e[1], p[2] - e[2], p[3] - e[3]
+        visDist[n] = dx * dx + dy * dy + dz * dz
+    end
+end
+
+local function drawVisible()
+    local n = visN
+    for i = #visOrder, n + 1, -1 do visOrder[i] = nil end
+    if view then table.sort(visOrder, nearerVis) end
+    for k = 1, n do
+        local i = visOrder[k]
+        drawGhost(visG[i], visC[i], visA[i], false, visGrow[i])
+    end
+    visN = 0
+end
+
 ---@param full boolean
 ---@param plain boolean? with full: as the map looks when played (MGE's window hidden): no selection highlight
 local function drawAtmo(full, plain)
@@ -224,12 +254,14 @@ local function drawAtmo(full, plain)
     local list = ModData.parsed.atmo or {}
     -- props pushed in a fight (a playable mod's dynamic atmo objects) are drawn where they are now
     local moved = MGE.Playable and MGE.Playable.movedGhost
+    visN = 0
     if not full then
         for i, obj in ipairs(list) do
             local g = AtmoLayer.ghost(obj)
             if g and moved then g = moved(i, g) end
-            if g and onScreen(g) then drawGhost(g, AtmoLayer.color, AtmoLayer.alpha, false) end
+            if g and onScreen(g) then addVisible(g, AtmoLayer.color, AtmoLayer.alpha) end
         end
+        drawVisible()
         return
     end
     -- a gizmo drag: the selected ones' ghosts as it leaves them (AtmoLayer.liveGhost: matrices on the cached
@@ -245,12 +277,13 @@ local function drawAtmo(full, plain)
             local grow = not plain and GROW or 0 -- F1's play view: as in game
             if selected then
                 -- see-through ones too: a selected box is never fainter than SELECTED_ALPHA
-                drawGhost(g, Highlight.color, math.max(c[4], SELECTED_ALPHA), false, grow)
+                addVisible(g, Highlight.color, math.max(c[4], SELECTED_ALPHA), grow)
             else
-                drawGhost(g, c, c[4], false, grow)
+                addVisible(g, c, c[4], grow)
             end
         end
     end
+    drawVisible()
 end
 
 ---The object highlight (drawShapeHighlight) on a game object, read from the game

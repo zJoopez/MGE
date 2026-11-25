@@ -45,7 +45,7 @@ local state = {
 Runtime.state = state
 
 ---Dev builds only (debuglog.lua's timing); nil in releases
----@type { frame: fun(poolMs: number, propsMs: number, copiesMs: number), own: fun(ms: number, shapes: integer), stop: fun() }?
+---@type { frame: fun(poolMs: number, propsMs: number), own: fun(ms: number, shapes: integer), stop: fun() }?
 Runtime.measure = nil
 
 local function say(text)
@@ -76,14 +76,11 @@ end
 
 -- atmoplay.cfg next to atmoplay.lua (not in the release zip), one "key value" a line:
 --   flight shapes      Detail: simple / shapes / full
---   draw own           own (Atmo Play draws the plain shapes on screen, drawer.lua) or game (the game's atmo draws all)
 --   ghosts on          flying props' move predictions while a turn waits
 --   farprops move      move, or pause flights far from every player
 --   ui on              the window open at start (off: only its launcher button)
 --   uipos 10 120       where the window was dragged to
-Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, draw = "own", ghosts = true, pauseFar = false, ui = true,
-    uiPos = nil }
-Runtime.DRAW_MODES = { own = true, game = true }
+Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, ghosts = true, pauseFar = false, ui = true, uiPos = nil }
 
 ---@return string data/script path
 function Runtime.settingsPath()
@@ -94,7 +91,6 @@ function Runtime.loadSettings()
     for _, line in ipairs(readLines(Runtime.settingsPath()) or {}) do
         local key, value = tostring(line):match("^%s*(%S+)%s+(%S+)")
         if key == "flight" then Runtime.settings.flight = Dynamics.level(value) end
-        if key == "draw" and Runtime.DRAW_MODES[value] then Runtime.settings.draw = value end
         if key == "ghosts" and (value == "on" or value == "off") then Runtime.settings.ghosts = value == "on" end
         if key == "ui" and (value == "on" or value == "off") then Runtime.settings.ui = value == "on" end
         if key == "farprops" and (value == "move" or value == "pause") then
@@ -108,7 +104,7 @@ function Runtime.loadSettings()
 end
 
 function Runtime.saveSettings()
-    local lines = { "flight " .. Runtime.settings.flight, "draw " .. Runtime.settings.draw,
+    local lines = { "flight " .. Runtime.settings.flight,
         "ghosts " .. (Runtime.settings.ghosts and "on" or "off"),
         "farprops " .. (Runtime.settings.pauseFar and "pause" or "move"),
         "ui " .. (Runtime.settings.ui and "on" or "off") }
@@ -160,11 +156,7 @@ local function wrapAtmoLoading()
     ---Another atmo replaced ours: our own drawing stops with it
     local function replaced()
         if state.drawnByUs then state.drawnByUs = false end
-        if state.drawer then
-            state.drawer = nil
-            local d = state.loaded and state.loaded.dynamics
-            if d then d.noCopies, d.holder, d.dirtyAll = false, nil, true end
-        end
+        state.drawer = nil
     end
     m.LoadAtmo = function(filename, ...)
         if not state.ourLoad then
@@ -218,8 +210,8 @@ end
 
 ---------------------------------------------------------------------------------------------------- mods
 
----Draws a mod's atmo through the game's manager (written as the cache atmo). With `draw own` the cache keeps only what
----the game must draw; Atmo Play draws the plain shapes (state.drawer)
+---Draws a mod's atmo: Atmo Play draws the plain shapes (state.drawer: on screen, nearest first), the game's atmo
+---manager the rest (the cache atmo: models, animated shapes, the header)
 ---@param atmoLines string[]
 ---@param dynamics table? the props
 ---@return boolean drawn
@@ -229,18 +221,10 @@ local function drawModAtmo(atmoLines, dynamics)
         say("the game's atmosphere manager isn't loaded, the atmo isn't drawn")
         return false
     end
-    local lines = Format.drawnLines(atmoLines)
-    if Runtime.settings.draw == "own" then
-        local split = Drawer.split(atmoLines, dynamics and dynamics.byIndex)
-        lines = split.gameLines
-        state.drawer = Drawer.new(split, dynamics and dynamics.byIndex)
-        state.drawer.left = split.game
-    end
-    if dynamics then
-        dynamics.noCopies = state.drawer ~= nil -- own: no copies in the game's atmo; game: found again after the load
-        dynamics.holder, dynamics.dirtyAll = nil, true
-    end
-    if not writeLines(Runtime.ATMO_FOLDER .. Runtime.CACHE_ATMO, lines) then
+    local split = Drawer.split(atmoLines, dynamics and dynamics.byIndex)
+    state.drawer = Drawer.new(split, dynamics and dynamics.byIndex)
+    state.drawer.left = split.game
+    if not writeLines(Runtime.ATMO_FOLDER .. Runtime.CACHE_ATMO, split.gameLines) then
         say("couldn't write data/atmospheres/" .. Runtime.CACHE_ATMO .. ", the atmo isn't drawn")
         return false
     end
@@ -286,8 +270,7 @@ local function loadPlayable(path)
     local dynamics
     if #props > 0 then
         dynamics = Dynamics.new(dynamicObjects, props, { dradius = file.header.dradius, follow = driver.follow,
-            statics = colliders, level = Runtime.settings.flight, noCopies = Runtime.settings.draw == "own",
-            pauseFar = Runtime.settings.pauseFar })
+            statics = colliders, level = Runtime.settings.flight, pauseFar = Runtime.settings.pauseFar })
         driver.moreCenters = function() return Dynamics.centers(dynamics) end
     end
     local drawn = drawModAtmo(file.atmo, dynamics)
@@ -313,7 +296,6 @@ local function restoreReplayCache()
 end
 
 local function leavePlayable()
-    if state.loaded and state.loaded.dynamics then pcall(Dynamics.restoreCopies, state.loaded.dynamics) end
     state.loaded, state.drawer = nil, nil
     if Runtime.measure then Runtime.measure.stop() end
     restoreReplayCache()
@@ -385,13 +367,13 @@ local function onMatchBegin()
     debugCall("flush")
 end
 
-local frameProps, frameCopies = 0, 0 -- what the props cost this drawn frame, while measured
+local frameProps = 0 -- what the props cost this drawn frame, while measured
 
 local function drawProps(ws)
     runDynamics(Dynamics.draw, ws)
     if Runtime.measure then
         local d = state.loaded and state.loaded.dynamics
-        if d then frameProps, frameCopies = frameProps + (d.lastSimMs or 0), frameCopies + (d.lastCopiesMs or 0) end
+        if d then frameProps = frameProps + (d.lastSimMs or 0) end
     end
 end
 
@@ -416,12 +398,6 @@ end
 
 ---draw2d, between physics steps: fights move the pools here
 local function onDraw2d()
-    if state.drawFallback then
-        state.drawFallback = nil
-        Runtime.settings.draw = "game" -- this session only
-        local loaded = state.loaded
-        if loaded and loaded.file then loaded.drawn = drawModAtmo(loaded.file.atmo, loaded.dynamics) end
-    end
     if state.loaded and not Runtime.mgeRunning() then
         local ws = get_world_state()
         debugCall("frame", ws)
@@ -430,8 +406,8 @@ local function onDraw2d()
         local t = measure and os.clock()
         if state.loaded.driver then Driver.draw(state.loaded.driver, ws) end
         if measure then
-            measure.frame((os.clock() - t) * 1000, frameProps, frameCopies)
-            frameProps, frameCopies = 0, 0
+            measure.frame((os.clock() - t) * 1000, frameProps)
+            frameProps = 0
         end
         debugCall("flush")
     end
@@ -455,9 +431,10 @@ local function onDraw3d()
         local t = Runtime.measure and os.clock()
         local ok, drawn = pcall(Drawer.draw, drawer, view, graphicsLevel())
         if not ok then
-            -- the game's atmo takes the whole atmo back (in draw2d, not mid-draw)
-            say("drawing failed, the game draws the atmo this session: " .. tostring(drawn))
-            state.drawer, state.drawFallback = nil, true
+            if not state.drawError then -- once a session; it tries again every frame
+                state.drawError = true
+                say("drawing failed: " .. tostring(drawn))
+            end
         elseif Runtime.measure then
             Runtime.measure.own((os.clock() - t) * 1000, drawn)
         end
@@ -532,10 +509,6 @@ Runtime.dev = {
     reload = function()
         switchMod(get_game_rules().mod)
         resetPool()
-    end,
-    redraw = function()
-        local loaded = state.loaded
-        if loaded and loaded.file then loaded.drawn = drawModAtmo(loaded.file.atmo, loaded.dynamics) end
     end,
 }
 
