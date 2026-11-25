@@ -1,9 +1,7 @@
--- The playable-mod format (docs/atmo-play-plan.md): an ordinary .tbm with
---   * pool objects: hidden static env_obj blocks marked POOL_MARKER; with props also hidden dynamic ones on ids 1-48
---     (DYNAMIC_MARKER) and a hidden static parking platform (PARK_MARKER)
---   * a header line, "#atmoplay v1 rule=1 radius=4 dradius=2" (a drawn-only mod: "#atmoplay v1 mode=draw", no pools)
---   * after it, the atmo: every line behind ATMO_PREFIX ("#@ "). The game skips "#" lines of a mod and its atmo
---     parser reads only shader, shaderopt, opt and env_obj lines, so neither sees it
+-- The playable-mod format (docs/atmo-play-plan.md): an ordinary .tbm with marked pool objects (hidden static
+-- POOL_MARKER blocks; with props also dynamic ones on ids 1-48 and a parking platform), a header line
+-- ("#atmoplay v1 rule=1 radius=4", or "mode=draw" for drawn-only mods), then the atmo as "#@ " lines,
+-- which neither the mod loader nor the atmo parser reads
 
 local NS = ATMOPLAY_LOADING
 
@@ -95,6 +93,12 @@ local function markerOf(line)
 end
 
 ---@param line string
+---@return string? an atmo line's text without "#@ ", nil for other lines
+local function atmoLineOf(line)
+    return line:match("^#@ ?(.*)$")
+end
+
+---@param line string
 ---@return AtmoPlayHeader?
 function Format.parseHeader(line)
     local version, rest = line:match("^#atmoplay v(%d+)(.*)$")
@@ -130,7 +134,7 @@ function Format.read(lines)
     for _, raw in ipairs(lines) do
         local line = raw:gsub("\r$", "")
         if result.header then
-            local atmoLine = line:match("^#@ ?(.*)$")
+            local atmoLine = atmoLineOf(line)
             if atmoLine then result.atmo[#result.atmo + 1] = atmoLine end
         else
             local header = Format.parseHeader(line)
@@ -173,7 +177,7 @@ function Format.split(lines)
     while i <= #lines do
         local line = lines[i]:gsub("\r$", "")
         if result.header then
-            local atmoLine = line:match("^#@ ?(.*)$")
+            local atmoLine = atmoLineOf(line)
             if atmoLine then result.atmo[#result.atmo + 1] = atmoLine end
             i = i + 1
         else

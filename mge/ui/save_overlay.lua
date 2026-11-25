@@ -3,19 +3,17 @@ if (MGE.saveOverlay ~= nil) then
     return
 end
 
--- name prompt for asset Export, the mod's name and World > Export (MGE.renameProject, MGE.askExportName),
--- MGE.saveOverlayContext says
--- what saving does (onSave), the title, placeholder and default name
+-- Name prompt (asset export, project name, World > Export). MGE.saveOverlayContext gives the title,
+-- placeholder, default name and what saving does (onSave)
 local saveContext = MGE.saveOverlayContext or {}
 
 local ModSaveOverlay = TBMenu:spawnWindowOverlay()
-MGE.saveOverlay = ModSaveOverlay -- lets MGE.quit close it
+MGE.saveOverlay = ModSaveOverlay
 local defaultKillAction = ModSaveOverlay.killAction
 ModSaveOverlay.killAction = function()
     if (defaultKillAction ~= nil) then
         defaultKillAction()
     end
-    -- the name field would otherwise stay in toriui's keyboard list (see Widgets.releaseKeyboard)
     if MGE and MGE.Widgets then MGE.Widgets.releaseKeyboard(ModSaveOverlay) end
     if MGE then MGE.saveOverlay = nil end
     if MGE then MGE.saveOverlayContext = nil end
@@ -28,12 +26,11 @@ local function closeOverlay()
     end
 end
 
--- as tall as its parts (title, name field, buttons, 10px between): they're sized with Widgets.px, a fixed
--- 180 let the buttons cover the name field at bigger UI sizes
+-- title, name field, buttons, 10 px between
 local boxH = MGE.Widgets.px(50) + 10 + MGE.Widgets.px(40) + 10 + MGE.Widgets.px(40) + 10
 local modSave = ModSaveOverlay:addChild({
     shift = { WIN_W / 4, (WIN_H - boxH) / 2 },
-    bgColor = MGE.Widgets.CONTENT_BG, -- like MGE's lists and editor
+    bgColor = MGE.Widgets.CONTENT_BG,
     shapeType = ROUNDED,
     rounded = 5,
     interactive = true
@@ -45,7 +42,7 @@ local modSaveTitle = modSave:addChild({
 })
 modSaveTitle:addAdaptedText(true, saveContext.title or "Mod Name", nil, nil, MGE.Widgets.FONT, nil, MGE.Widgets.TITLE_SCALE)
 
--- MGE's buttons (Widgets.button): the menu's colors, font and shape. Save's click is added below
+-- Save's click is added below
 local buttonH = MGE.Widgets.px(40)
 local modSaveButton = MGE.Widgets.button(modSave, { x = modSave.size.w / 2 + 5, y = -MGE.Widgets.px(50),
     w = modSave.size.w / 2 - 15, h = buttonH }, TB_MENU_LOCALIZED.BUTTONSAVE)
@@ -55,7 +52,7 @@ MGE.Widgets.button(modSave, { x = 10, y = -MGE.Widgets.px(50), w = modSave.size.
 local replayNameBackground = modSave:addChild({
     pos = { 10, modSaveTitle.size.h + modSaveTitle.shift.y + 10 },
     size = { modSave.size.w - 20, MGE.Widgets.px(40) },
-    bgColor = MGE.Widgets.BAR_COLOR, -- the name field, darker than the panel
+    bgColor = MGE.Widgets.BAR_COLOR,
     rounded = 4
 }, true)
 local replayNameInput = TBMenu:spawnTextField2(replayNameBackground, {}, nil, saveContext.placeholder or "Enter Mod Name", {
@@ -89,14 +86,13 @@ local function save(newname)
             "Mod name must be alphanumeric and can only contain underscores, spaces or dashes as special characters")
         return
     end
-    -- the opener decides what saving means (an asset, the mod's name or World > Export)
     local ok = saveContext.onSave and saveContext.onSave(name)
     if ok ~= false then
         closeOverlay()
     end
 end
 
-MGE.Widgets.closeOnEscape(replayNameInput) -- Esc cancels, like the Cancel button
+MGE.Widgets.closeOnEscape(replayNameInput)
 
 replayNameInput:addEnterAction(function()
     save(replayNameInput.textfieldstr[1])

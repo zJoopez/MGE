@@ -1,6 +1,5 @@
--- Shared pieces of the editor panels (ui/editor_*.lua): the row widgets (label column, inputs or buttons,
--- "?" help icon), the input lists, value helpers and the single value property rows.
--- Builders call Rows.begin() first, rows then stack from the top of the holder.
+-- Shared editor panel pieces: rows (label, inputs or buttons, "?" help), value helpers and the single
+-- value property rows. Builders call Rows.begin(), then rows stack from the holder's top
 
 ---@class EditorRows
 local Rows = {}
@@ -10,9 +9,8 @@ local Widgets = MGE.Widgets
 local History = MGE.History
 local ModData = MGE.ModData
 
----@type table<string, UIElement[]> input fields by list name (pos, color, thrust...), filled by the builders
+---@type table<string, UIElement[]> input fields by list name (pos, color, thrust...)
 Rows.inputs = {}
-local inwuts = Rows.inputs
 
 -- set by ui/editor.lua: rebuild the rows that show current values
 Rows.refreshProperties = function() end
@@ -21,13 +19,10 @@ Rows.refreshMeasured = function() end
 Rows.refreshBlocks = function() end
 local function refreshProperties() Rows.refreshProperties() end
 
----@return boolean the Atmo list shows: the panels edit the selected atmo objects' lines (ModData.getEditSelection)
+---@return boolean the Atmo list shows (the panels edit atmo objects' lines)
 function Rows.atmoShown() return MGE.Main ~= nil and MGE.Main.listTab == "atmo" end
 
----After atmo objects' lines changed (committed): atmo objects aren't in the .tbm, the rows just show the new
----values. On a playable mod whose pools no longer fit (a shape, friction, hardness or Static changed) the
----working copy reloads with new ones instead (Playable.reloadIfSplitChanged); other lines (bounce, mass...)
----act from the next fight
+---After committed atmo line edits: refresh the rows, or reload if a playable mod's pools no longer fit
 function Rows.afterAtmoEdit()
     if not (MGE.Playable and MGE.Playable.reloadIfSplitChanged()) then Rows.refreshProperties() end
 end
@@ -43,8 +38,7 @@ local function updateContentHeight(height)
     totalHeight = totalHeight + height
 end
 
----Numbers typed in a row's inputs, nil for empty fields. With `only`, just that input is read
----(Enter applies the field it was pressed in, the row's other fields count as empty)
+---Numbers typed in a row's inputs, nil for empty ones. With `only`, just that input (Enter's field)
 ---@param inputs UIElement[]
 ---@param only integer?
 ---@return (number?)[]
@@ -54,6 +48,22 @@ local function readInputs(inputs, only)
         if not only or i == only then values[i] = tonumber(input.textfieldstr[1]) end
     end
     return values
+end
+
+---@param input UIElement
+---@param x number
+---@param y number
+---@return boolean the screen point is on the input
+local function isOver(input, x, y)
+    return x >= input.pos.x and x <= input.pos.x + input.size.w and y >= input.pos.y and y <= input.pos.y + input.size.h
+end
+
+---Sets a text field's text, cursor at the end
+---@param input UIElement
+---@param text string
+function Rows.setText(input, text)
+    input.textfieldstr[1] = text
+    input.textfieldindex = #text
 end
 
 ---Value shared by the objects, "mixed" when they differ, nil for no objects
@@ -73,8 +83,7 @@ local function sharedChoice(objects, read)
 end
 
 
----Value as a placeholder shows it, two decimals. Values that round to zero show "0.00", not "-0.00"
----(-0 and tiny negatives like -0.000001 left over from rotation math)
+---Placeholder text: two decimals, never "-0.00"
 ---@param value number
 ---@return string
 local function formatHint(value)
@@ -91,7 +100,7 @@ local function formatHints(values)
     return hints
 end
 
----A number as a field shows it after a wheel step: no trailing zeros, "-0" as "0"
+---A number as field text: no trailing zeros, "-0" as "0"
 ---@param value number
 ---@param decimals integer? at most this many, default 4
 ---@return string
@@ -100,32 +109,30 @@ local function formatStep(value, decimals)
     if s == "-0" then s = "0" end
     return s
 end
-Rows.formatNumberText = formatStep -- a number as a field's text: Generate's sizes and angles, the map overlay
+Rows.formatNumberText = formatStep
 
----The value a wheel step starts from: the typed number, else the placeholder's (the selection's current
----value), else 0 ("mixed", or nothing to read)
+---Where a wheel step starts: the typed number, else the placeholder's leading number, else 0
 ---@param text string?
 ---@param placeholder string?
 ---@return number
 function Rows.wheelBase(text, placeholder)
-    -- the placeholder's leading number: "8 obj" (Generate's Amount) is 8
+    -- "8 obj" (Generate's Amount) is 8
     return tonumber(text) or tonumber(tostring(placeholder or ""):match("^%s*(-?%d*%.?%d+)")) or 0
 end
 
 ---@alias InputMode
----| "live" # the editor's rows: the wheel and leaving the field apply it, then the field empties (its placeholder
----          shows the value now): what you see is what the selection has, no Enter needed. Esc drops the typing
----| "keep" # Settings: the wheel and leaving apply it, the value stays in the field
----| "form" # Generate, Convert Map: fields an action reads (Enter runs it), the wheel only changes the text
+---| "live" # editor rows: wheel / leaving applies, then the field empties to show the value. Esc drops typing
+---| "keep" # Settings: wheel / leaving applies, the value stays
+---| "form" # Generate, Convert Map: an action reads the fields (Enter runs it); the wheel only edits text
 
----@type UIElement? the field being applied: a rebuild (ui/editor.lua) doesn't put its text back in the new field
+---@type UIElement? the field being applied: a rebuild doesn't restore its text
 Rows.applying = nil
 
 ---Applies a field the way its mode says
 ---@param input UIElement
 ---@param onInputFunc fun()
 ---@param mode InputMode
----@param mergeKey string? History.mergeKey for its commit: wheel steps on one field are one undo step
+---@param mergeKey string? History.mergeKey: wheel steps on one field are one undo step
 local function applyField(input, onInputFunc, mode, mergeKey)
     if mode ~= "live" then
         onInputFunc()
@@ -141,32 +148,25 @@ local function applyField(input, onInputFunc, mode, mergeKey)
         Rows.applying = nil
         if not ok then MGE.say(tostring(err)) end
     end
-    -- empty again (also "-" or "." alone): the placeholder shows the selection's value now
+    -- empty again: the placeholder shows the new value
     if not input.destroyed then input:clearTextfield() end
 end
 
----Mouse wheel over a number field: up adds the step (Config.wheelStep, with Shift Config.wheelFineStep; a Rot
----field Config.rotateStep, with Shift 1), down
----takes it away, from the typed number or the
----placeholder's (the selection's value). Live and keep fields apply it right away, form fields only get the
----text. toriui sends the wheel to every scrollEnabled element, wherever the mouse is, so the field checks the
----cursor itself (MOUSE_X / Y: the wheel's own x, y aren't the cursor)
+---Mouse wheel over a number field steps the value by the Config steps (Shift: fine / 1 degree). toriui
+---sends the wheel to every scrollEnabled element, so the field checks the cursor (MOUSE_X / Y) itself
 ---@param input UIElement
 ---@param placeholder string the field's placeholder text (toriui's text field doesn't keep it)
 ---@param exact number? the value the placeholder shows rounded: an empty field steps from this
 ---@param apply fun(mergeKey: string?)? applies the field (applyField with its mode), nil for form fields
----@param opts InputOptions whole: steps of 1 (an angle field: the rotate step, rounded), angle: steps of
----Config.rotateStep degrees, with Shift 1
+---@param opts InputOptions
 local function addWheelStep(input, placeholder, exact, apply, opts)
     local whole, angle = opts.whole, opts.angle
     local press = input.btnDown
     input.scrollEnabled = true
     input.btnDown = function(btn, x, y)
         if btn ~= 4 and btn ~= 5 then return press(btn, x, y) end
-        local mx, my = MOUSE_X or x, MOUSE_Y or y
-        if not input:isDisplayed() or mx < input.pos.x or mx > input.pos.x + input.size.w
-            or my < input.pos.y or my > input.pos.y + input.size.h then
-            return false -- not this field: the wheel goes on to the next element (a list, the camera)
+        if not input:isDisplayed() or not isOver(input, MOUSE_X or x, MOUSE_Y or y) then
+            return false -- not this field: pass it on
         end
         local typed = input.textfieldstr[1]
         local value = (tonumber(typed) == nil and exact) or Rows.wheelBase(typed, placeholder)
@@ -180,28 +180,23 @@ local function addWheelStep(input, placeholder, exact, apply, opts)
             step = shift and Config.wheelFineStep or Config.wheelStep
         end
         local after = value + (btn == 4 and step or -step) -- 4: up
-        if whole then after = math.floor(after + 0.5) end -- counts, levels, whole degrees (engageplayerrot)
+        if whole then after = math.floor(after + 0.5) end
         local text = formatStep(after)
-        input.textfieldstr[1] = text
-        input.textfieldindex = #text
-        if apply then apply(Rows.fieldKey(input)) end -- one undo step while the mouse stays on the field
+        Rows.setText(input, text)
+        if apply then apply(Rows.fieldKey(input)) end -- merged while the mouse stays on the field
         return true
     end
 end
 
----A field's key for merged wheel steps (History.mergeKey): its place on screen, the same for the field a
----rebuild puts there
+---A field's merge key: its screen position (stable across rebuilds)
 ---@param input UIElement
 ---@return string
 function Rows.fieldKey(input)
     return "field " .. math.floor(input.pos.x) .. "," .. math.floor(input.pos.y)
 end
 
--- Fields left by a click elsewhere, applied in MGE's draw3d hook, before toriui draws the next frame.
--- The leaving is seen while the field draws (applyOnLeave), and applying there reloaded the mod and rebuilt
--- the panel in the middle of toriui drawing it: the old rows were destroyed mid-draw and every tab's rows
--- flashed on top of each other for a moment (a joint's Range, then a click on another field). Enter
--- applies from the key handler, outside the drawing, which never did it
+-- Fields left by a click are applied in draw3d, outside toriui's drawing: applying mid-draw rebuilt the
+-- panel while it drew and every tab's rows flashed
 ---@type fun()[]
 local leftFields = {}
 local LEAVE_HOOK = MGE.hookname .. "_rows"
@@ -216,9 +211,8 @@ add_hook("draw3d", LEAVE_HOOK, function()
 end)
 table.insert(MGE.onQuit, function() remove_hooks(LEAVE_HOOK) end)
 
----Leaving a field (a click elsewhere: toriui takes its keyboard focus away) applies what's typed, on the
----next frame outside the UI's drawing (leftFields). The mouse leaving it ends its wheel steps' undo step
----(History.endMerge). Checked each frame it's drawn: toriui has no focus-lost callback
+---Leaving a field applies what's typed (queued to leftFields); the mouse leaving ends its merged undo
+---step. Polled each frame: toriui has no focus-lost callback
 ---@param input UIElement
 ---@param apply fun()
 local function applyOnLeave(input, apply)
@@ -227,22 +221,20 @@ local function applyOnLeave(input, apply)
         local now = input.keyboard == true
         if focused and not now and input.textfieldstr[1] ~= "" then leftFields[#leftFields + 1] = apply end
         focused = now
-        if History.lastMerge and (MOUSE_X < input.pos.x or MOUSE_X > input.pos.x + input.size.w
-            or MOUSE_Y < input.pos.y or MOUSE_Y > input.pos.y + input.size.h) then
+        if History.lastMerge and not isOver(input, MOUSE_X, MOUSE_Y) then
             History.endMerge(Rows.fieldKey(input))
         end
     end)
 end
 
 ---@class InputOptions
----@field mode InputMode? defaults to "live"
----@field whole boolean? a whole-number field (a count, a level, whole degrees): the wheel's result is rounded
----@field angle boolean? a Rot field in degrees: the wheel steps by the rotate step, with Shift 1
+---@field mode InputMode? default "live"
+---@field whole boolean? wheel results rounded to whole numbers
+---@field angle boolean? degrees: the wheel steps by Config.rotateStep (Shift: 1)
 
 ---@alias InputPlaceholder string|number|{ text: string, value: number? }
----A placeholder as text shown while empty and the exact value the wheel steps from: a number shows with 2
----decimals (Rows.formatHint) and steps from itself, { text, value } shows text and steps from value (a
----joint without an anchor: "none", the wheel from its objects' midpoint), text steps from its leading number
+---A placeholder's shown text and the exact value the wheel steps from. Numbers show rounded; { text,
+---value } shows text and steps from value; plain text steps from its leading number
 ---@param placeholder InputPlaceholder?
 ---@return string text, number? value
 local function resolvePlaceholder(placeholder)
@@ -267,14 +259,14 @@ local function createInput(container, onInputFunc, placeholder, opts)
             allowDecimal = true,
             allowNegative = true,
             textAlign = CENTER,
-            fontId = MGE.Widgets.FONT, -- the window's font (Widgets.FONT)
-            darkerMode = true, -- base window color, matches the panel buttons (Widgets.PANEL_STYLE)
-            textScale = MGE.Widgets.TEXT_SCALE_SMALL, -- smaller than the labels
+            fontId = MGE.Widgets.FONT,
+            darkerMode = true, -- matches the panel buttons
+            textScale = MGE.Widgets.TEXT_SCALE_SMALL,
         })
     ---@param mergeKey string?
     local function apply(mergeKey) applyField(input, onInputFunc, mode, mergeKey) end
     input:addKeyboardHandlers(mode == "live" and function(key)
-        if key == 27 then input:clearTextfield() end -- Esc: the typing is dropped, leaving applies nothing
+        if key == 27 then input:clearTextfield() end -- Esc drops the typing
     end or nil, function(key)
         if key ~= 13 then return end --enter
         apply()
@@ -284,14 +276,12 @@ local function createInput(container, onInputFunc, placeholder, opts)
     return input
 end
 
----Row with the label column on the left and an optional "?" help icon at the end.
----Returns the row and the x and width of the space between them, for inputs or buttons
+---Row with a label column and an optional "?" icon; returns the space between them
 ---@param label string
 ---@param parent UIElement
----@param help string? explanation shown when hovering the "?" icon
----@param onLabelClick function? makes the label a button (switches a transform row's mode)
----@return UIElement row, number contentX, number contentW, UIElement labelElement the name's button with
----onLabelClick, else its label (Rows.setHighlighted lights either)
+---@param help string? hover text of the "?" icon
+---@param onLabelClick function? makes the label a button
+---@return UIElement row, number contentX, number contentW, UIElement labelElement (setHighlighted lights it)
 local function createRow(label, parent, help, onLabelClick)
     local row = parent:addChild({
         pos = { 0, totalHeight },
@@ -301,14 +291,14 @@ local function createRow(label, parent, help, onLabelClick)
 
     local labelW = MGE.Widgets.px(66)
     local helpSize = MGE.Widgets.ROW_H - 6
-    local helpW = help and helpSize + 8 or 0 -- space reserved at the end of the row for the "?" icon
+    local helpW = help and helpSize + 8 or 0
     local labelButton
     if onLabelClick then
-        local inset = Widgets.INSET -- like the number fields
+        local inset = Widgets.INSET
         labelButton = Widgets.button(row, { x = inset, y = inset, w = labelW - inset * 2, h = row.size.h - inset * 2 }, label, onLabelClick,
-            Widgets.TEXT_SCALE, Widgets.PANEL_STYLE) -- label size, like the plain labels under it
+            Widgets.TEXT_SCALE, Widgets.PANEL_STYLE)
     else
-        -- inset like the name buttons, see-through until highlighted (Rows.setHighlighted)
+        -- see-through until highlighted
         local inset = Widgets.INSET
         labelButton = row:addChild({
             pos = { inset, inset },
@@ -320,7 +310,6 @@ local function createRow(label, parent, help, onLabelClick)
     end
 
     if help then
-        -- "?" at the row's end, the explanation opens right of it, outside the window
         Widgets.helpIcon(row, -helpSize - 2, (row.size.h - helpSize) / 2, helpSize, help, nil, Widgets.PANEL_STYLE)
     end
 
@@ -328,14 +317,14 @@ local function createRow(label, parent, help, onLabelClick)
     return row, labelW, row.size.w - labelW - helpW, labelButton
 end
 
----Label column followed by equally sized inputs and an optional "?" help icon at the end
+---A row of equal inputs
 ---@param label string
 ---@param parent UIElement
----@param func fun(inputs: UIElement[], index: integer) called on enter
----@param placeholders InputPlaceholder[] one per input: numbers show rounded, the wheel steps from them exactly
----@param help string? explanation shown when hovering the "?" icon
+---@param func fun(inputs: UIElement[], index: integer) applies input `index`
+---@param placeholders InputPlaceholder[] one per input
+---@param help string?
 ---@param onLabelClick function? see createRow
----@param opts InputOptions? for every input of the row, default: live decimal fields
+---@param opts InputOptions? for every input
 ---@return UIElement[] inputs, UIElement row, UIElement? labelButton see createRow
 local function createInputRow(label, parent, func, placeholders, help, onLabelClick, opts)
     local row, contentX, contentW, labelButton = createRow(label, parent, help, onLabelClick)
@@ -352,8 +341,27 @@ local function createInputRow(label, parent, func, placeholders, help, onLabelCl
     return inputs, row, labelButton
 end
 
----Highlights a button like the current choice in createChoiceRow, or gives it the panel look back. A row's
----plain label (createRow) goes back to see-through
+---A row with a wide button (opens a picker) and a square trash icon button
+---@param label string
+---@param parent UIElement
+---@param help string
+---@param text string the wide button's text
+---@param onPick fun()
+---@param onNone fun() the trash icon
+---@param noneHelp string the trash icon's hover text
+local function createPickRow(label, parent, help, text, onPick, onNone, noneHelp)
+    local row, contentX, contentW = createRow(label, parent, help)
+    local gap, inset = Widgets.GAP, Widgets.INSET
+    local h = row.size.h - inset * 2
+    local pickW = contentW - inset * 2 - gap - h
+    Widgets.button(row, { x = contentX + inset, y = inset, w = pickW, h = h }, text, onPick, nil, Widgets.PANEL_STYLE)
+    local none = Widgets.iconButton(row, { x = contentX + inset + pickW + gap, y = inset, w = h, h = h },
+        "../textures/menu/general/buttons/trash.tga", onNone, Widgets.PANEL_STYLE)
+    Widgets.popupBelow(none, noneHelp)
+end
+Rows.createPickRow = createPickRow
+
+---Lights a button as the current choice, or restores its look (plain labels go see-through)
 ---@param btn UIElement? nil and destroyed buttons are skipped
 ---@param on boolean
 local function setHighlighted(btn, on)
@@ -362,20 +370,25 @@ local function setHighlighted(btn, on)
     end
 end
 
----Label column followed by buttons for a fixed set of values, the current one is highlighted
+---Holder for a row's buttons, lined up with the number fields
+---@return UIElement
+local function buttonHolder(row, contentX, contentW)
+    return row:addChild({
+        pos = { contentX + Widgets.INSET, Widgets.INSET },
+        size = { contentW - Widgets.INSET * 2, row.size.h - Widgets.INSET * 2 },
+    }, true)
+end
+
+---A row of choice buttons, the current one lit
 ---@param label string
 ---@param parent UIElement
 ---@param choices { label: string, value: any }[]
----@param current any value shared by the selection, nil or "mixed" highlights nothing
+---@param current any nil or "mixed" lights nothing
 ---@param onPick fun(value: any)
 ---@param help string?
----@return UIElement[] buttons in choice order, highlight a new current one with setHighlighted
+---@return UIElement[] buttons in choice order
 local function createChoiceRow(label, parent, choices, current, onPick, help)
-    local row, contentX, contentW = createRow(label, parent, help)
-    local holder = row:addChild({
-        pos = { contentX + Widgets.INSET, Widgets.INSET }, -- lines up with the number fields
-        size = { contentW - Widgets.INSET * 2, row.size.h - Widgets.INSET * 2 },
-    }, true)
+    local holder = buttonHolder(createRow(label, parent, help))
     local items = {}
     for i, choice in ipairs(choices) do
         items[i] = { label = choice.label, onClick = function() onPick(choice.value) end }
@@ -387,28 +400,20 @@ local function createChoiceRow(label, parent, choices, current, onPick, help)
     return buttons
 end
 
----Label column followed by on/off buttons (any number can be on), active ones are highlighted
----like the current choice in createChoiceRow
+---A row of on/off buttons (any number on), active ones lit
 ---@param label string
 ---@param parent UIElement
 ---@param toggles { label: string, active: boolean, onClick: function }[]
 ---@param help string?
 local function createToggleButtonRow(label, parent, toggles, help)
-    local row, contentX, contentW = createRow(label, parent, help)
-    local holder = row:addChild({
-        pos = { contentX + Widgets.INSET, Widgets.INSET }, -- lines up with the number fields
-        size = { contentW - Widgets.INSET * 2, row.size.h - Widgets.INSET * 2 },
-    }, true)
+    local holder = buttonHolder(createRow(label, parent, help))
     for i, btn in ipairs(Widgets.buttonRow(holder, 0, holder.size.h, toggles, Widgets.GAP, nil, Widgets.PANEL_STYLE)) do
         if toggles[i].active then btn.bgColor = Widgets.ACTIVE_COLOR end
     end
 end
 
--- Simple per-object properties edited with absolute values. Friction and hardness have no live
--- setter, they're stored in props and applied by saving (the mod reloads with the new value).
--- default: the game's value for objects without the line. decimals: what the game's modmaker writes
--- (friction 10000.00, bounce 0.100000, hardness 0.000000, mass 0.1000), used for the file and the
--- placeholders.
+-- Single value properties. Without a live setter (friction, hardness) they apply by reloading.
+-- default: the game's value without the line; decimals: as the game's modmaker writes them
 ---@class EditorProperty
 ---@field min number? the lowest value it takes, nil: any (friction can be negative)
 ---@field default number
@@ -418,17 +423,16 @@ end
 
 ---@type table<string, EditorProperty>
 local PROPERTIES = {
-    mass = { min = 0.0001, default = 0.1, decimals = 4, -- zero mass breaks physics
+    mass = { min = 0.0001, default = 0.1, decimals = 4, -- zero breaks physics
         setter = function(id, v) set_obj_mass(id, v) end, getter = function(id) return get_obj_mass(id) end },
-    friction = { default = 10000, decimals = 2 }, -- negative values too: the game takes them
+    friction = { default = 10000, decimals = 2 }, -- negative is valid
     bounce = { min = 0, default = 0.1, decimals = 6,
         setter = function(id, v) set_obj_bounce(id, v) end, getter = function(id) return get_obj_bounce(id) end },
-    -- points multiplier on contact with a player, no get_obj / set_obj for it. Without the line the
-    -- game uses 0 (older docs say 1)
+    -- points multiplier on player contact, no live API; default 0 (older docs say 1)
     hardness = { min = 0, default = 0, decimals = 6 },
 }
 
----Value as the game writes it for the property, e.g. 0.1 -> "0.1000" for mass
+---As the game writes it, e.g. mass 0.1 -> "0.1000"
 ---@param property EditorProperty
 ---@param value number
 ---@return string
@@ -436,8 +440,7 @@ local function formatProperty(property, value)
     return string.format("%." .. property.decimals .. "f", value)
 end
 
----Sets a property on all selected objects (on the Atmo list the atmo objects: their lines only, an atmo
----object's id isn't an object's) from an input field, empty input does nothing
+---Sets a property on the edit selection from an input (atmo: lines only)
 ---@param key "mass"|"friction"|"bounce"|"hardness"
 ---@param input UIElement
 local function setProperty(key, input)
@@ -459,7 +462,7 @@ local function setProperty(key, input)
     elseif property.setter then
         refreshProperties()
     else
-        MGE.apply() -- reload rebuilds the editor with the new value
+        MGE.apply()
     end
 end
 
@@ -470,7 +473,7 @@ local PROPERTY_HELP = {
     hardness = "Points multiplier when it touches a player.\n0 (default): no points, still damages. 0.5: half,\n1: full, 2: double. Applied by saving.",
 }
 
----Single value rows (mass, friction, bounce, hardness), placeholders show the selection's current value
+---Single value rows; placeholders show the selection's value
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[]
 ---@param entries string[][] { label, key } pairs
@@ -480,11 +483,10 @@ local function buildPropertyRows(holder, selected, entries)
     for _, entry in ipairs(entries) do
         local label, key = entry[1], entry[2]
         local property = PROPERTIES[key] ---@type EditorProperty
-        -- value shared by the selection ("mixed" when they differ): the file's line (what MGE writes,
-        -- undoes and saves), else the live value, else the game default
+        -- the line, else the live value, else the default ("mixed" when they differ)
         local hint = sharedChoice(selected, function(obj)
             local value = tonumber(obj.props[key])
-                or (property.getter and obj.kind ~= "atmo" and property.getter(obj.id - 1)) -- atmo: no live value
+                or (property.getter and obj.kind ~= "atmo" and property.getter(obj.id - 1))
             return formatProperty(property, value or property.default)
         end) or formatProperty(property, property.default)
         local row = createInputRow(label, holder, function(rowInputs) setProperty(key, rowInputs[1]) end,
@@ -494,8 +496,7 @@ local function buildPropertyRows(holder, selected, entries)
     return inputs
 end
 
----Writes a prop on all selected objects (on the Atmo list the atmo objects) and saves if any of them
----changed. Atmo objects: Rows.afterAtmoEdit
+---Writes a prop on the edit selection; commits and applies if anything changed
 ---@param key string
 ---@param value string?
 local function setSelectedProp(key, value)
@@ -522,10 +523,8 @@ Rows.createInputRow = createInputRow
 Rows.createChoiceRow = createChoiceRow
 Rows.setHighlighted = setHighlighted
 
----The names of a panel's rows the gizmo's tools change, lit for the active tool (toolbar, Alt + Q / W / E):
----the panel puts its row names in labels.move / .rotate / .scale as it builds them (createInputRow's
----third value) and calls highlight after a rebuild, tool changes call it on their own. One per panel
----(Core, Generate, Players), called when the panel module loads
+---Row names lit for the active gizmo tool: a panel fills labels.move / .rotate / .scale as it builds
+---and calls highlight after rebuilds (tool changes call it too). One per panel, at load
 ---@return table<string, UIElement?> labels, fun() highlight
 function Rows.gizmoLabels()
     local labels = {}

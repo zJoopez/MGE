@@ -1,9 +1,7 @@
--- Moves one static pool in the world (docs/atmo-play-plan.md, part 3), for Atmo Play's runtime and MGE's test mode.
--- When moves happen is what makes replays work by themselves (measured):
---   * in a fight the pool moves between physics steps (draw2d), once per new match frame, from FIRST_FRAME: recorded
---     under the step it affects. Moves in enter_frame are recorded a step late
---   * replays move nothing (the game plays the recorded moves); back in a fight every pool object is set again
--- Flag and bounce are never set (replays don't record them): each pool object has its group's in the mod.
+-- Moves one static pool (Atmo Play's runtime and MGE's test mode). Timing makes replays work by themselves:
+-- fights move in draw2d once per new match frame from FIRST_FRAME (enter_frame moves record a step late);
+-- replays move nothing; returning to a fight sets every object again. Flag and bounce are never set
+-- (replays don't record them): each pool object carries its group's
 
 local NS = ATMOPLAY_LOADING
 
@@ -22,8 +20,7 @@ local Colliders = NS.Colliders
 ---@class AtmoPlayDriverModule
 local Driver = {
     PARK_Z = -100000,
-    -- R before the first move replays a fight with nothing recorded, and the game puts every object moved so far at
-    -- 0,0,0 (props inside the static pool: a crash). So nothing moves before frame 1
+    -- an R before the first recorded move puts moved objects at 0,0,0 (a crash with props): wait for frame 1
     FIRST_FRAME = 1,
 }
 
@@ -37,7 +34,7 @@ function Driver.matrixTB(frame)
     }
 end
 
----The same value to the engine (written lines and engine floats differ in the last digits)
+---Equal to the engine (written and engine floats differ in the last digits)
 local function near(a, b)
     a, b = tonumber(a), tonumber(b)
     if not a or not b then return false end
@@ -93,8 +90,7 @@ local function playerCenters()
     return centers
 end
 
----A driver for a pool whose objects are in the world now. wasReplay: one made mid-fight sets every object again on
----its first fight draw; match_begin sets the real value
+---A driver for a pool in the world now (wasReplay: made mid-fight, it sets everything on its first draw)
 ---@param pool AtmoPlayPoolState
 ---@return AtmoPlayDriver
 function Driver.new(pool)

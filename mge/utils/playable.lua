@@ -1,25 +1,12 @@
--- Playable atmo mods: a big atmo made solid in game by the Atmo Play script (../atmoplay.lua, next to
--- mge/; docs/atmo-play-plan.md). MGE makes them, Atmo Play plays them, with the same code: the format,
--- which atmo objects are solid, how the pool is split and how it's moved come from Atmo Play's own modules
--- (MGE.AtmoPlay: format.lua, colliders.lua, pool.lua, driver.lua). A playable mod is an ordinary .tbm with:
---   * a note line first (what the file needs), then the mod's own lines and its real objects
---   * the pool: hidden static env_obj blocks on every free static id, marked with Format.POOL_MARKER. Atmo
---     Play moves them onto the atmo objects nearest the players, every frame of a fight
---   * a header line ("#atmoplay v1 rule=1 radius=4"), then the atmo: every line of the atmo file behind
---     "#@ ". The game skips "#" lines, so neither its mod loader nor its atmo loader sees them
---
--- One switch (the Atmo list's Advanced tab: Playable, On / Off) decides everything:
---   On:  the mod's static objects move into the atmo (MGE's To atmo: ids freed, one undo step; dynamic,
---        joint-linked and model objects stay), Save writes the playable form, and the editor plays it: the
---        working copy (MGE.apply) carries the pool and MGE moves it in fights like Atmo Play does
---   Off: an ordinary mod again (Save keeps its atmo inside the mod, Atmo.bundledText; World > Export writes
---        separate copies), its atmo objects stay
--- Opening a playable mod reads its atmo into the Atmo list (from the "#@ " lines, not MGE - <mod>.atmo); the
--- pool isn't in the data: it's made again from the free ids on every save and working copy.
--- Props (proof of concept, Atmo Play's dynamics.lua): atmo objects with a flag line lacking the static bit
--- (make objects dynamic, then To atmo) are pushable in Atmo Play. The file then also gets a dynamic pool on
--- the free ids 1-48 and a hidden parking platform; MGE's own test fights don't move them (props aren't solid
--- in the editor).
+-- Playable atmo mods, made solid in game by Atmo Play (docs/atmo-play-plan.md) using its own modules
+-- (MGE.AtmoPlay), so MGE writes and tests exactly what Atmo Play plays. File: a note line, the mod with a
+-- pool of hidden static objects on every free static id (Format.POOL_MARKER), then a header and the atmo
+-- as "#@ " lines (skipped by the game).
+-- The World tab's Atmo switch: Playable moves the convertible static objects into the atmo (one undo
+-- step) and the working copy carries the pool, moved in fights like Atmo Play does. Default makes an
+-- ordinary mod again. The pool is never in the data: it's rebuilt from free ids on every write.
+-- Props (atmo objects without the static bit) are pushable: the file also gets a dynamic pool on free
+-- ids 1-48 and a hidden parking platform
 local ModData = MGE.ModData
 local FileHandler = MGE.FileHandler
 local AtmoLayer = MGE.AtmoLayer
@@ -42,9 +29,8 @@ local Playable = {
     NOTE = Format.NOTE,
 }
 
----A mod file's lines in parts (Atmo Play's Format.split): `lines` is the mod MGE parses, without the
----pool blocks and Atmo Play's lines; `header` is nil for an ordinary mod. `poolObjects` and
----`dynamicObjects` (Format.read's): the pools the file has, what the world has after /lm
+---A mod file's lines in parts (Format.split): `lines` is the mod without pools and Atmo Play lines,
+---`header` nil for an ordinary mod; poolObjects / dynamicObjects are the file's pools
 ---@param lines string[]
 ---@return AtmoPlaySplit|{ poolObjects: AtmoPlayPoolObject[]?, dynamicObjects: AtmoPlayPoolObject[]? }
 function Playable.split(lines)
@@ -56,12 +42,12 @@ function Playable.split(lines)
     return split
 end
 
----@return boolean the data is a playable mod (World > Atmo: Playable)
+---@return boolean the data is a playable mod
 function Playable.isOn()
     return ModData.parsed.playable ~= nil
 end
 
----The mod's objects On moves into the atmo: static, not linked by a joint, not a model
+---Objects Playable moves into the atmo: static, not joint-linked, not a model
 ---@param obj FileParserEnvObj
 ---@return boolean
 function Playable.convertible(obj)
@@ -70,11 +56,10 @@ function Playable.convertible(obj)
     return not tostring(obj.props.shape or ""):match("^%s*custom")
 end
 
--- the last colliders made, by the atmo text they came from: reloads with an unchanged atmo (most edits are
--- to objects) don't build them again (~0.1 s on a 5k-object atmo)
+-- colliders by atmo text: an unchanged atmo isn't rebuilt (~0.1 s on 5k objects)
 local colliderCache = { text = nil, colliders = nil, props = nil }
 
----The atmo's solid objects exactly as Atmo Play will see them: its colliders.lua on the atmo's text
+---The atmo's solid objects exactly as Atmo Play sees them
 ---@param atmo FileParserEnvObj[] the atmo layer
 ---@return AtmoPlayCollider[] colliders the static ones
 ---@return AtmoPlayCollider[] props the dynamic ones (pushable in Atmo Play)
@@ -88,19 +73,17 @@ function Playable.colliders(atmo)
     return colliders, props
 end
 
----What a playable mod's pools are split by: how many solid atmo objects and props of each group
----(Colliders.groupKey) there are. Where they are doesn't change it: every fight reads the atmo again
----(Playable.onMatchBegin), so moves and colors need no reload (a changed bounce, flag or mass is another group)
+---What the pools are split by: solid objects and props per group. Positions don't count (every fight
+---rereads the atmo), so moves and colors need no reload
 ---@param atmo FileParserEnvObj[]?
 ---@return string
 function Playable.poolSplitKey(atmo)
-    -- from the objects' lines alone (Colliders.classify, as Atmo Play classifies them): building the colliders
-    -- for it took ~170 ms on a 5k atmo after every atmo edit or undo, to find out that a move changed nothing
+    -- from the lines alone: building colliders took ~170 ms on a 5k atmo per edit
     local counts = {}
     for _, obj in ipairs(atmo or {}) do
         local reason, _, group, prop = Colliders.classify(obj.props)
         if not reason then
-            -- a prop that never becomes real (Collision: Player and Dynamic off) needs no pool object: counted apart
+            -- a prop that never becomes real needs no pool object: counted apart
             local never = false
             if prop then
                 local player, real = Colliders.collision(obj.props)
@@ -116,14 +99,10 @@ function Playable.poolSplitKey(atmo)
     return table.concat(parts, ";")
 end
 
----@type string? Playable.poolSplitKey of the loaded pools: set by the working copy as it's written, or by the
----first fight of an opened mod (its pools were planned for its atmo); nil: not known yet
+---@type string? poolSplitKey of the loaded pools, nil: not known yet
 Playable.loadedKey = nil
 
----After atmo objects changed (committed): on a playable mod whose pools no longer fit its atmo (objects added
----or removed, a group or Static changed) the working copy is written and reloaded with new pools, so the
----editor's fights have them (a duplicated prop got no dynamic object until Save before). Everything else
----waits for the next fight
+---After committed atmo changes: reloads the working copy when the pools no longer fit the atmo
 ---@return boolean reloaded the caller's refresh is done by the reload
 function Playable.reloadIfSplitChanged()
     if not Playable.isOn() or Playable.loadedKey == nil then return false end
@@ -142,9 +121,8 @@ end
 ---@field dynamic { id: integer, group: string }[] the props' pool (ids 1-48), by id
 ---@field park integer? the parking platform's id (with props and a dynamic pool)
 
----The pool a save would write for this data: every free static id (above MAX_NONSTATIC_OBJECTS), split
----by Atmo Play's Pool.plan, no more than solid objects. With props: the free ids up to MAX_NONSTATIC_OBJECTS
----are their pool, and the first free static id their parking platform
+---The pool a save would write: free static ids split by Pool.plan. With props, free ids 1-48 are their
+---pool and the first free static id their parking platform
 ---@param parsed FileParserResult
 ---@param colliders AtmoPlayCollider[]? Playable.colliders(parsed.atmo), made when not given
 ---@param props AtmoPlayCollider[]? its second result
@@ -165,7 +143,7 @@ function Playable.poolPlan(parsed, colliders, props)
     local dynamic, park = {}, nil
     if #props > 0 and #freeDynamic > 0 and #free > 0 then
         park = table.remove(free, 1)
-        -- only the props that can become real get pool objects (Player and Dynamic off: drawn only)
+        -- only props that can become real get pool objects
         local real = {}
         for _, p in ipairs(props) do
             if not p.noReal then real[#real + 1] = p end
@@ -178,22 +156,21 @@ function Playable.poolPlan(parsed, colliders, props)
         atmo = #(parsed.atmo or {}), props = #props, dynamic = dynamic, park = park }
 end
 
----A pool object's lines in the writer's order: the given keys, then the group's friction, hardness, bounce and
----mass (what the object can't change once loaded: Colliders.groupKey), then visible
+---Adds a pool object's lines: the keys, then the group's friction / hardness / bounce / mass (fixed once
+---loaded), then visible
 ---@param obj FileParserEnvObj
 ---@param keys string[]
 ---@param group string
 ---@return FileParserEnvObj obj
 local function withLines(obj, keys, group)
-    -- bounce and flag bits too: set live, replays don't record them (docs/atmo-play-plan.md, R2), so the
-    -- group's values are written; the flag bits join the object's own flag (static or not)
+    -- replays don't record live-set bounce / flags, so the group's values are written
     local _, friction, hardness, bounce, flagBits, mass = Colliders.splitGroup(group)
     if flagBits ~= "" then obj.props.flag = tostring((tonumber(obj.props.flag) or 0) + tonumber(flagBits)) end
     for _, key in ipairs(keys) do obj.lines[#obj.lines + 1] = { key = key } end
     for _, line in ipairs({ { "friction", friction }, { "hardness", hardness }, { "bounce", bounce }, { "mass", mass } }) do
         local key, value = line[1], line[2]
         if value ~= "" then
-            local listed = obj.props[key] ~= nil -- the dynamic pool's look may have written it already
+            local listed = obj.props[key] ~= nil -- the prop look may have written it
             obj.props[key] = value
             if not listed then obj.lines[#obj.lines + 1] = { key = key } end
         end
@@ -204,7 +181,7 @@ end
 
 local POOL_KEYS = { "shape", "pos", "rot", "sides", "color", "flag" }
 
----A pool object as MGE's file writer writes objects: hidden, static, parked far below the map (Driver.PARK_Z)
+---A pool object: hidden, static, parked far below the map
 ---@param id integer
 ---@param group string Colliders.groupKey
 ---@return FileParserEnvObj
@@ -226,8 +203,8 @@ local function poolObject(id, group)
     }, POOL_KEYS, group)
 end
 
----Each dynamic pool group's most common prop size, mass and bounce (ties: the first in atmo order): its pool
----objects are written at that size, so taking those props resizes nothing (Atmo Play's fitObject)
+---Each prop group's most common size, mass and bounce: its pool objects are written so, so taking
+---those props resizes nothing
 ---@param props AtmoPlayCollider[]?
 ---@return table<string, { sides: number[], mass: number?, bounce: number? }> by group
 function Playable.propLooks(props)
@@ -246,14 +223,12 @@ function Playable.propLooks(props)
     return looks
 end
 
----A prop pool object (Atmo Play's dynamics.lua): dynamic, resting on the parking platform. Faint by its
----color's alpha (Dynamics.POOL_ALPHA), not "visible 0": the game shows no move predictions (ghost) for a
----hidden object, and a carried prop should have them like the mod's own dynamic objects. Not alpha 0: the
----ghost may take the object's alpha
+---A prop pool object: dynamic, on the parking platform. Faint by alpha, not hidden: hidden objects get
+---no move-prediction ghost
 ---@param id integer 1-48
 ---@param group string Colliders.groupKey
----@param look { sides: number[], mass: number?, bounce: number? }? the group's common prop (Playable.propLooks)
----@param pos number[]? its parking spot (Dynamics.parkLayout), Dynamics.parkPos without one
+---@param look { sides: number[], mass: number?, bounce: number? }? Playable.propLooks'
+---@param pos number[]? parking spot, default Dynamics.parkPos
 ---@return FileParserEnvObj
 local function dynamicObject(id, group, look, pos)
     local shape = Colliders.splitGroup(group)
@@ -279,9 +254,9 @@ local function dynamicObject(id, group, look, pos)
     return withLines(obj, keys, group)
 end
 
----The props' parking platform: hidden, static, high above the map (Dynamics.PARK_Z)
+---The props' parking platform: hidden, static, high above the map
 ---@param id integer
----@param platform { pos: number[], sides: number[] }? Dynamics.parkLayout's, the old fixed one without
+---@param platform { pos: number[], sides: number[] }? Dynamics.parkLayout's
 ---@return FileParserEnvObj
 local function parkObject(id, platform)
     local s = platform and platform.sides or Dynamics.PLATFORM_SIDES
@@ -299,7 +274,7 @@ local function parkObject(id, platform)
     return obj
 end
 
----The playable mod's text: the note, the mod with its pool (MGE's own writer), the header, the atmo
+---The playable mod's text: note, mod with pools, header, atmo
 ---@param parsed FileParserResult with .playable set
 ---@param atmoText string the atmo as its file would hold it (Atmo.text)
 ---@param colliders AtmoPlayCollider[]? Playable.colliders(parsed.atmo), made when not given
@@ -308,12 +283,10 @@ end
 function Playable.text(parsed, atmoText, colliders, props)
     if not colliders then colliders, props = Playable.colliders(parsed.atmo) end
     local plan = Playable.poolPlan(parsed, colliders, props)
-    local copy = {}
-    for k, v in pairs(parsed) do copy[k] = v end
+    local copy = ModData.copy(parsed)
     copy.env_obj = {}
     for _, obj in ipairs(parsed.env_obj or {}) do copy.env_obj[#copy.env_obj + 1] = obj end
     for _, p in ipairs(plan.objects) do copy.env_obj[#copy.env_obj + 1] = poolObject(p.id, p.group) end
-    -- the dynamic pool at its groups' common prop look, parked side by side at that size
     local looks, laid = Playable.propLooks(props), {}
     for _, p in ipairs(plan.dynamic) do
         local look = looks[p.group]
@@ -327,19 +300,17 @@ function Playable.text(parsed, atmoText, colliders, props)
     if plan.park and #plan.dynamic > 0 then copy.env_obj[#copy.env_obj + 1] = parkObject(plan.park, platform) end
     table.sort(copy.env_obj, function(a, b) return a.id < b.id end)
     local out = { Format.NOTE, FileHandler.modText(copy), "", Format.headerLine(parsed.playable) }
-    for line in (atmoText .. "\n"):gmatch("(.-)\n") do
-        out[#out + 1] = line == "" and "#@" or (Format.ATMO_PREFIX .. line)
-    end
+    MGE.Atmo.appendHidden(out, atmoText)
     return table.concat(out, "\n"), plan
 end
 
----The working copy of a playable mod (MGE.apply): the mod with its pool and the header, no atmo lines (MGE
----draws the atmo itself; the header makes the reload leave the pool out of the data and free its ids)
+---The working copy: the playable text without atmo lines (MGE draws the atmo; the header keeps the
+---pool out of the data on reload)
 ---@param parsed FileParserResult
 ---@return string
 function Playable.workingText(parsed)
-    Playable.loadedKey = Playable.poolSplitKey(parsed.atmo) -- what the reload's pools are planned for
-    return (Playable.text(parsed, "", Playable.colliders(parsed.atmo))) -- both results: colliders, props
+    Playable.loadedKey = Playable.poolSplitKey(parsed.atmo)
+    return (Playable.text(parsed, "", Playable.colliders(parsed.atmo))) -- passes both colliders and props
 end
 
 ---------------------------------------------------------------------------------------------------- the switch
@@ -348,8 +319,7 @@ local function refreshRow()
     if MGE.EditorRows then MGE.EditorRows.refreshBlocks({ "playable" }) end
 end
 
----Atmo: Playable: the mod's convertible static objects into the atmo (To atmo: one undo step, the working copy
----reloads with its pool) and the mod marked playable
+---Playable: convertible objects into the atmo and the mod marked playable (one undo step)
 ---@return boolean on
 local function turnOn()
     ModData.refreshJointIds()
@@ -364,10 +334,10 @@ local function turnOn()
         MGE.say("nothing to make solid (no static objects or solid atmo shapes)")
         return false
     end
-    -- set before the step To atmo commits, so undo takes it back with the moved objects
+    -- set before moveIn commits, so one undo takes both back
     ModData.parsed.playable = { rule = Playable.DEFAULT_RULE, radius = Playable.DEFAULT_RADIUS }
     if count > 0 then
-        AtmoLayer.moveIn(true) -- marked for Default; History.commit, MGE.apply (with the pool now)
+        AtmoLayer.moveIn(true) -- marked for Default; commits and applies
     else
         History.commit()
         MGE.apply()
@@ -381,8 +351,7 @@ local function turnOn()
     return true
 end
 
----Default: the mod isn't playable, and the objects Playable moved into the atmo (AtmoLayer.FROM_KEY) are objects
----again, as many as there are free ids (the rest stay in the atmo, said so). One undo step
+---Default: not playable, and objects Playable moved return as far as ids allow. One undo step
 local function turnOff()
     local marked = {}
     for _, obj in ipairs(ModData.parsed.atmo or {}) do
@@ -394,7 +363,7 @@ local function turnOff()
     local back = AtmoLayer.returnObjects(marked)
     for i = 1, back do marked[i].selected = true end
     History.commit()
-    MGE.apply() -- the working copy without its pool
+    MGE.apply()
     local note = ""
     if back > 0 then note = ", " .. back .. " objects back" end
     MGE.say("atmo: Default (drawn only)" .. note)
@@ -404,8 +373,7 @@ local function turnOff()
     end
 end
 
----The World tab's Atmo row (Playable / Default). Playable: a playable mod (see the header), tested in the editor. Default: an
----ordinary mod again, the objects Playable moved into the atmo back (turnOff). Each is one undo step
+---The World tab's Atmo switch (Playable / Default), one undo step
 ---@param on boolean
 ---@return boolean changed
 function Playable.setPlayable(on)
@@ -423,37 +391,34 @@ end
 
 ---------------------------------------------------------------------------------------------------- playing in the editor
 
--- how drawn props fly while testing in the editor (Atmo Play's Dynamics.LEVELS), Settings > Detail (config.cfg):
--- the player's computer, not the mod. Atmo Play has its own (its window's Detail)
-Playable.flightLevel = Dynamics.DEFAULT_LEVEL
--- the flying props' ghosts (Playable.drawGhosts), Settings > Ghosts (config.cfg propGhosts): off saves their work
-Playable.ghosts = true
--- flying props far from every player pause (Atmo Play's far props), Settings > Distant (config.cfg propPauseFar)
-Playable.pauseFar = false
+-- editor test settings (Settings, config.cfg), not part of the mod
+Playable.flightLevel = Dynamics.DEFAULT_LEVEL -- how drawn props fly (Dynamics.LEVELS)
+Playable.ghosts = true -- flying props' move predictions
+Playable.pauseFar = false -- props far from every player pause
 
 local PLAY_HOOKS = MGE.hookname .. "_playable"
 ---@type AtmoPlayDriver?
 local driver = nil
 ---@type table? the props in fights (Atmo Play's dynamics.lua), nil without props
 local dynamics = nil
----@type number? the player's replaycache while props have it off (cached replays misplace them, as in Atmo Play)
+---@type number? the player's replaycache while props have it off (cached replays misplace them)
 local cacheBefore = nil
 
 ---Settings > Ghosts
 ---@param on boolean
 function Playable.setGhosts(on)
     Playable.ghosts = on and true or false
-    if not Playable.ghosts and dynamics then Dynamics.dropPrediction(dynamics) end -- its memory goes at once
+    if not Playable.ghosts and dynamics then Dynamics.dropPrediction(dynamics) end
 end
 
----Settings > Distant: pause (true) or move; the props playing now take it from the next fight
+---Settings > Distant; current props take it from the next fight
 ---@param on boolean
 function Playable.setPauseFar(on)
     Playable.pauseFar = on and true or false
     if dynamics then Dynamics.setPauseFar(dynamics, Playable.pauseFar) end
 end
 
----Settings > Detail: how drawn props fly (Dynamics.LEVELS); the props playing now take it from the next fight
+---Settings > Detail; current props take it from the next fight
 ---@param level string
 function Playable.setFlightLevel(level)
     Playable.flightLevel = Dynamics.level(level)
@@ -474,7 +439,7 @@ local function setReplayCache(withProps)
     end
 end
 
----Runs a dynamics.lua call; an error stops the props (proof of concept), not the static pool
+---Runs a Dynamics call; an error stops the props, not the static pool
 local function runDynamics(fn, ws)
     if not dynamics then return end
     local ok, err = pcall(fn, dynamics, ws)
@@ -485,23 +450,20 @@ local function runDynamics(fn, ws)
     end
 end
 
----After every reload (main.lua's match_begin, inside /lm): for a playable mod, a driver for the pool that's
----in the world now (the loaded file's own pool: MGE's working copy or the opened mod), placed for this fight.
----It also follows the mod's own dynamic objects, and with props their pool moves too (drawn by MGE:
----Playable.movedGhost)
+---After every reload: a driver for the loaded file's pool (and props), placed for this fight
 function Playable.onMatchBegin()
     driver, dynamics = nil, nil
-    -- every way out without props gives the player's replay cache back (setReplayCache(false))
+    -- every exit without props restores the replay cache
     if not Playable.isOn() then
         setReplayCache(false)
         return
     end
     local loaded = ModData.loadedPlayable
-    if not (loaded and loaded.poolObjects) then -- the world has no pool (e.g. an old working copy)
+    if not (loaded and loaded.poolObjects) then
         setReplayCache(false)
         return
     end
-    -- an opened mod's pools were planned for its atmo (main.lua forgets the key when another mod opens)
+    -- an opened mod's pools were planned for its atmo
     Playable.loadedKey = Playable.loadedKey or Playable.poolSplitKey(ModData.parsed.atmo)
     local colliders, props = Playable.colliders(ModData.parsed.atmo)
     local pool, err = Pool.new(loaded.poolObjects, colliders, ModData.parsed.playable)
@@ -515,8 +477,7 @@ function Playable.onMatchBegin()
     for _, object in ipairs(loaded.dynamicObjects or {}) do skip[object.id] = true end
     driver.follow = Driver.dynamicIds(skip)
     if #props > 0 then
-        -- follow: the mod's own dynamic objects push props too. Without a dynamic pool (props that never become
-        -- real) they still fly drawn (thrust, hits)
+        -- the mod's dynamic objects push props too
         local params = { dradius = ModData.parsed.playable.dradius, follow = driver.follow,
             statics = colliders, level = Playable.flightLevel, pauseFar = Playable.pauseFar }
         dynamics = Dynamics.new(loaded.dynamicObjects or {}, props, params)
@@ -525,19 +486,17 @@ function Playable.onMatchBegin()
     end
     setReplayCache(dynamics ~= nil and #dynamics.entries > 0)
     local ws = get_world_state()
-    runDynamics(Dynamics.matchBegin, ws) -- first: the static pool covers the props it takes
+    runDynamics(Dynamics.matchBegin, ws) -- first: the static pool covers the props
     Driver.matchBegin(driver, ws)
 end
 
----A prop's ghost where the prop is now (fights in the editor), else the ghost as it is. nil for a carried
----prop: its pool object shows it (painted its color), two drawn at one pose flickered
----@param index integer the atmo object's place in the Atmo list
----@param g AtmoGhost
----@return AtmoGhost?
--- one ghost per moved prop, by its Atmo list place, kept and updated in place (a copy of its ghost a frame for
--- thousands of flying props was most of the garbage MGE made)
+-- one reused ghost per moved prop (a copy a frame was most of MGE's garbage)
 local movedGhosts = {}
 
+---A prop's ghost where the prop is now, else g. nil for a carried prop (its pool object shows it)
+---@param index integer the atmo list index
+---@param g AtmoGhost
+---@return AtmoGhost?
 function Playable.movedGhost(index, g)
     if not dynamics then return g end
     if Dynamics.isCarried(dynamics, index) then return nil end
@@ -545,18 +504,16 @@ function Playable.movedGhost(index, g)
     if not pos then return g end
     local ghost = movedGhosts[index]
     if not ghost or ghost.from ~= g then
-        ghost = {}
-        for k, v in pairs(g) do ghost[k] = v end
+        ghost = ModData.copy(g)
         ghost.from = g
         movedGhosts[index] = ghost
     end
-    -- the prop's own pos and rotation (rotTB: drawn as it is, Highlight.drawBox), not a frame made from it
+    -- rotTB: drawn as is, no frame built
     ghost.pos, ghost.rotTB = pos, rot
     return ghost
 end
 
----draw3d (highlight.lua): the flying props' ghosts while the fight waits for the turn, as the game shows its
----objects' (Atmo Play's Dynamics.drawGhosts); with the mod's thrust this shows where each prop is headed
+---draw3d: the flying props' move predictions, like the game's own objects'
 ---@param onScreen (fun(x: number, y: number, z: number, r: number): boolean)? highlight.lua's view check
 function Playable.drawGhosts(onScreen)
     if not dynamics or not Playable.ghosts then return end
@@ -567,8 +524,7 @@ function Playable.drawGhosts(onScreen)
     end
 end
 
----draw2d, between physics steps: the pools follow the players once per new match frame from Driver.FIRST_FRAME
----on; replays move nothing, the game plays the recorded moves (driver.lua, dynamics.lua)
+---draw2d: the pools follow the players once per new match frame; replays move nothing
 function Playable.draw()
     if not driver then return end
     local ws = get_world_state()
@@ -581,18 +537,16 @@ function Playable.draw()
 end
 remove_hooks(PLAY_HOOKS)
 add_hook("draw2d", PLAY_HOOKS, function() Playable.draw() end)
--- replays are watched before anything is drawn (as Atmo Play does): the game has moved the pool objects to this frame
--- already and MGE draws the atmo in draw3d, before draw2d; watched there, a prop let go wasn't drawn for one frame
--- (its object parked, the prop still "carried") and a taken one was drawn twice. Fights stay in draw2d
+-- Replays are watched in pre_draw, before draw3d draws the atmo: in draw2d a released prop vanished for a
+-- frame and a taken one showed twice
 local function watchReplay()
     if not dynamics then return end
     local ws = get_world_state()
     if ws.replay_mode > 0 then runDynamics(Dynamics.draw, ws) end
 end
 add_hook("pre_draw", PLAY_HOOKS, watchReplay)
--- and every physics frame, drawn or not (enter_frame at frame t sees the state draw2d would): no let-go or take falls
--- between two drawn frames, the drawn flights start exactly as in the fight (Atmo Play's runtime.lua: onEnterFrame).
--- Fights and replays alike: where the players are this frame, for far props' pauses (the same pauses in both)
+-- and every physics frame, so no take or release falls between drawn frames; also samples players for
+-- far props' pauses (same in fights and replays)
 add_hook("enter_frame", PLAY_HOOKS, function()
     watchReplay()
     if dynamics and dynamics.pauseFar then runDynamics(Dynamics.sample, get_world_state()) end

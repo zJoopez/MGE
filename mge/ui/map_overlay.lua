@@ -1,21 +1,17 @@
--- Convert Map overlay, opened by the World list's Map row (ui/editor_misc.lua): the settings of
--- a map conversion (.vmf, or a compiled Source .bsp from assets/maps; mapconv/*.lua). Place (or Enter
--- in a field) goes on to the placement view (ui/map_place.lua), where the region to convert and where
--- the map sits are picked with the gizmo, and its Convert adds the boxes like an import, in one undo
--- step. The view's Settings button comes back here. The Map button opens the file picker over it.
--- Empty fields use the converter's defaults (shown as placeholders). Typed values, the picked map and
--- each map's placement are kept while the script runs. Clicking outside, Cancel or Esc closes it,
--- MGE.quit too (MGE.mapOverlay). Plan: docs/map-import-plan.md
+-- Convert Map overlay (World list's Map row): conversion settings for a .vmf / .bsp from assets/maps.
+-- Place (or Enter) opens the placement view (ui/map_place.lua), whose Convert adds the boxes in one
+-- undo step and whose Settings comes back here. Fields, map and placements persist while the script
+-- runs. Plan: docs/map-import-plan.md
 if MGE.mapOverlay and not MGE.mapOverlay.destroyed then return end
 
 local Widgets = MGE.Widgets
 local Rows = MGE.EditorRows
 local ModData = MGE.ModData
-local MapConv = MGE.loadMapConv() -- already loaded by the Map row, a no-op then
+local MapConv = MGE.loadMapConv() -- a no-op: the Map row loaded it
 local DEFAULTS = MapConv.DEFAULTS
 
-local MAPS_DIR = MGE.scriptPath .. "assets/maps" -- under data/script, like the object assets
-local RUN_HOOK = MGE.hookname .. "_mapconv" -- one-shot draw2d hook that runs the conversion
+local MAPS_DIR = MGE.scriptPath .. "assets/maps"
+local RUN_HOOK = MGE.hookname .. "_mapconv" -- one-shot draw2d hook running the action
 
 ---@class MapOverlayState kept while the script runs
 ---@field path string? picked map, relative to MAPS_DIR
@@ -66,7 +62,7 @@ local FIELDS = {
         info = "Simplify: how much thicker joined floor tiles and\nstrips may get (bumps, tilt), map units." },
 }
 
-local px = Widgets.px -- MGE's overall size (Widgets.UI_SCALE)
+local px = Widgets.px
 local PANEL_W = px(420)
 local PAD = px(12)
 local TITLE_H = px(44)
@@ -78,7 +74,7 @@ local BUTTON_H = px(32)
 local ROWS = 1 + #FIELDS + 2 -- Map, fields, Terrain and Clips
 local panelH = TITLE_H + ROWS * (ROW_H + ROW_GAP) + Widgets.INFO_HEIGHT * 2 + 8 + BUTTON_H + PAD * 2
 
-local overlay = TBMenu:spawnWindowOverlay(true) -- true: a click on the dark background closes it
+local overlay = TBMenu:spawnWindowOverlay(true) -- true: a click on the background closes it
 MGE.mapOverlay = overlay
 
 ---@type table<string, UIElement> inputs by field key
@@ -86,24 +82,23 @@ local inputs = {}
 
 local defaultKillAction = overlay.killAction
 overlay.killAction = function()
-    -- kept for the next opening (the placement view's Settings, the Map row). Not skipped for destroyed
-    -- inputs: UIElement:kill destroys the children before this runs, their text is still there
+    -- kept for the next opening; destroyed inputs still have their text
     for key, input in pairs(inputs) do
         if input.textfieldstr then state.texts[key] = input.textfieldstr[1] or "" end
     end
-    remove_hooks(RUN_HOOK) -- a conversion waiting to run is dropped with the overlay
+    remove_hooks(RUN_HOOK)
     if defaultKillAction then defaultKillAction() end
-    Widgets.releaseKeyboard(overlay) -- the fields would otherwise stay in toriui's keyboard list
+    Widgets.releaseKeyboard(overlay)
     if MGE then MGE.mapOverlay = nil end
 end
 
 local panel = overlay:addChild({
     pos = { (WIN_W - PANEL_W) / 2, (WIN_H - panelH) / 2 },
     size = { PANEL_W, panelH },
-    bgColor = Widgets.CONTENT_BG, -- like MGE's lists and editor
+    bgColor = Widgets.CONTENT_BG,
     shapeType = ROUNDED,
     rounded = 5,
-    interactive = true, -- clicks on the panel don't reach the background's close handler
+    interactive = true, -- clicks don't reach the background's close handler
 })
 
 local title = panel:addChild({
@@ -112,8 +107,7 @@ local title = panel:addChild({
 })
 title:addAdaptedText(true, "Convert Map", nil, nil, Widgets.FONT, nil, Widgets.TITLE_SCALE)
 
----Row inside the panel: label on the left, "?" on the right when there's help, returns the space
----between them
+---A row: label, "?" at the end; returns the space between
 ---@param y number
 ---@param label string
 ---@param help string?
@@ -139,7 +133,6 @@ end
 
 local y = TITLE_H
 
--- Map: picked file, the button opens the picker over this overlay
 local mapRow = addRow(y, "Map", "A .vmf (Hammer map) or a compiled Source .bsp\n(CS:S, CS:GO, TF2...) from " .. MAPS_DIR ..
     ".\nNot CS 1.6 or CS2 maps.")
 Widgets.button(mapRow, { x = 0, y = 0, w = mapRow.size.w, h = ROW_H },
@@ -158,7 +151,7 @@ Widgets.button(mapRow, { x = 0, y = 0, w = mapRow.size.w, h = ROW_H },
     end, nil, Widgets.PANEL_STYLE)
 y = y + ROW_H + ROW_GAP
 
-local convert -- defined below, Enter in a field goes on to the placement view
+local convert -- defined below
 
 for _, field in ipairs(FIELDS) do
     local content = addRow(y, field.label, field.info)
@@ -169,18 +162,15 @@ for _, field in ipairs(FIELDS) do
             pos = { (i - 1) * (w + gap), 0 },
             size = { w, ROW_H },
         })
-        -- Enter converts; box counts (whole) step by 1 on the wheel
         local input = Rows.createInput(holder, function() convert() end, field.hints[i], { mode = "form", whole = field.whole })
         Widgets.closeOnEscape(input)
-        local text = state.texts[key] or ""
-        input.textfieldstr[1] = text
-        input.textfieldindex = #text
+        Rows.setText(input, state.texts[key] or "")
         inputs[key] = input
     end
     y = y + ROW_H + ROW_GAP
 end
 
----On / Off pair for a state flag, the current one lit
+---On / Off for a state flag
 ---@param label string
 ---@param key "clips"|"terrain"
 ---@param help string
@@ -227,7 +217,7 @@ end
 ---@return string? error
 local function readOptions()
     local options = { clips = state.clips, terrain = state.terrain }
-    -- the placement view's toggles (Simplify, Covered), kept from its last use
+    -- the placement view's toggles, from its last use
     if state.simplify ~= nil then options.simplify = state.simplify end
     if state.dropCovered ~= nil then options.dropCovered = state.dropCovered end
     for _, field in ipairs(FIELDS) do
@@ -245,7 +235,7 @@ local function readOptions()
     options.simplifyTolerance = simplifyTolerance
     if scale and scale <= 0 then return nil, "Scale must be above 0" end
     local free = freeIds()
-    -- objects first, then the atmo ones (Assets.addObjects' atmoExcess: the boxes after objectBudget)
+    -- objects first, then atmo (the boxes after objectBudget)
     budget = math.floor(budget or free) -- empty: every free object id, 0: every box to the atmo
     if budget < 0 or budget > free then return nil, "Budget must be 0-" .. free .. " (free object ids)" end
     local atmoCount = math.floor(typed("atmo") or 0) -- empty: none
@@ -253,11 +243,10 @@ local function readOptions()
     if budget + atmoCount < 1 then return nil, "Budget and Atmo are both 0" end
     options.scale, options.budget, options.minSize = scale, budget + atmoCount, minSize
     options.objectBudget = budget
-    -- region, anchor and yaw are picked in the placement view
-    return options
+    return options -- region, anchor and yaw come from the placement view
 end
 
----Field text for a number: scale to 0.0001, no trailing zeros
+---Field text for a number, no trailing zeros
 ---@param value number
 ---@param decimals integer
 ---@return string
@@ -265,9 +254,8 @@ local function fieldText(value, decimals)
     return MGE.EditorRows.formatNumberText(value, decimals)
 end
 
----The map's pieces (MapConv.pieces): read and built once per map and the options they depend on,
----kept while the script runs, so placing again and converting don't redo them. Only the entities of
----the map itself are kept (the anchor), its brushes and terrain grids are big
+---The map's pieces, cached per map and options while the script runs. Only the map's entities are kept
+---(for the anchor): brushes and terrain are big
 ---@param options MapConvOptions
 ---@return { key: string, map: MapFile, pieces: MapConvPiece[], report: MapConvReport }? cache
 ---@return string? error
@@ -276,8 +264,7 @@ local function loadPieces(options)
     local key = table.concat({ state.path, tostring(opts.terrain), opts.terrainTolerance, tostring(opts.clips),
         opts.slabThickness, opts.slabError }, "|")
     if state.cache and state.cache.key == key then return state.cache end
-    -- io.open, not Files: a .bsp is read in parts (dust2 is 325 MB, 9 MB of it is used). Desktop only,
-    -- like the rest of MGE. The game's io.open starts at data/script
+    -- io.open, not Files: a .bsp is read in parts (dust2 is 325 MB, 9 MB used). Desktop only
     local mapPath = MAPS_DIR .. "/" .. state.path
     local file = io.open(mapPath, "rb")
     if not file then return nil, "Can't read " .. state.path end
@@ -289,14 +276,13 @@ local function loadPieces(options)
     return state.cache
 end
 
----Opens the overlay again (the placement view's Settings button, Esc)
+---Reopens the overlay (the placement view's Settings, Esc)
 local function reopen()
     if MGE and not MGE.mapOverlay then dofile(MGE.scriptPath .. "ui/map_overlay.lua") end
 end
 
----Place: closes the overlay and opens the placement view (ui/map_place.lua) for the map. It starts
----where this map was placed last, else around the anchor entity (a T spawn) with a 1000 x 1000 unit
----region. Its Convert adds the boxes, its Settings comes back here; both keep the placement
+---Place: opens the placement view, at the map's last placement or around its anchor entity with a
+---1000 x 1000 region. Convert and Settings both keep the placement
 ---@param options MapConvOptions
 local function place(options)
     local cache, err = loadPieces(options)
@@ -318,13 +304,12 @@ local function place(options)
             max = { anchor[1] + 500, anchor[2] + 500, anchor[3] + 600 },
         }
     end
-    ---Keeps what the view picked: the placement for this map, the scale in the Scale field
+    ---Keeps the view's placement for this map, and the scale in its field
     ---@param p MapPlaced
     local function keep(p)
         state.placements[path] = { region = p.region, anchor = p.anchor, yaw = p.yaw, lift = p.lift }
         state.texts.scale = fieldText(p.scale, 4)
-        -- for every map
-        state.simplify = p.simplify
+        state.simplify = p.simplify -- for every map
         state.dropCovered = p.dropCovered
     end
     overlay:kill()
@@ -334,19 +319,17 @@ local function place(options)
         report = cache.report,
         options = opts,
         region = region,
-        anchor = { anchor[1], anchor[2], anchor[3] }, -- the view sets its height (ground)
+        anchor = { anchor[1], anchor[2], anchor[3] }, -- the view sets its height
         lift = lift or 0,
         onConvert = function(p)
             keep(p)
-            local convertOptions = {}
-            for k, v in pairs(opts) do convertOptions[k] = v end
+            local convertOptions = ModData.copy(opts)
             convertOptions.region, convertOptions.anchor, convertOptions.yaw, convertOptions.scale = p.region, p.anchor, p.yaw, p.scale
             local result = MapConv.convert(cache.map, convertOptions, cache.pieces, cache.report)
             if #result.objects == 0 then return nil, "No boxes in the region" end
-            -- run by the view once it's closed and MGE's window is shown again
+            -- run by the view once it's closed
             return function()
-                -- new ids, selected, one undo step, kept in place. The boxes after objectBudget (the
-                -- smallest, the converter's order) go to the atmo
+                -- in place, one undo step; boxes after objectBudget (the smallest) go to the atmo
                 MGE.Assets.addObjects(result.objects, false, false, nil, opts.objectBudget or true)
                 for _, line in ipairs(MapConv.reportLines(result.report)) do MGE.say("" .. line) end
             end
@@ -358,11 +341,10 @@ local function place(options)
     })
 end
 
-local pending -- label of the action waiting for the next frames, see defer
+local pending -- label of the deferred action
 
----Runs action a frame later, after the info line says what's happening: reading a big map pauses
----the game. A hook of its own, not the panel's draw: the action closes the overlay, which shouldn't
----happen while toriui is drawing it. Removed after running, or by the overlay's killAction
+---Runs action a frame later, after the info line shows (reading a big map pauses the game). In its own
+---hook: the action closes the overlay, which mustn't happen mid-draw
 ---@param label string
 ---@param action fun(options: MapConvOptions)
 local function defer(label, action)
@@ -381,14 +363,14 @@ local function defer(label, action)
     local frames = 0
     add_hook("draw2d", RUN_HOOK, function()
         frames = frames + 1
-        if frames < 2 then return end -- the info line is drawn once first
+        if frames < 2 then return end -- let the info line draw once
         remove_hook("draw2d", RUN_HOOK)
         pending = nil
         if not overlay.destroyed then action(options) end
     end)
 end
 
-convert = function() defer("Loading", place) end -- Enter in a field: on to the placement view
+convert = function() defer("Loading", place) end
 
 local buttonW = (PANEL_W - PAD * 2 - 8) / 2
 local buttonY = panelH - PAD - BUTTON_H

@@ -1,9 +1,8 @@
--- Players tab of the list area: one row per player. Click picks the player the players panel works on
--- (Main.selectedPlayer), Shift + click adds more players (Main.selectedPlayers): the gizmo, the
--- highlight and Import (the bottom bar) work on all of them, Export on the first selected one
+-- Players list: a row per player. Click picks one, Shift + click adds more (the gizmo, highlight and
+-- Import act on all, Export on the first)
 
 local player_list = {}
-MGE.PlayerList = player_list -- the shortcuts (main.lua) use its New / Duplicate / Delete
+MGE.PlayerList = player_list -- for the shortcuts
 
 local Main = MGE.Main
 local ModData = MGE.ModData
@@ -20,7 +19,7 @@ local function countParts(lines)
     return count
 end
 
----Where the player's model comes from in the mod file
+---Where the player's model comes from
 ---@param id integer
 ---@return string
 local function describeModel(id)
@@ -31,7 +30,7 @@ local function describeModel(id)
     return "default body"
 end
 
----Selects players (the new ones after New / Duplicate), the panel shows the first
+---Selects only these players, the panel shows the first
 ---@param ids integer[]
 local function selectOnly(ids)
     Main.selectedPlayers = {}
@@ -39,19 +38,19 @@ local function selectOnly(ids)
     if ids[1] then Main.selectedPlayer = ids[1] end
 end
 
----New player (Ctrl + N on the Players list): the default body, standing in front of the camera
+---New player: the default body, in front of the camera
 function player_list.newPlayer()
     local Players = MGE.Players
     local point = Players.exists(0) and MGE.Camera.spawnPoint(Players.bounds(0)) or nil
     Players.addNew(point, selectOnly)
 end
 
----Duplicate (Ctrl + D on the Players list): copies of the selected players next to them, selected
+---Duplicate: copies next to the selected players, selected
 function player_list.duplicate()
     MGE.Players.duplicate(Main.selectedPlayerList(), selectOnly)
 end
 
----Delete (Del on the Players list): asks first, like objects. A mod keeps at least one player
+---Delete: asks first; a mod keeps at least one player
 function player_list.deleteSelected()
     local list = Main.selectedPlayerList()
     local count = #list
@@ -64,8 +63,8 @@ function player_list.deleteSelected()
         "?\nLater players move down to fill the numbers.\nUndo can bring them back."
     MGE.confirm(message, function()
         MGE.Players.remove(list, function(map)
-            Main.selectedPlayers = {} -- like objects: nothing selected after a delete
-            -- the panel stays on the same player when it's kept, else the one now at its number
+            Main.selectedPlayers = {}
+            -- the panel keeps its player, else the one now at its number
             local picked = map[Main.selectedPlayer]
             Main.selectedPlayer = picked or 0
             if not picked then
@@ -77,8 +76,7 @@ function player_list.deleteSelected()
     end)
 end
 
----Export (the bottom bar): saves one player's model, the first selected player's (lowest number).
----Players on the default body have nothing to save, Assets says so
+---Export: the first selected player's model
 function player_list.exportFirst()
     local first = Main.selectedPlayerList()[1]
     if not first then
@@ -88,8 +86,7 @@ function player_list.exportFirst()
     MGE.Assets.exportPlayer(first)
 end
 
----Reset model (the Players Core tab's Model row): the selected players with a model of their own (a
----`player N` section) back on the default body. One undo step, the mod reloads
+---Model Reset: players with their own section back on the default body, one undo step
 ---@param players integer[]
 function player_list.resetModels(players)
     local map, any = {}, false
@@ -97,9 +94,9 @@ function player_list.resetModels(players)
         if FileHandler.getPlayerLines(ModData.parsed, id) then map[id], any = false, true end
     end
     if not any then return end
-    FileHandler.renumberPlayers(ModData.parsed, map) -- false: the section goes, the other players keep theirs
+    FileHandler.renumberPlayers(ModData.parsed, map) -- false: the section goes
     MGE.History.commit()
-    MGE.apply() -- body changes need a reload
+    MGE.apply()
 end
 
 ---@return boolean every player is selected
@@ -112,9 +109,7 @@ end
 
 ---@param view UIElement list area, emptied by the caller
 function player_list.create(view)
-    -- the object list's buttons under the list, same order: Select all, New, Duplicate, Import (gives every
-    -- selected player the picked model), Export (one model: the first selected player's), Delete.
-    -- New / Duplicate change numplayers (at most Players.MAX), Delete keeps one player
+    -- the Objects list's buttons, same order
     local barIcons = Main.setListActions({
         { label = "Select / deselect all players (Ctrl + A)", icon = MGE.scriptPath .. "textures/selectall.tga", wide = true,
             onClick = function() Main.toggleSelectAllPlayers() end },
@@ -127,13 +122,9 @@ function player_list.create(view)
         { label = "Export the first selected player's model", icon = MGE.scriptPath .. "textures/export.tga", wide = true,
             onClick = player_list.exportFirst },
         { label = "Delete selected players (Del)", icon = "../textures/menu/general/buttons/trash.tga", wide = true,
-            onClick = player_list.deleteSelected }, -- asks first
+            onClick = player_list.deleteSelected },
     })
-    -- lit while every player is selected, like the object list's (after the hover popup, same slot)
-    local selectAllButton = barIcons[1] --[[@as UIElement]]
-    MGE.Widgets.addDrawBefore(selectAllButton, function()
-        selectAllButton.bgColor = allSelected() and MGE.Widgets.ACTIVE_COLOR or Main.ACTIONS_BG
-    end)
+    Main.lightWhile(barIcons[1], allSelected)
 
     local ids = {}
     for i = 0, Main.getPlayerCount() - 1 do table.insert(ids, i) end
@@ -146,7 +137,6 @@ function player_list.create(view)
         })
         info:addAdaptedText(describeModel(id), nil, nil, MGE.Widgets.FONT, RIGHTMID, MGE.Widgets.TEXT_SCALE_SMALL, nil, nil)
         if Main.selectedPlayers[id] then row.bgColor = ScrollList.selectedColor end
-        -- click picks the player, Shift + click adds / removes it (Main.selectPlayer rebuilds the list)
         row:addMouseUpHandler(function() Main.selectPlayer(id, get_keyboard_shift() ~= 0) end)
     end)
 end

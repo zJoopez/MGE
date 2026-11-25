@@ -1,66 +1,34 @@
--- Click anything in the world to select it, whichever list shows (pickAny): a joint's anchor (any joint
--- on the Joints list, which draws them; elsewhere the ones the game shows, visible 1), else the nearest
--- player or object under the cursor. A joint, player or object from another list switches the list to
--- Joints / Players / Objects with only it selected; on its own list a click selects only it, Shift +
--- click adds / removes it (ModData.clickSelect, Main.selectPlayer, Main.selectJoint, like the lists).
--- Objects don't switch away from the Joints list: its Link tab picks them for the current slot's draft
--- (Joints.offerDraft), on Properties one starts a new joint in the lowest empty slot.
--- Atmo objects (utils/atmo_layer.lua) are picked on the Objects list (ghosts) and the Atmo list (in color),
--- the other lists don't show them. Like other kinds, one clicked from the Objects list switches to the
--- Atmo list with only it selected, an object clicked on the Atmo list back to Objects. A box selects the
--- shown list's own kind.
---
--- Shift + drag draws a box and adds what's in it to the current list's selection (no list switch):
--- objects any of its rays hits (a grid of rays over the box plus one through every object center in
--- it, nearest hit per ray, so hidden objects stay unselected), players with a joint in it, joint
--- anchors in it (not on the Link tab). Shift + press never turns the camera, a Shift press released
--- without moving is the usual Shift + click.
---
--- The click is turned into a camera ray by MGE itself and intersected exactly with every object's
--- shape (box, sphere, capsule). The nearest hit along the ray wins, so objects in front block the
--- ones behind them.
---
--- To build the ray, the camera's projection is measured each click: get_screen_pos is called for
--- three points around the look-at point (always on screen) and the click is mapped back through
--- that projection. Approaches tried before (don't switch back):
---   * engine raycast (create_raycast_body + shoot_camera_ray): picks inaccurately in game
---   * object outlines projected with get_screen_pos: off-screen points come back unusable, so
---     objects partly off screen (close ones, large ones below) couldn't be picked
+-- World clicks select whatever is under the cursor (pickAny): a joint anchor first, else the nearest
+-- player or object (or atmo ghost on the Objects / Atmo lists). Something from another list switches to
+-- its list with only it selected; on its own list it's the usual click / Shift + click select.
+-- Shift + drag box-selects into the current list (rays: hidden objects stay out); Ctrl + Shift takes
+-- everything inside.
+-- Rays come from the camera projection measured with get_screen_pos and are intersected exactly with each
+-- shape. Don't switch to the engine raycast (inaccurate) or projecting outlines (fails off screen)
 require("toriui.uielement3d") -- Utils3D.MatrixToMatrixTB
 
 local ModData = MGE.ModData
 local SHAPE = MGE.SHAPE
-local HOOK_SET = MGE.hookname .. "_worldselect" -- own set, MGE's draw3d hook is used by highlight
+local HOOK_SET = MGE.hookname .. "_worldselect" -- MGE's own draw3d slot is highlight's
 
 ---@class WorldSelect
 local WorldSelect = {
-    clickMoveLimit = 4, -- pixels the mouse may move between down and up to still count as a click
-    clicksOff = false, -- true: clicks in the world don't select, only the gizmo works (ui/map_place.lua)
-    boxGridStep = 12, -- box select: pixels between its rays
-    boxGridMax = 40, -- box select: at most this many rays + 1 per side (big boxes get a coarser grid)
+    clickMoveLimit = 4, -- pixels between down and up that still count as a click
+    clicksOff = false, -- only the gizmo takes clicks (ui/map_place.lua)
+    boxGridStep = 12, -- box select: pixels between rays
+    boxGridMax = 40, -- box select: most rays + 1 per side
 }
 
----@type { x: number, y: number, box: boolean?, endX: number?, endY: number?, moved: boolean? }? box:
----a Shift press, dragging draws a box (endX / endY the mouse, moved once past clickMoveLimit)
+---@type { x: number, y: number, box: boolean?, endX: number?, endY: number?, moved: boolean? }? box: a
+---Shift press (endX / endY the mouse, moved once past clickMoveLimit)
 local pressed = nil
 ---@type { x1: number, y1: number, x2: number, y2: number }? box waiting for the next draw3d
 local pendingBox = nil
----@type { x: number, y: number, additive: boolean }? click waiting for the next draw3d (get_screen_pos only works there)
+---@type { x: number, y: number, additive: boolean }? click waiting for draw3d (get_screen_pos works only there)
 local pendingClick = nil
 
-local function sub(a, b) return { a[1] - b[1], a[2] - b[2], a[3] - b[3] } end
-local function add(a, b) return { a[1] + b[1], a[2] + b[2], a[3] + b[3] } end
-local function scale(a, s) return { a[1] * s, a[2] * s, a[3] * s } end
-local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
-local function cross(a, b)
-    return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] }
-end
-local function length(a) return math.sqrt(dot(a, a)) end
-local function normalize(a)
-    local l = length(a)
-    if l < 1e-12 then return nil end
-    return scale(a, 1 / l)
-end
+local V = MGE.Mat3.vec
+local sub, add, scale, dot, cross, length, normalize = V.sub, V.add, V.scale, V.dot, V.cross, V.length, V.normalize
 
 ---@class CameraProjection
 ---@field eye number[]
@@ -75,8 +43,7 @@ end
 ---@field m22 number
 ---@field det number
 
--- measuring distances, as shares of the camera distance: far out first (less rounding), closer in when
--- those points are off screen (measureProjection)
+-- measuring offsets as shares of the camera distance: far first (less rounding), closer if off screen
 local MEASURE_SHARES = { 0.25, 0.05 }
 
 ---Screen position of target + dir * e, nil off screen (get_screen_pos, draw3d only)
@@ -87,17 +54,14 @@ local function screenAt(target, dir, e)
     return x, y
 end
 
--- the projection measured this frame: the gizmo and the highlight both ask in their draw3d, measured once.
--- Only within a frame (UIElement.frameIndex): a cache kept while get_camera_info stayed the same froze a
--- measurement taken while the drawn view was still easing toward that camera (after selecting, a reload),
--- the gizmo stayed off and clicks missed until the camera was turned
+-- Measured once a frame (gizmo and highlight both ask). Not cached by camera info: the drawn view eases
+-- toward the camera, and a frozen measurement left the gizmo off until the camera moved
 ---@type CameraProjection?
 local frameProjection = nil
 local frameMeasured = nil -- UIElement.frameIndex it was measured in
 
----Measures the camera's projection. Must be called from draw3d (uses get_screen_pos), the result
----stays valid while the camera doesn't move, so mouse events can use the one from the last frame. A
----second call in the same frame gives the same one (callers only read it)
+---The camera's projection, once a frame (read-only). Call from draw3d (uses get_screen_pos); mouse events
+---can reuse the last frame's
 ---@return CameraProjection?
 function WorldSelect.measureProjection()
     local frame = UIElement and UIElement.frameIndex
@@ -106,7 +70,7 @@ function WorldSelect.measureProjection()
     return frameProjection
 end
 
----Measures the camera's projection now (measureProjection: once a frame)
+---Measures the camera's projection now, uncached
 ---@return CameraProjection?
 function WorldSelect.measureProjectionNow()
     local info = get_camera_info()
@@ -119,12 +83,9 @@ function WorldSelect.measureProjectionNow()
     local right = normalize(cross(forward, { 0, 0, 1 })) or { 1, 0, 0 } -- straight down: any right works
     local up = cross(right, forward)
 
-    -- measure the projection: screen offset = M * (sideways / depth) for points around the target.
-    -- get_screen_pos gives whole pixels: measured 5% of the distance out (about 50 pixels) the half pixel
-    -- of rounding made M up to 1% off, handles far from the screen center a few pixels, a little
-    -- different every frame while the camera moved: the gizmo shook until it stopped. Points on both
-    -- sides, a quarter of the distance out: the pairs' average is the center, their difference M, the
-    -- rounding about 10 times smaller. Closer in when those would be off screen (MEASURE_SHARES)
+    -- screen offset = M * (sideways / depth). get_screen_pos rounds to pixels, so measure pairs on both
+    -- sides far out: their average is the center, their difference M, with ~10x less rounding (close
+    -- points made the gizmo shake)
     for _, share in ipairs(MEASURE_SHARES) do
         local e = dist * share
         local rx1, ry1 = screenAt(target, right, e)
@@ -147,7 +108,7 @@ function WorldSelect.measureProjectionNow()
     return nil
 end
 
----Camera ray through a screen position, for a measured projection (works outside draw3d)
+---Camera ray through a screen position for a measured projection (works outside draw3d)
 ---@param p CameraProjection
 ---@param x number
 ---@param y number
@@ -159,8 +120,8 @@ function WorldSelect.rayFrom(p, x, y)
     return p.eye, normalize(add(p.forward, add(scale(p.right, a), scale(p.up, b))))
 end
 
----Screen position of a world point for a measured projection, the inverse of rayFrom. Works off
----screen too (get_screen_pos gives unusable values there) and outside draw3d (the gizmo draws in draw2d)
+---Screen position of a world point (inverse of rayFrom). Unlike get_screen_pos, works off screen and
+---outside draw3d
 ---@param p CameraProjection
 ---@param point number[]
 ---@return number? x, number? y nil when the point is behind the camera
@@ -172,7 +133,7 @@ function WorldSelect.project(p, point)
     return p.cx + p.m11 * a + p.m12 * b, p.cy + p.m21 * a + p.m22 * b
 end
 
----Camera ray through a screen position. Must be called from draw3d (uses get_screen_pos)
+---Camera ray through a screen position. Call from draw3d
 ---@param x number
 ---@param y number
 ---@return number[]? origin, number[]? direction normalized
@@ -182,8 +143,7 @@ function WorldSelect.cameraRay(x, y)
     return WorldSelect.rayFrom(p, x, y)
 end
 
----World directions of an object's local axes. get_obj_rot is row-major, the axes are its columns
----(same as the editor's scale code)
+---An object's local axes in world space: get_obj_rot's columns (row-major)
 ---@param id integer 0-based object id
 ---@return number[][]
 local function getLocalAxes(id)
@@ -220,7 +180,7 @@ local function hitBox(origin, dir, center, axes, half)
             if tmin > tmax then return nil end
         end
     end
-    return tmin >= 0 and tmin or nil -- negative: camera inside the box, can't pick it from there
+    return tmin >= 0 and tmin or nil -- negative: camera inside the box
 end
 
 ---Distance along the ray to a capsule (segment a-b with radius)
@@ -247,7 +207,7 @@ local function hitCapsule(origin, dir, a, b, radius)
     return best
 end
 
--- ray hits, also used by the gizmo's handles (utils/gizmo.lua)
+-- also used by the gizmo's handles
 WorldSelect.hitSphere, WorldSelect.hitBox, WorldSelect.hitCapsule = hitSphere, hitBox, hitCapsule
 
 ---@class WorldSelectShape a world object read once for many ray tests (box select)
@@ -258,85 +218,48 @@ WorldSelect.hitSphere, WorldSelect.hitBox, WorldSelect.hitCapsule = hitSphere, h
 
 ---@param id integer 0-based object id
 ---@return WorldSelectShape?
+---A ray-test shape. Sphere: sx radius; pill: sx radius, sy straight length along axes[3]; box: full sides
+---@param kind "sphere"|"pill"|"box"
+---@param center number[]
+---@param axes number[][]? local axes in world space (not needed for spheres)
+---@param radius number? bounding sphere, default from the sides
+---@return WorldSelectShape
+local function rayShape(kind, center, axes, sx, sy, sz, radius)
+    if kind == "sphere" then
+        return { center = center, radius = radius or sx, hit = function(o, d) return hitSphere(o, d, center, sx) end }
+    end
+    if kind == "pill" then
+        local halfAxis = scale(axes[3], sy / 2)
+        local a, b = sub(center, halfAxis), add(center, halfAxis)
+        return { center = center, radius = radius or sy / 2 + sx, hit = function(o, d) return hitCapsule(o, d, a, b, sx) end }
+    end
+    local half = { sx / 2, sy / 2, sz / 2 }
+    return { center = center, radius = radius or length(half), hit = function(o, d) return hitBox(o, d, center, axes, half) end }
+end
+
+local SHAPE_KIND = { [SHAPE.SPHERE] = "sphere", [SHAPE.CAPSULE] = "pill" }
+local GHOST_KIND = { sphere = "sphere", cylinder = "pill" }
+
 local function objectShape(id)
     local x, y, z = get_obj_pos(id)
     if x == nil then return nil end
     local sx, sy, sz = get_obj_sides(id)
-    local shape = get_obj_shape(id)
-    local center = { x, y, z }
-    if shape == SHAPE.SPHERE then -- x radius
-        return { center = center, radius = sx, hit = function(o, d) return hitSphere(o, d, center, sx) end }
-    end
-    local axes = getLocalAxes(id)
-    if shape == SHAPE.CAPSULE then -- x radius, y length of the straight part along local z
-        local halfAxis = scale(axes[3], sy / 2)
-        local a, b = sub(center, halfAxis), add(center, halfAxis)
-        return { center = center, radius = sy / 2 + sx, hit = function(o, d) return hitCapsule(o, d, a, b, sx) end }
-    end
-    local half = { sx / 2, sy / 2, sz / 2 } -- box, full sizes
-    return { center = center, radius = length(half), hit = function(o, d) return hitBox(o, d, center, axes, half) end }
+    local kind = SHAPE_KIND[get_obj_shape(id)] or "box"
+    return rayShape(kind, { x, y, z }, kind ~= "sphere" and getLocalAxes(id) or nil, sx, sy, sz)
 end
 
----An atmo object's ghost (utils/atmo_layer.lua, AtmoLayer.ghost) as a shape for ray tests: the shape as
----it's drawn (its frame's columns are its axes, like a drawn object's rotation)
+---An atmo object's ghost as a ray-test shape (its frame's columns are its axes)
 ---@param obj FileParserEnvObj an atmo object
 ---@return WorldSelectShape?
 local function ghostShape(obj)
     local g = MGE.AtmoLayer.ghost(obj)
     if not g then return nil end
     local f, s = g.frame, g.sides
-    local center = { g.pos[1], g.pos[2], g.pos[3] }
-    local axes = { { f[1][1], f[2][1], f[3][1] }, { f[1][2], f[2][2], f[3][2] }, { f[1][3], f[2][3], f[3][3] } }
-    local shape
-    if g.shape == "sphere" then -- x radius
-        shape = { center = center, radius = g.radius, hit = function(o, d) return hitSphere(o, d, center, s[1]) end }
-    elseif g.shape == "cylinder" then -- a pill: x radius, y length of the straight part along local z
-        local halfAxis = scale(axes[3], s[2] / 2)
-        local a, b = sub(center, halfAxis), add(center, halfAxis)
-        shape = { center = center, radius = g.radius, hit = function(o, d) return hitCapsule(o, d, a, b, s[1]) end }
-    else
-        local half = { s[1] / 2, s[2] / 2, s[3] / 2 }
-        shape = { center = center, radius = g.radius, hit = function(o, d) return hitBox(o, d, center, axes, half) end }
-    end
+    local axes = MGE.Mat3.transpose(f)
+    local shape = rayShape(GHOST_KIND[g.shape] or "box", { g.pos[1], g.pos[2], g.pos[3] }, axes, s[1], s[2], s[3],
+        g.radius)
     shape.obj = obj
     return shape
-end
-
----Atmo objects can be picked: the Objects list draws them as ghosts, the Atmo list in color
----(utils/highlight.lua)
----@return boolean
-local function atmoListed()
-    local tab = MGE.Main and MGE.Main.listTab
-    return tab == "objects" or tab == "atmo"
-end
-
----Atmo object whose ghost is under the screen position, nearest along the camera ray. Must be
----called from draw3d. Every ghost counts
----@param x number
----@param y number
----@return FileParserEnvObj?
----@return number? distance along the ray
-function WorldSelect.pickAtmo(x, y)
-    local origin, dir = WorldSelect.cameraRay(x, y)
-    if not origin or not dir then return nil end
-    local best, bestT = nil, math.huge
-    local AtmoLayer = MGE.AtmoLayer
-    for _, obj in ipairs(ModData.parsed.atmo or {}) do
-        -- the ray against its cached sphere first (as nearSphere, below): the exact shape (closures, axes)
-        -- only for the few it can hit, not for every one of thousands on each click
-        local g = AtmoLayer.ghost(obj)
-        if g then
-            local ox, oy, oz = origin[1] - g.pos[1], origin[2] - g.pos[2], origin[3] - g.pos[3]
-            local c = ox * ox + oy * oy + oz * oz - g.radius * g.radius
-            local b = ox * dir[1] + oy * dir[2] + oz * dir[3]
-            if c <= 0 or (b < 0 and b * b >= c) then
-                local shape = ghostShape(obj)
-                local t = shape and shape.hit(origin, dir)
-                if t and t < bestT then best, bestT = obj, t end
-            end
-        end
-    end
-    return best, best and bestT
 end
 
 ---Whether the ray can reach the sphere at all (cheap test before the exact shape)
@@ -348,6 +271,37 @@ local function nearSphere(origin, dir, center, radius)
     return b < 0 and b * b >= c
 end
 
+local function byId(a, b) return a.id < b.id end
+
+---Atmo objects are pickable where they're drawn: the Objects and Atmo lists
+---@return boolean
+local function atmoListed()
+    local tab = MGE.Main and MGE.Main.listTab
+    return tab == "objects" or tab == "atmo"
+end
+
+---Atmo object whose ghost is under the screen position, nearest along the ray. Call from draw3d
+---@param x number
+---@param y number
+---@return FileParserEnvObj?
+---@return number? distance along the ray
+function WorldSelect.pickAtmo(x, y)
+    local origin, dir = WorldSelect.cameraRay(x, y)
+    if not origin or not dir then return nil end
+    local best, bestT = nil, math.huge
+    local AtmoLayer = MGE.AtmoLayer
+    for _, obj in ipairs(ModData.parsed.atmo or {}) do
+        -- cached bounding sphere first: the exact shape only for the few it can hit
+        local g = AtmoLayer.ghost(obj)
+        if g and nearSphere(origin, dir, g.pos, g.radius) then
+            local shape = ghostShape(obj)
+            local t = shape and shape.hit(origin, dir)
+            if t and t < bestT then best, bestT = obj, t end
+        end
+    end
+    return best, best and bestT
+end
+
 ---Distance along the ray to a world object, nil when missed
 ---@param id integer 0-based object id
 ---@return number?
@@ -356,7 +310,7 @@ function WorldSelect.hitObject(origin, dir, id)
     return s and s.hit(origin, dir)
 end
 
----Mod object under the screen position, nearest along the camera ray. Must be called from draw3d.
+---Mod object under the screen position, nearest along the ray. Call from draw3d
 ---@param x number
 ---@param y number
 ---@return FileParserEnvObj?
@@ -372,13 +326,10 @@ function WorldSelect.pick(x, y)
     return best, best and bestT
 end
 
----Joint whose anchor (the sphere the highlight draws, Highlight.anchorPickRadius) is under the screen
----position, nearest along the camera ray. Must be called from draw3d. Joints without a pos line have
----no anchor to click
+---Joint whose anchor halo is under the screen position, nearest along the ray. Call from draw3d
 ---@param x number
 ---@param y number
----@param visibleOnly boolean? only joints the game draws itself (visible 1): off the Joints list MGE
----draws no anchors, a hidden joint there would be an invisible target
+---@param visibleOnly boolean? only joints the game draws (visible 1): MGE draws anchors only on the Joints list
 ---@return FileParserEnvObjJoint?
 function WorldSelect.pickJoint(x, y, visibleOnly)
     local origin, dir = WorldSelect.cameraRay(x, y)
@@ -394,8 +345,7 @@ function WorldSelect.pickJoint(x, y, visibleOnly)
     return best
 end
 
--- player body part shapes (BodyInfo.shape): sphere x radius, box full sides, cylinder (pill) x radius
--- y length along its z, like objects
+-- BodyInfo.shape: sphere x radius, box full sides, cylinder (pill) x radius y length along z
 local BODY_SPHERE, BODY_CYLINDER = 0, 2
 
 ---Distance along the ray to a player's body part, nil when missed
@@ -404,18 +354,13 @@ local BODY_SPHERE, BODY_CYLINDER = 0, 2
 ---@return number?
 local function hitBody(origin, dir, player, id)
     local b = get_body_info(player, id)
-    local center, s, r = { b.pos.x, b.pos.y, b.pos.z }, b.sides, b.rot
-    if b.shape == BODY_SPHERE then return hitSphere(origin, dir, center, s.x) end
+    local s, r = b.sides, b.rot
+    local kind = b.shape == BODY_SPHERE and "sphere" or b.shape == BODY_CYLINDER and "pill" or "box"
     local axes = { { r.r0, r.r4, r.r8 }, { r.r1, r.r5, r.r9 }, { r.r2, r.r6, r.r10 } } -- columns: local axes
-    if b.shape == BODY_CYLINDER then
-        local halfAxis = scale(axes[3], s.y / 2)
-        return hitCapsule(origin, dir, sub(center, halfAxis), add(center, halfAxis), s.x)
-    end
-    return hitBox(origin, dir, center, axes, { s.x / 2, s.y / 2, s.z / 2 })
+    return rayShape(kind, { b.pos.x, b.pos.y, b.pos.z }, axes, s.x, s.y, s.z).hit(origin, dir)
 end
 
----Player under the screen position (its body parts and joints), nearest along the camera ray. Must be
----called from draw3d
+---Player whose body parts or joints are under the screen position, nearest along the ray. Call from draw3d
 ---@param x number
 ---@param y number
 ---@return integer? player 0-based
@@ -440,15 +385,12 @@ function WorldSelect.pickPlayer(x, y)
     return best, best and bestT
 end
 
----What a world click hits: a joint's anchor first (they sit on the faces between objects, the ray
----reaches an object first), else the nearer of a player and an object. Any joint on the Joints list
----(it draws every anchor, utils/highlight.lua), elsewhere only the ones the game shows (visible 1).
----Must be called from draw3d
+---What a world click hits: a joint anchor first (anchors sit on object faces, so the ray would reach
+---the object), else the nearer of a player and an object. Call from draw3d
 ---@param x number
 ---@param y number
 ---@return "joint"|"player"|"object"|nil kind
----@return any hit FileParserEnvObjJoint / player id (0-based) / FileParserEnvObj (an object, or on the
----Objects list an atmo one: its ghost, AtmoLayer.isAtmo tells)
+---@return any hit FileParserEnvObjJoint / 0-based player / FileParserEnvObj (possibly atmo)
 function WorldSelect.pickAny(x, y)
     local joint = WorldSelect.pickJoint(x, y, MGE.Main.listTab ~= "joints")
     if joint then return "joint", joint end
@@ -476,8 +418,7 @@ local function boxOf(x1, y1, x2, y2)
     return { left = math.min(x1, x2), top = math.min(y1, y2), right = math.max(x1, x2), bottom = math.max(y1, y2) }
 end
 
----Where a sphere can show on screen: the rectangle around its outline (generous, like the atmo drawing's
----culling). nil behind the camera, the whole screen around the camera
+---Generous screen rectangle a sphere can cover: nil behind the camera, everything around it
 ---@param p CameraProjection
 ---@param center number[]
 ---@param radius number
@@ -493,24 +434,19 @@ local function screenExtent(p, center, radius)
     return x - sr, y - sr, x + sr, y + sr
 end
 
--- box select's screen cells: each shape is listed in the cells its outline covers, a ray (a screen point)
--- tests only its cell's shapes. Pixels a side
+-- box select's screen cell size: a ray tests only the shapes listed in its cell
 local BOX_CELL = 24
 
----Objects the rays through a screen box hit: a grid of rays over it plus one through every object
----center inside it (small objects between the grid's rays), each ray takes only the nearest object, so
----objects hidden behind others aren't taken. Must be called from draw3d
----On the Objects list atmo objects' ghosts count too (ids aren't unique then: the order is loose)
+---Objects the rays through a screen box hit: a ray grid plus one ray per object center inside (small
+---objects), each taking only the nearest, so hidden objects stay out. Atmo ghosts count where listed
+---(ids then aren't unique: loose order). Call from draw3d
 ---@return FileParserEnvObj[] in id order
 function WorldSelect.pickBox(x1, y1, x2, y2)
     local p = WorldSelect.measureProjection()
     if not p then return {} end
     local box = boxOf(x1, y1, x2, y2)
-    -- Every ray was tested against every shape: with a converted map's thousands of atmo objects that froze
-    -- the game, worst with a box over the whole map. Now only shapes whose outline reaches the box count, each
-    -- listed in the screen cells (BOX_CELL) its outline covers, and a ray tests its own cell's shapes only. A
-    -- ray through a point can only hit a shape whose outline covers that point, so the picks are the same
-    -- (cellCols / cellRows: the ray grid below has its own cols / rows)
+    -- Shapes are binned into the screen cells their outline covers; a ray only tests its cell (testing
+    -- all shapes per ray froze big maps). Same picks: a ray can only hit shapes covering its point
     local cellCols = math.max(1, math.ceil((box.right - box.left) / BOX_CELL))
     local cellRows = math.max(1, math.ceil((box.bottom - box.top) / BOX_CELL))
     local cells = {}
@@ -541,10 +477,10 @@ function WorldSelect.pickBox(x1, y1, x2, y2)
             end
         end
     end
-    if atmoListed() then -- the ghosts too, they hide what's behind them like objects do
+    if atmoListed() then -- ghosts hide what's behind them like objects
         local AtmoLayer = MGE.AtmoLayer
         for _, obj in ipairs(ModData.parsed.atmo or {}) do
-            local g = AtmoLayer.ghost(obj) -- its cached sphere first, the ray shape only for ones on screen
+            local g = AtmoLayer.ghost(obj) -- cached sphere first, ray shape only for ones in the box
             if g then
                 local l, t, r, b = screenExtent(p, g.pos, g.radius)
                 if l and not (r < box.left or l > box.right or b < box.top or t > box.bottom) then
@@ -584,13 +520,12 @@ function WorldSelect.pickBox(x1, y1, x2, y2)
             end
         end
     end
-    table.sort(list, function(a, b) return a.id < b.id end)
+    table.sort(list, byId)
     return list
 end
 
----Everything whose center shows inside a screen box, hidden or not (Ctrl + Shift + drag): one projection per
----object, no rays, so a box over a whole converted map is instant. On the Objects list atmo ghosts count too.
----Must be called from draw3d
+---Everything whose center is inside a screen box, hidden or not (Ctrl + Shift + drag): projections only,
+---instant on big maps. Call from draw3d
 ---@return FileParserEnvObj[] in id order
 function WorldSelect.pickBoxThrough(x1, y1, x2, y2)
     local p = WorldSelect.measureProjection()
@@ -608,11 +543,11 @@ function WorldSelect.pickBoxThrough(x1, y1, x2, y2)
             if g and projectsInto(p, g.pos, box) then list[#list + 1] = obj end
         end
     end
-    table.sort(list, function(a, b) return a.id < b.id end)
+    table.sort(list, byId)
     return list
 end
 
----Players with a joint inside a screen box. Must be called from draw3d
+---Players with a joint inside a screen box. Call from draw3d
 ---@return integer[] 0-based
 function WorldSelect.pickPlayersBox(x1, y1, x2, y2)
     local p = WorldSelect.measureProjection()
@@ -633,8 +568,7 @@ function WorldSelect.pickPlayersBox(x1, y1, x2, y2)
     return list
 end
 
----Joints whose anchor is inside a screen box (all of them, the Joints list draws every anchor). Must be
----called from draw3d
+---Joints whose anchor is inside a screen box. Call from draw3d
 ---@return FileParserEnvObjJoint[]
 function WorldSelect.pickJointsBox(x1, y1, x2, y2)
     local p = WorldSelect.measureProjection()
@@ -649,28 +583,26 @@ function WorldSelect.pickJointsBox(x1, y1, x2, y2)
 end
 
 local function isOverUI(x, y)
-    return MGE.Widgets.isMouseOverUI(x, y) -- Widgets loads after this module, read on use
+    return MGE.Widgets.isMouseOverUI(x, y) -- Widgets loads after this module
 end
 
 local function isActive()
     local Main = MGE.Main -- created after this module loads
-    -- clicksOff: the map placement view, it hides the window but its gizmo takes clicks
+    -- clicksOff: the placement view hides the window but its gizmo takes clicks
     return Main and Main.window and (Main.window.displayed or WorldSelect.clicksOff) and not TB_MENU_INPUT_ISACTIVE
 end
 
--- The gizmo (utils/gizmo.lua, loads after this module) gets the mouse first: a press on one of its
--- handles starts a drag instead of a select, and returning 1 keeps the game from turning it into a
--- camera drag
+-- The gizmo gets the mouse first: a press on a handle starts a drag; returning 1 stops a camera drag
 add_hook("mouse_button_down", HOOK_SET, function(button, x, y)
     local Gizmo = MGE.Gizmo
     if Gizmo and Gizmo.isDragging() then return 1 end -- other buttons do nothing mid drag
     pressed = nil
     if button ~= 1 or not isActive() or isOverUI(x, y) then return end
     if Gizmo and Gizmo.press(x, y) then return 1 end
-    if WorldSelect.clicksOff then return end -- only the gizmo (map placement), drags still turn the camera
-    -- Shift: a drag draws a select box instead of turning the camera. Not while a one-shot pick waits
+    if WorldSelect.clicksOff then return end -- drags still turn the camera
+    -- Shift: a drag draws a select box instead of turning the camera
     if get_keyboard_shift() ~= 0 and not WorldSelect.picking then
-        -- Ctrl too: everything inside the box, hidden ones included (pickBoxThrough). Not Alt: the game hides the cursor with it
+        -- Ctrl too: pickBoxThrough. Not Alt: the game hides the cursor with it
         pressed = { x = x, y = y, box = true, endX = x, endY = y, through = get_keyboard_ctrl() ~= 0 }
         return 1
     end
@@ -699,7 +631,7 @@ end)
 
 ---@type { x: number, y: number }? mouse position to test for the hovered object on the next draw3d
 local pendingHover = nil
----@type FileParserEnvObj? object under the cursor on the Joints list's Link tab (highlight.lua shows it)
+---@type FileParserEnvObj? object a click would pick (Link tab pick or one-shot pick), highlighted
 WorldSelect.hover = nil
 
 ---@return integer? the joint slot a world click links objects to (Main.linkSlot), nil when clicks select
@@ -708,16 +640,15 @@ local function linkSlot()
     return Main and Main.linkSlot and Main.linkSlot() or nil
 end
 
----The Link tab's slot while its Pick from world is on (Joints.worldPick): world clicks pick objects for it
+---The Link tab's slot while Pick from world is on: world clicks pick objects for it
 ---@return integer?
 local function linkPick()
     local slot = linkSlot()
     return slot and MGE.Joints and MGE.Joints.worldPick and slot or nil
 end
 
----@type { done: fun(obj: FileParserEnvObj), ended: fun()? }? a one-shot pick (the Core tab's color
----picker): the next world click hands its object to done instead of selecting, a click on nothing
----cancels. ended runs either way (and on cancelPick)
+---@type { done: fun(obj: FileParserEnvObj), ended: fun()? }? a one-shot pick (color picker): the next
+---click's object goes to done instead of selecting; nothing cancels. ended runs either way
 WorldSelect.picking = nil
 
 ---Starts a one-shot pick, replacing one in progress
@@ -728,7 +659,7 @@ function WorldSelect.startPick(done, ended)
     WorldSelect.picking = { done = done, ended = ended }
 end
 
----Ends a pick in progress without picking (Esc, its button again)
+---Ends a pick in progress without picking (Esc, its button)
 ---@return boolean cancelled one was in progress
 function WorldSelect.cancelPick()
     local p = WorldSelect.picking
@@ -737,8 +668,7 @@ function WorldSelect.cancelPick()
     return p ~= nil
 end
 
--- on the Link tab with Pick from world on, and while picking, the object under the cursor is highlighted:
--- it's what a click would pick. Tested only after the mouse moved, not every frame
+-- Hover is retested only after the mouse moved
 add_hook("mouse_move", HOOK_SET, function(x, y)
     local box = pressed and pressed.box and pressed
     if box then
@@ -754,17 +684,13 @@ add_hook("mouse_move", HOOK_SET, function(x, y)
     pendingHover = { x = x, y = y }
 end)
 
----A clicked object: with the Link tab's Pick from world on (Joints.worldPick) it's picked for the current
----slot's draft. On the Objects list the usual click select. From any other list, the Joints list too, it
----switches to Objects with only that object selected: a click on an object always gets you to it, picking
----for a joint is asked for with the button
+---A clicked object: picked for the Link draft when Pick from world is on, else click-selected on its
+---own list, else its list opens with only it selected
 ---@param obj FileParserEnvObj
 ---@param additive boolean
 local function clickObject(obj, additive)
     local Main = MGE.Main
     if obj.kind == "atmo" then
-        -- an atmo object: the usual click select on the Atmo list, from the Objects list it switches there
-        -- with only that one selected
         if Main.listTab == "atmo" then
             local selected = ModData.clickSelect(obj, additive)
             Main.updateWindow()
@@ -772,7 +698,7 @@ local function clickObject(obj, additive)
         else
             for _, other in ipairs(ModData.parsed.atmo) do other.selected = nil end
             obj.selected = true
-            Main.leaveGenerate("atmo") -- opens on Core when it was on Generate
+            Main.leaveGenerate("atmo")
             Main.setListTab("atmo")
         end
         return
@@ -782,53 +708,49 @@ local function clickObject(obj, additive)
         MGE.Joints.offerDraft(slot, obj.id)
     elseif Main.listTab == "objects" then
         local selected = ModData.clickSelect(obj, additive)
-        Main.updateWindow() -- list checkboxes and editor values follow the selection
-        if selected then Main.selectionMade() end -- Generate back to Core, camera follow, like the list
+        Main.updateWindow()
+        if selected then Main.selectionMade() end -- Generate back to Core, camera follow
     else
         for _, other in ipairs(ModData.parsed.env_obj) do other.selected = nil end
         obj.selected = true
-        Main.leaveGenerate("objects") -- opens on Core when it was on Generate
-        Main.setListTab("objects") -- rebuilds the window, camera follow frames the selection
+        Main.leaveGenerate("objects")
+        Main.setListTab("objects") -- rebuilds the window, camera follows
     end
 end
 
----A clicked player: the usual click select on the Players list, from any other list it switches there
----with only that player selected
+---A clicked player: click-selected on the Players list, else that list opens with only it selected
 ---@param player integer 0-based
 ---@param additive boolean
 local function clickPlayer(player, additive)
     local Main = MGE.Main
     if Main.listTab == "players" then
-        Main.selectPlayer(player, additive) -- Shift + click adds / removes, like objects
+        Main.selectPlayer(player, additive)
         return
     end
     Main.selectedPlayers, Main.selectedPlayer = { [player] = true }, player
-    Main.setListTab("players") -- rebuilds the window, camera follow frames the player
+    Main.setListTab("players")
 end
 
----A clicked joint anchor: the usual click select on the Joints list, from any other list it switches
----there with only that joint selected (on the Joints tab used last)
+---A clicked joint anchor: click-selected on the Joints list, else that list opens with only it selected
 ---@param joint FileParserEnvObjJoint
 ---@param additive boolean
 local function clickJoint(joint, additive)
     local Main = MGE.Main
     if Main.listTab == "joints" then
-        Main.selectJoint(joint.id, additive) -- Shift adds / removes it, like its cell
-        Main.updateWindow() -- the list's cells follow (a cell click restyles them itself)
+        Main.selectJoint(joint.id, additive)
+        Main.updateWindow()
         return
     end
     Main.selectJointsOnly({ joint.id })
-    Main.setListTab("joints") -- rebuilds the window, camera follow frames the joint's objects
+    Main.setListTab("joints")
 end
 
----A Shift + drag box: what's in it is added to the current list's selection. Objects / atmo: the ones it
----shows (in front), with Ctrl (b.through) everything inside it
+---A Shift + drag box adds what's in it to the current list's selection (b.through: hidden ones too)
 ---@param b { x1: number, y1: number, x2: number, y2: number, through: boolean? }
 local function boxSelect(b)
     local Main = MGE.Main
     if Main.listTab == "objects" or Main.listTab == "atmo" then
-        -- the shown list's layer: objects, or the atmo objects (ghosts in front still hide what's behind)
-        local atmo, any = Main.listTab == "atmo", false
+        local atmo, any = Main.listTab == "atmo", false -- only the shown list's layer
         local pick = b.through and WorldSelect.pickBoxThrough or WorldSelect.pickBox
         for _, obj in ipairs(pick(b.x1, b.y1, b.x2, b.y2)) do
             if (obj.kind == "atmo") == atmo then
@@ -836,8 +758,8 @@ local function boxSelect(b)
             end
         end
         if not any then return end
-        Main.updateWindow() -- list checkboxes and editor values follow the selection
-        Main.selectionMade() -- Generate back to Core, camera follow
+        Main.updateWindow()
+        Main.selectionMade()
     elseif Main.listTab == "players" then
         local players = WorldSelect.pickPlayersBox(b.x1, b.y1, b.x2, b.y2)
         if not players[1] then return end
@@ -845,7 +767,7 @@ local function boxSelect(b)
         Main.selectedPlayer = players[#players]
         Main.updateWindow()
         MGE.Camera.followPlayer(Main.selectedPlayerList())
-    elseif Main.listTab == "joints" and not linkPick() then -- Pick from world on: clicks pick objects for a draft
+    elseif Main.listTab == "joints" and not linkPick() then -- with Pick from world, clicks pick objects
         local last
         for _, joint in ipairs(WorldSelect.pickJointsBox(b.x1, b.y1, b.x2, b.y2)) do
             if not Main.selectedJoints[joint.id] then
@@ -854,8 +776,8 @@ local function boxSelect(b)
             end
         end
         if not last then return end -- nothing new
-        Main.selectJoint(last, true) -- adds the last one as the current slot, drops another slot's draft
-        Main.updateWindow() -- the list's cells follow
+        Main.selectJoint(last, true) -- the last one becomes the current slot
+        Main.updateWindow()
     end
 end
 
@@ -865,7 +787,7 @@ add_hook("draw2d", HOOK_SET, function()
     if not b or not b.box or not b.moved then return end
     local l, t = math.min(b.x, b.endX), math.min(b.y, b.endY)
     local r, btm = math.max(b.x, b.endX), math.max(b.y, b.endY)
-    -- orange while Ctrl makes it take everything inside (hidden ones too), blue: the ones in front
+    -- orange: everything inside (Ctrl), blue: the ones in front
     local through = b.through or get_keyboard_ctrl() ~= 0
     local c = through and { 1, 0.6, 0.2 } or { 0.35, 0.65, 1 }
     set_color(c[1], c[2], c[3], 0.15)
@@ -888,8 +810,8 @@ add_hook("draw3d", HOOK_SET, function()
     if not linkPick() and not picking then
         pendingHover, WorldSelect.hover = nil, nil
     elseif pendingHover then
-        -- only an object a click would pick for the draft: not one behind a joint's anchor or a player.
-        -- A pick (color picker) takes objects only, whatever is in front
+        -- Link pick: only an object a click would hit (not behind an anchor or player).
+        -- One-shot pick: objects only
         local ok, kind, hit
         if picking then
             ok, hit = pcall(WorldSelect.pick, pendingHover.x, pendingHover.y)
@@ -915,7 +837,6 @@ add_hook("draw3d", HOOK_SET, function()
         if picking.ended then picking.ended() end
         return
     end
-    -- whatever is under the cursor, whichever list shows: a joint, player or object switches to its list
     local ok, kind, hit = pcall(WorldSelect.pickAny, click.x, click.y)
     if not ok then
         MGE.say("world select error: " .. tostring(kind))
@@ -928,7 +849,6 @@ add_hook("draw3d", HOOK_SET, function()
     end
 end)
 
--- MGE.quit removes hooks of MGE.hookname only
 table.insert(MGE.onQuit, function()
     WorldSelect.picking = nil -- its ended callback would touch the closing window
     remove_hooks(HOOK_SET)

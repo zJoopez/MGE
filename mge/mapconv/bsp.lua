@@ -1,13 +1,8 @@
--- Map converter: reads compiled Source engine maps (.bsp, VBSP versions 19-21: CS:S, CS:GO, TF2, HL2,
--- Garry's Mod...) straight into the brushes and entities vmf.lua gives, no decompiler needed. A
--- compiled map keeps its brushes for collision: planes per side, and contents flags that say what is
--- solid for players (walls, floors, grates, glass) and what is a player clip. Which entity a brush
--- belongs to comes from the BSP tree of each brush model (*1, *2... in the entities' "model" key).
--- A brush entity's model is stored around its own origin: its "origin" and "angles" keys put it in the
--- map (Bsp.placeModel). Without them every func_brush (de_train's train cars) sat at the map's 0 0 0.
--- Terrain (displacements) has no brushes: its grids of points come as map.terrain, boxfit.lua turns
--- them into slabs. Only the lumps used are read (a map file is mostly packed textures: dust2 is 325 MB,
--- 9 MB of it is read). Reference: developer.valvesoftware.com/wiki/BSP_(Source)
+-- Map converter: reads compiled Source maps (.bsp VBSP 19-21: CS:S, CS:GO, TF2...) into the same
+-- brushes and entities as vmf.lua. Collision brushes carry planes and contents flags (solid / clip);
+-- brush models (*1, *2...) are placed by their entity's origin and angles. Displacements come as
+-- map.terrain. Only the needed lumps are read (dust2: 9 of 325 MB).
+-- Reference: developer.valvesoftware.com/wiki/BSP_(Source)
 MGE.MapConv = MGE.MapConv or {}
 local MapConv = MGE.MapConv
 
@@ -222,9 +217,8 @@ end
 ---@field n number[] the face's outward normal, the solid side is behind it
 ---@field material string
 
----Terrain grids, built like the compiler does (CCoreDispInfo::GenerateDispSurf): the face's corners
----start at the one nearest the displacement's start position, row i runs from corner 1 to 2 (between
----the 1-2 and 4-3 edges), point j along the row, then each point moves by its offset vector * distance
+---Terrain grids as the compiler builds them (CCoreDispInfo::GenerateDispSurf): corners from the one
+---nearest the start position, rows between the 1-2 and 4-3 edges, points moved by offset * distance
 ---@return MapTerrain[]
 local function readTerrain(lumps, planes, texinfo)
     local infos, infoCount = lumps.get(LUMP.DISPINFO, 176)
@@ -286,8 +280,8 @@ local function readTerrain(lumps, planes, texinfo)
     return terrain
 end
 
----Where a brush entity's model goes in the map: its "angles" (pitch yaw roll, degrees: Source turns by
----roll about x, then pitch about y, then yaw about z) and its "origin". nil when both are missing or zero
+---A brush model's placement from its entity's "angles" (pitch yaw roll: roll about x, pitch about y,
+---yaw about z) and "origin". nil when both are missing or zero
 ---@param props table<string, string> the entity's keys
 ---@return { rot: number[][], origin: number[] }?
 function Bsp.placeModel(props)
@@ -302,8 +296,7 @@ function Bsp.placeModel(props)
     return { rot = rot, origin = origin }
 end
 
----A model-space plane (n . p = d) in the map: the points turn and move, so the normal turns and the
----distance gains the normal's part of the move
+---A model-space plane (n . p = d) placed in the map: the normal turns, d gains the move along it
 ---@param plane { n: number[], d: number }
 ---@param place { rot: number[][], origin: number[] }
 ---@return { n: number[], d: number }

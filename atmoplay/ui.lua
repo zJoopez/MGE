@@ -1,6 +1,5 @@
--- Atmo Play's window, in MGE's look: Detail, Ghosts, Distant, Max draws and Quit through the runtime's silent setters, the
--- current choices lit. Nothing is redrawn per frame. The cross hides it behind a small "AP" button. Only atmoplay.lua
--- loads this file (MGE has its own window)
+-- Atmo Play's window in MGE's look: Detail, Ghosts, Distant, Max draws and Quit, the current choices lit (nothing
+-- redrawn per frame). The cross hides it behind a small "AP" button. Only atmoplay.lua loads this
 local NS = ATMOPLAY_LOADING
 
 ---@class AtmoPlayUI
@@ -74,16 +73,18 @@ local function run(set, value)
     UI.refresh()
 end
 
----A row: its label left, buttons sharing the rest. choices: { label, setter, value, isOn() }
-local function choiceRow(parent, y, label, choices, c)
+---A row: its label left, buttons sharing the rest, lit while get() is their value
+---@param choices { [1]: string, [2]: any }[] label, value
+local function choiceRow(parent, y, label, set, get, choices, c)
     local text = parent:addChild({ pos = { 0, y }, size = { UI.LABEL_W, UI.ROW_H } })
     text:addAdaptedText(true, label, nil, nil, FONTS.LMEDIUM, LEFTMID, UI.TEXT_SCALE)
     local x0 = UI.LABEL_W
     local w = (parent.size.w - x0 - UI.GAP * (#choices - 1)) / #choices
     for i, choice in ipairs(choices) do
+        local value = choice[2]
         local btn = button(parent, x0 + (i - 1) * (w + UI.GAP), y, w, UI.ROW_H, choice[1],
-            function() run(choice[2], choice[3]) end, c)
-        UI.lit[#UI.lit + 1] = { btn = btn, isOn = choice[4] }
+            function() run(set, value) end, c)
+        UI.lit[#UI.lit + 1] = { btn = btn, isOn = function() return get() == value end }
     end
 end
 
@@ -114,26 +115,23 @@ local function build()
     })
     local title = bar:addChild({ pos = { UI.PAD, 0 }, size = { UI.W - UI.PAD - UI.BAR_H, UI.BAR_H } })
     title:addAdaptedText(true, "Atmo Play", nil, nil, FONTS.LMEDIUM, LEFTMID, 0.7)
+    local function endDrag()
+        enable_mouse_camera_movement()
+        UI.dragging = false
+        if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end
+    end
     bar:addMouseHandlers(function(_, x, y)
         disable_mouse_camera_movement()
         UI.dragging = true -- UI.close gives the camera's mouse back if killed mid-drag
         bar.pressedPos.x, bar.pressedPos.y = x - window.pos.x, y - window.pos.y
-    end, function()
-        enable_mouse_camera_movement()
-        UI.dragging = false
-        if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end
-    end, function(x, y)
+    end, endDrag, function(x, y)
         if bar.hoverState == BTN_DN then
             local nx = math.max(0, math.min(x - bar.pressedPos.x, WIN_W - window.size.w))
             local ny = math.max(0, math.min(y - bar.pressedPos.y, WIN_H - window.size.h))
             window:moveTo(nx, ny)
             UI.pos = { nx, ny }
         end
-    end, nil, function()
-        enable_mouse_camera_movement()
-        UI.dragging = false
-        if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end
-    end)
+    end, nil, endDrag)
     TBMenu:spawnCloseButton(bar, { x = -UI.BAR_H, y = 0, w = UI.BAR_H, h = UI.BAR_H }, function() run(Runtime.setWindow, false) end,
         { default = c.bar, hover = c.hover, pressed = c.pressed, ui = { 1, 1, 1, 1 } })
 
@@ -142,28 +140,19 @@ local function build()
         size = { UI.W - UI.PAD * 2, h - UI.BAR_H - UI.PAD * 2 },
     })
     local y = 0
-    choiceRow(content, y, "Detail", {
-        { "Low", Runtime.setFlight, "simple", function() return settings.flight == "simple" end },
-        { "Medium", Runtime.setFlight, "shapes", function() return settings.flight == "shapes" end },
-        { "High", Runtime.setFlight, "full", function() return settings.flight == "full" end },
-    }, c)
+    choiceRow(content, y, "Detail", Runtime.setFlight, function() return settings.flight end,
+        { { "Low", "simple" }, { "Medium", "shapes" }, { "High", "full" } }, c)
     y = y + UI.ROW_H + UI.GAP
-    choiceRow(content, y, "Ghosts", {
-        { "On", Runtime.setGhosts, true, function() return settings.ghosts end },
-        { "Off", Runtime.setGhosts, false, function() return not settings.ghosts end },
-    }, c)
+    choiceRow(content, y, "Ghosts", Runtime.setGhosts, function() return settings.ghosts end,
+        { { "On", true }, { "Off", false } }, c)
     y = y + UI.ROW_H + UI.GAP
-    choiceRow(content, y, "Distant", {
-        { "Move", Runtime.setFarProps, false, function() return not settings.pauseFar end },
-        { "Pause", Runtime.setFarProps, true, function() return settings.pauseFar end },
-    }, c)
+    choiceRow(content, y, "Distant", Runtime.setFarProps, function() return settings.pauseFar end,
+        { { "Move", false }, { "Pause", true } }, c)
     y = y + UI.ROW_H + UI.GAP
     -- the nearest this many atmo shapes a frame: steadier fps on big maps
     local draws = {}
-    for i, n in ipairs({ 5000, 1000, 500 }) do
-        draws[i] = { tostring(n), Runtime.setMaxDraws, n, function() return settings.maxDraws == n end }
-    end
-    choiceRow(content, y, "Max draws", draws, c)
+    for i, n in ipairs({ 5000, 1000, 500 }) do draws[i] = { tostring(n), n } end
+    choiceRow(content, y, "Max draws", Runtime.setMaxDraws, function() return settings.maxDraws end, draws, c)
     y = y + UI.ROW_H + UI.GAP + UI.PAD
     button(content, 0, y, content.size.w, UI.ROW_H, "Quit Atmo Play", function() run(Runtime.stop) end, c)
 

@@ -1,18 +1,5 @@
--- World list tab's panel: things about the whole mod, not the selected objects
---   Name:    where Save writes (modmaker/<name>.tbm, MGE.renameProject's prompt), "mge" without a mod, never
---            "exp_..." (the exports' prefix); the exports use it
---   Message: the mod's `message` line (the game shows it in chat when the mod loads), one of the mod file's
---            lines before its objects (ModData.parsed.ignores). Typed, Enter applies it, empty removes it
---   Shader:  the atmo file's `shader` line (utils/atmo.lua: Atmo.state.header), a data/shader/<name>.inc. Loaded
---            in the game right away (Atmo.applyShader); players get it when they load the mod's atmo (Shaders &
---            Atmos > Atmos), Save writes it
---   Map:     Convert map (it was on the Advanced tab: adds a whole map, not about the selection)
---   Mod:     Reset all: loads the classic mod (/lm classic), asks first with unsaved changes
---   Atmo:    Playable / Default, a playable atmo mod (utils/playable.lua; it was on the Atmo list's Advanced tab, the
---            only row there that wasn't about the selection)
---   Export:  Atmo (data/atmospheres/MGE - exp_<name>.atmo) and Mod (exp_<name>.tbm, without its atmo): for
---            players without Atmo Play; Save keeps the atmo inside the mod
---   Credits: the last row
+-- World list panel, about the whole mod: Name (Save's target), Message, Shader, Map (Convert map),
+-- Mod (Reset all), Atmo (Playable / Default), Export, credits
 local Rows = MGE.EditorRows
 local Widgets = MGE.Widgets
 local ModData = MGE.ModData
@@ -39,17 +26,15 @@ local function setMessage(text)
     if not ModData.parsed.ignores then return end
     local i, current = findMessage()
     if (current or "") == text then return end
-    -- a new list, the old one stays as it is: the undo history shares these lines between its steps and
-    -- tells them apart by the table (utils/history.lua: never modified, only replaced)
-    local ignores = {}
-    for k, line in ipairs(ModData.parsed.ignores) do ignores[k] = line end
+    -- replaced, not modified: undo states share it
+    local ignores = ModData.copy(ModData.parsed.ignores)
     ModData.parsed.ignores = ignores
     if text == "" then
         table.remove(ignores, i)
     elseif i then
         ignores[i] = "message " .. text
     else
-        -- after the #! and version lines, where the game's own mods have it
+        -- after the #! and version lines, like the game's mods
         local at = 1
         while ignores[at] and (ignores[at]:match("^#!") or ignores[at]:match("^%s*version%s")) do at = at + 1 end
         table.insert(ignores, at, "message " .. text)
@@ -69,8 +54,7 @@ local function findShader()
     return nil, nil
 end
 
----Sets the atmo's shader line (nil: removes it). The atmo's own lines aren't in the undo history: Save
----writes them with the atmo (the footer says there are unsaved changes)
+---Sets the atmo's shader line (nil removes it). Not in the undo history; shown live
 ---@param name string?
 local function setShader(name)
     local header = MGE.Atmo.state.header
@@ -80,12 +64,12 @@ local function setShader(name)
     elseif i then
         table.remove(header, i)
     end
-    MGE.Atmo.headerVersion = MGE.Atmo.headerVersion + 1 -- the footer shows the unsaved change
-    MGE.Atmo.applyShader() -- shown right away (the player's own shader back when removed)
+    MGE.Atmo.headerVersion = MGE.Atmo.headerVersion + 1 -- footer: unsaved
+    MGE.Atmo.applyShader()
     Rows.refreshBlocks({ "miscFile" })
 end
 
----A text field for any text (the editor's fields are numbers only), Enter calls onEnter with its text
+---A free text field (editor fields are numeric); Enter calls onEnter
 ---@param container UIElement
 ---@param text string
 ---@param placeholder string
@@ -98,16 +82,16 @@ local function createTextInput(container, text, placeholder, onEnter)
         returnKeyType = KEYBOARD_RETURN.SEND,
         textAlign = CENTER,
         fontId = Widgets.FONT,
-        darkerMode = true, -- the window's color, like the editor's other fields
+        darkerMode = true,
         textScale = Widgets.TEXT_SCALE_SMALL,
     })
     input:addKeyboardHandlers(nil, function(key)
-        if key == 13 then onEnter(input.textfieldstr[1] or "") end -- Enter
+        if key == 13 then onEnter(input.textfieldstr[1] or "") end
     end)
     return input
 end
 
----Name, Message and Shader rows, rebuilt with the editor (another mod: its name, message and atmo)
+---Name, Message and Shader rows (rebuilt)
 ---@param holder UIElement
 local function buildFileRows(holder)
     Rows.begin()
@@ -124,36 +108,28 @@ local function buildFileRows(holder)
     createTextInput(container, message or "", "No message", setMessage)
 
     local _, shader = findShader()
-    row, contentX, contentW = createRow("Shader", holder,
-        "The atmo's shader, saved with it.\nTrash icon: no shader.")
-    local gap, inset = Widgets.GAP, Widgets.INSET -- like the number fields
-    local h = row.size.h - inset * 2
-    local noneW = h -- square icon button, the shader's name gets the rest
-    local pickW = contentW - inset * 2 - gap - noneW
-    Widgets.button(row, { x = contentX + inset, y = inset, w = pickW, h = h }, shader or "Pick shader", function()
-        MGE.FilePicker.open({
-            title = "Pick Shader",
-            root = "data/shader",
-            rootLabel = "shader",
-            extension = "inc",
-            selected = shader,
-            confirmLabel = "Use shader",
-            onConfirm = setShader,
-        })
-    end, nil, Widgets.PANEL_STYLE)
-    local none = Widgets.iconButton(row, { x = contentX + inset + pickW + gap, y = inset, w = noneW, h = h },
-        "../textures/menu/general/buttons/trash.tga", function() setShader(nil) end, Widgets.PANEL_STYLE)
-    Widgets.popupBelow(none, "No shader (remove)")
+    Rows.createPickRow("Shader", holder, "The atmo's shader, saved with it.\nTrash icon: no shader.",
+        shader or "Pick shader", function()
+            MGE.FilePicker.open({
+                title = "Pick Shader",
+                root = "data/shader",
+                rootLabel = "shader",
+                extension = "inc",
+                selected = shader,
+                confirmLabel = "Use shader",
+                onConfirm = setShader,
+            })
+        end, function() setShader(nil) end, "No shader (remove)")
 end
 
----Map row, built once: opens the Convert Map overlay (ui/map_overlay.lua)
+---Map row: opens the Convert Map overlay
 ---@param holder UIElement
 local function buildMapRow(holder)
     Rows.begin()
     createToggleButtonRow("Map", holder, {
         { label = "Convert map", active = false, onClick = function()
             if MGE.overlayOpen() then return end
-            -- loaded on first use (MGE.loadMapConv): a broken converter says so and the editor keeps working
+            -- loaded on first use: a broken converter mustn't break the editor
             local ok, err = pcall(MGE.loadMapConv)
             if not ok then
                 MGE.say("the map converter didn't load: " .. tostring(err))
@@ -165,8 +141,7 @@ local function buildMapRow(holder)
         "CS:GO, TF2...) into static boxes, added where\nthe map puts them. Maps go in assets/maps.")
 end
 
----Starts over from the game's classic mod (/lm classic): objects, joints, players, rules and the atmo
----all go back to it, like loading any mod. Asks first when there are unsaved changes
+---Reset all: loads the classic mod, asking first with unsaved changes
 local function resetAll()
     if MGE.overlayOpen() then return end
     local function load()
@@ -180,7 +155,7 @@ local function resetAll()
     end
 end
 
----Mod row, built once: Reset all
+---Mod row: Reset all
 ---@param holder UIElement
 local function buildModRow(holder)
     Rows.begin()
@@ -189,17 +164,14 @@ local function buildModRow(holder)
     }, "Loads the classic mod (/lm classic): a fresh start.\nAsks first when there are unsaved changes.")
 end
 
----Credits on the panel's last row (they were in the footer's middle, which now only shows messages)
+---Credits on the panel's last row
 ---@param holder UIElement
 local function buildCredits(holder)
     local line = holder:addChild({ pos = { 0, 0 }, size = { holder.size.w, holder.size.h } })
     line:addAdaptedText("Project Mod Group Editor by joopez", nil, nil, Widgets.FONT, CENTERMID, Widgets.TEXT_SCALE_SMALL)
 end
 
----Atmo row (utils/playable.lua): Playable / Default, about the whole mod. Playable makes the mod a playable atmo mod
----(its static objects move into the atmo), saved as one and solid in fights in the editor; Default makes it an
----ordinary mod again. A block: the switch, undo and opening a mod rebuild it
----(MGE.EditorRows.refreshBlocks({ "playable" }))
+---Atmo row: Playable / Default (rebuilt by the switch, undo and opening a mod)
 ---@param holder UIElement
 local function buildPlayableRow(holder)
     Rows.begin()
@@ -212,9 +184,7 @@ local function buildPlayableRow(holder)
         "Default: atmo only drawn, objects come back.")
 end
 
----Export row: "clean" copies for players without Atmo Play. Save keeps the atmo inside the mod (Atmo Play draws it,
----or makes it solid); Atmo writes it as data/atmospheres/MGE - <mod>.atmo for the game's own atmo menu, Mod
----writes the mod without it as exp_<name>.tbm (MGE.askExportName)
+---Export row: copies for players without Atmo Play (an .atmo, and the mod without its atmo)
 ---@param holder UIElement
 local function buildExportRow(holder)
     Rows.begin()

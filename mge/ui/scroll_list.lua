@@ -1,19 +1,19 @@
--- Shared scrollable list so object selector and asset list look and behave the same
+-- Shared scrollable list (object grid, players, file picker)
 
 ---@class ScrollList
 ---@field rowHeight number
 ---@field scrollBarWidth number
 local ScrollList = {
-    -- MGE's overall size (Widgets.px); the offline tests load this without ui/widgets.lua
+    -- the offline tests load this without ui/widgets.lua
     rowHeight = MGE.Widgets and MGE.Widgets.LIST_ROW_H or 20,
     scrollBarWidth = MGE.Widgets and MGE.Widgets.px(18) or 18,
     ---@type number[] behind the rows (ui/main.lua sets a darker one)
     bgColor = TB_MENU_DEFAULT_DARKER_COLOR,
-    -- a selected row (the Players list); the offline tests load this without ui/widgets.lua
+    -- a selected row (the Players list)
     selectedColor = MGE.Widgets and MGE.Widgets.SELECTED_COLOR or TB_MENU_DEFAULT_LIGHTER_COLOR,
 }
 
----Default striped background for a row, use to restore a row after it was highlighted
+---A row's striped background (to restore it after highlighting)
 ---@param index integer
 ---@return number[]
 function ScrollList.getRowColor(index)
@@ -49,7 +49,7 @@ local function createPagerButton(parent, x, size, label, enabled, onClick)
         pos = { x, 2 },
         size = { size, size },
         interactive = enabled,
-        bgColor = TB_MENU_DEFAULT_BG_COLOR, -- like the grid's cells and the editor's buttons
+        bgColor = TB_MENU_DEFAULT_BG_COLOR,
         hoverColor = MGE.Widgets.HOVER_COLOR,
         pressedColor = TB_MENU_DEFAULT_DARKEST_COLOR,
     }, true)
@@ -58,7 +58,7 @@ local function createPagerButton(parent, x, size, label, enabled, onClick)
     return btn
 end
 
----Creates "< Page x/y >" controls filling rect, buttons are disabled at first/last page
+---"< Page x/y >" controls filling rect, disabled at the ends
 ---@param parent UIElement
 ---@param rect ScrollListRect
 ---@param page integer
@@ -96,8 +96,7 @@ end
 ---@param buildRow fun(row: UIElement, item: any, index: integer) fills a row, row is already interactive
 ---@param toReload UIElement? element redrawn on scroll (drawn over the rows), default an empty one
 ---@param emptyText string? shown when items is empty
----@param plainRows boolean? rows without stripes, hover or clicks of their own (the grid: its cells are
----the buttons, a row lighting up under them read like something to click)
+---@param plainRows boolean? rows without stripes, hover or clicks (the grid: its cells are the buttons)
 ---@return UIElement listMainView
 ---@return UIElement[] rows
 function ScrollList.create(parent, rect, items, buildRow, toReload, emptyText, plainRows)
@@ -108,33 +107,28 @@ function ScrollList.create(parent, rect, items, buildRow, toReload, emptyText, p
         size = { rect.w, rect.h },
         bgColor = ScrollList.bgColor,
     })
-    -- toriui shows every row that reaches into the list while scrolling, a row half out of it is drawn
-    -- past its edge (there's no clipping): lists had bars above and under them to cover those. Rows not
-    -- wholly inside are hidden instead, so a list needs no bars. The mouse wheel scrolls whole rows; a
-    -- dragged scrollbar can leave a gap of less than a row at an edge. toriui calls this on the list's
-    -- view (the holder's parent) for every scroll, the bar's and the wheel's
+    -- toriui doesn't clip: rows partly outside the list are hidden on every scroll instead of covered
+    -- with bars (a dragged scrollbar can leave a sub-row gap at an edge)
     listMainView.reloadListElements = function(view, holder, elements, reloadElement, enabled, orientation)
         UIElement.reloadListElements(view, holder, elements, reloadElement, enabled, orientation)
-        local top = holder.shift.y + holder.size.h -- the first row's top, from the list's top
+        local top = holder.shift.y + holder.size.h -- the first row's top
         for _, row in ipairs(enabled) do
             local y = top + ((row.listIndex or 1) - 1) * rowHeight
             if y < -0.5 or y + rowHeight > view.size.h + 0.5 then row:hide(true) end
         end
     end
 
-    -- narrower than parent, spawnScrollBar uses the leftover width for the scrollbar
+    -- narrower than the parent: spawnScrollBar uses the rest
     local scrollableListHolder = listMainView:addChild({
         pos = { 0, 0 },
         size = { listMainView.size.w - ScrollList.scrollBarWidth, listMainView.size.h },
     })
-    -- toriui redraws it on every scroll (hide + show): not the list itself, its show would bring back
-    -- every row. An empty element after the rows does when there's nothing to draw over them
+    -- redrawn on every scroll; not the list itself (its show would bring back every row)
     toReload = toReload or listMainView:addChild({ pos = { 0, 0 }, size = { 1, 1 } })
 
     local rows = {}
     if #items == 0 then
         if emptyText then
-            -- centered in the whole list, like the World list's note
             local empty = listMainView:addChild({
                 pos = { 5, 0 },
                 size = { listMainView.size.w - 10, listMainView.size.h },
@@ -153,7 +147,7 @@ function ScrollList.create(parent, rect, items, buildRow, toReload, emptyText, p
             hoverColor = not plainRows and { 0, 0, 0, 0.3 } or nil,
             pressedColor = not plainRows and { 0, 0, 0, 0.4 } or nil,
         })
-        row.listIndex = i -- for hiding rows partly out of view (reloadListElements above)
+        row.listIndex = i -- for reloadListElements above
         buildRow(row, item, i)
         table.insert(rows, row)
     end
@@ -161,7 +155,7 @@ function ScrollList.create(parent, rect, items, buildRow, toReload, emptyText, p
     local scrollBar = TBMenu:spawnScrollBar(scrollableListHolder, #rows, rowHeight)
     if #rows * rowHeight > scrollableListHolder.size.h then
         for _, row in ipairs(rows) do
-            row:hide(true) -- stays hidden when the list is shown again (F1), toriui shows the ones in view
+            row:hide(true) -- stays hidden over F1; toriui shows the ones in view
         end
         scrollableListHolder.scrollBar = scrollBar
         scrollBar:makeScrollBar(scrollableListHolder, rows, toReload)

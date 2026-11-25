@@ -1,5 +1,4 @@
--- Draws a highlight around selected objects, based on rph's selection highlight (replayhacks_selection.lua),
--- and boxes that don't exist yet (the Generate tab's preview)
+-- Selection highlights (based on rph's replayhacks_selection.lua), previews and the atmo layer
 require("toriui.uielement3d") -- Utils3D.MatrixToMatrixTB
 
 local ModData = MGE.ModData
@@ -9,23 +8,24 @@ local SHAPE = MGE.SHAPE
 ---@field pos number[]
 ---@field sides number[]
 ---@field frame number[][] rotation, columns are the box's axes in world space
+---@field rotTB MatrixTB? ready draw rotation (moved props), used instead of frame
 
 local Highlight = {
     color = { 0.0, 0.333, 1.0 },
     fillAlpha = 0.25,
     previewColor = { 1.0, 0.6, 0.0 },
     previewAlpha = 0.2,
-    -- the selection highlights' share of the shapes the game draws a frame
+    -- the selection highlights' share of the game's shapes a frame
     drawRoom = 256,
-    ---@type (fun(): HighlightBox[]?, number[][]?)? set by the Generate tab, boxes and joint anchors to draw this frame
+    ---@type (fun(): HighlightBox[]?, number[][]?)? Generate tab: boxes and joint anchors to draw this frame
     preview = nil,
-    ---@type fun()? set while the map placement view is open (ui/map_place.lua), draws with Highlight.drawBox
+    ---@type fun()? map placement view's drawing (ui/map_place.lua)
     placement = nil,
     errorShown = false,
 }
 MGE.Highlight = Highlight
 
----Rotation matrix as get_obj_rot gives it (row-major, r0 r1 r2 = first row), for draw_*_m
+---Row-major rotation (as get_obj_rot gives it) for draw_*_m
 ---@param m number[][]
 ---@return MatrixTB
 local function toMatrixTB(m)
@@ -36,16 +36,25 @@ local function toMatrixTB(m)
     })
 end
 
-Highlight.toMatrixTB = toMatrixTB -- also used by players.lua (body part rotations)
+Highlight.toMatrixTB = toMatrixTB
 
--- drawBox's rotations by frame table: the boxes drawn every frame (the map placement view's up to
--- MapPlace.maxDraws, atmo ghosts) keep their frames, so each is converted once instead of making two
--- tables per box per frame. Frames are never changed in place (Mat3 makes new ones); weak keys let
--- dropped boxes go
+-- Converted rotations by frame table: frames are never changed in place, so each converts once.
+-- Weak keys let dropped boxes go
 local rotCache = setmetatable({}, { __mode = "k" })
 
--- set_color only when it changes, while drawAtmo draws (nothing else draws in between): thousands of atmo shapes
--- mostly share a color
+---A box's rotation for draw_*_m: a moved prop's ready one (Playable.movedGhost), else its frame's
+---@param box HighlightBox|AtmoGhost
+---@return MatrixTB
+local function rotOf(box)
+    local rot = box.rotTB or rotCache[box.frame]
+    if not rot then
+        rot = toMatrixTB(box.frame)
+        rotCache[box.frame] = rot
+    end
+    return rot
+end
+
+-- While drawAtmo runs, set_color only on change: thousands of atmo shapes mostly share a color
 local colorCaching, lastColor, lastAlpha = false, nil, nil
 
 local function setColor(c, alpha)
@@ -56,22 +65,17 @@ local function setColor(c, alpha)
     set_color(c[1], c[2], c[3], alpha)
 end
 
----Box that isn't an object: translucent fill, and an outline (a negative-size pass) unless outline is
+---A box that isn't an object: translucent fill plus an outline (negative-size pass) unless outline is
 ---false. fillAlpha 0 draws only the outline
 ---@param box HighlightBox
 ---@param color number[]
 ---@param fillAlpha number
 ---@param outline boolean?
----@param grow number? added to each side of the fill (drawGhost's GROW)
+---@param grow number? added to each side of the fill
 function Highlight.drawBox(box, color, fillAlpha, outline, grow)
     local p, s, c = box.pos, box.sides, color
     grow = grow or 0
-    -- a moved prop's rotation as draw_box_m takes it (Playable.movedGhost), else its frame's, converted once
-    local rot = box.rotTB or rotCache[box.frame]
-    if not rot then
-        rot = toMatrixTB(box.frame)
-        rotCache[box.frame] = rot
-    end
+    local rot = rotOf(box)
     if fillAlpha > 0 then
         setColor(c, fillAlpha)
         draw_box_m(p[1], p[2], p[3], s[1] + grow, s[2] + grow, s[3] + grow, rot)
@@ -88,7 +92,7 @@ local function drawPreviewBox(box)
     Highlight.drawBox(box, Highlight.previewColor, Highlight.previewAlpha, true)
 end
 
----get_obj_rot can return a flat number array, draw_*_m expects a MatrixTB (r0..r15)
+---get_obj_rot returns a flat array, draw_*_m expects a MatrixTB (r0..r15)
 ---@param id integer 0-based object id
 ---@return MatrixTB?
 local function getObjRotTB(id)
@@ -99,13 +103,11 @@ end
 
 local colorByLine = {}
 
----An atmo object's own color, r g b a in 0-1 (atmo colors go up to 2: brighter, drawn as 1)
+---An atmo object's color clamped to 0-1 (atmos allow up to 2). One shared, read-only table per color
+---line: parsed once, and setColor's caching compares tables
 ---@param obj FileParserEnvObj
 ---@return number[]
 local function colorOf(obj)
-    -- parsed once per color line (like AtmoLayer.ghost's shape): the Atmo list draws every atmo object every
-    -- frame, thousands parsed their color text each frame. Callers only read it
-    -- one table per color line, shared: drawAtmo sets the color only when the table changes (setColor)
     local line = obj.props.color or "1 1 1 1"
     local c = colorByLine[line]
     if c then return c end
@@ -116,12 +118,12 @@ local function colorOf(obj)
     return c
 end
 
----One atmo object's shape in a color: a box through drawBox (outline when asked), spheres and pills filled
+---An atmo shape: boxes through drawBox, spheres and pills filled
 ---@param g AtmoGhost
 ---@param c number[]
 ---@param alpha number
 ---@param outline boolean
----@param grow number? this much larger (sides; a sphere's or pill's radius by half): GROW on the Atmo list
+---@param grow number? added to sides (half to a radius)
 local function drawGhost(g, c, alpha, outline, grow)
     local p, s = g.pos, g.sides
     grow = grow or 0
@@ -129,11 +131,7 @@ local function drawGhost(g, c, alpha, outline, grow)
         Highlight.drawBox(g, c, alpha, outline, grow)
         return
     end
-    local rot = g.rotTB or rotCache[g.frame] -- like drawBox: the ghost keeps its frame
-    if not rot then
-        rot = toMatrixTB(g.frame)
-        rotCache[g.frame] = rot
-    end
+    local rot = rotOf(g)
     setColor(c, alpha)
     if g.shape == "sphere" then
         draw_sphere_m(p[1], p[2], p[3], s[1] + grow / 2, rot)
@@ -142,16 +140,12 @@ local function drawGhost(g, c, alpha, outline, grow)
     end
 end
 
--- The Atmo list draws atmo shapes this much larger (sides; 0.005 a face): an atmo object exactly where a real one
--- is (a copy on its original) has the same surfaces, the game draws the (see-through) real one first and it still
--- fills the depth, so the atmo one lost and only the faint real one showed. Less than the selection highlight's
--- own margin (0.01-0.02)
+-- The Atmo list draws atmo shapes this much larger: an atmo copy exactly on a see-through real object
+-- would lose the depth test to it. Less than the selection highlight's margin
 local GROW = 0.01
 
----The selection highlight on a shape: a translucent fill slightly larger than it, then a bigger
----inverted shell that reads as an outline (2 draws). fillOnly: the fill alone (1 draw), when the
----full one doesn't fit the frame's draws for every selected one. An outline alone, just around the
----shape, would stay hidden behind its own (often opaque) fill
+---Selection highlight: a slightly larger translucent fill, then a bigger inverted shell as outline
+---(2 draws). fillOnly: the fill alone, when full ones don't fit the frame's draws
 ---@param shape "box"|"sphere"|"pill"
 ---@param x number
 ---@param y number
@@ -183,15 +177,13 @@ local function drawShapeHighlight(shape, x, y, z, sx, sy, sz, rot, color, fillOn
     end
 end
 
--- a selected atmo object drawn in the highlight color (the Atmo list) is at least this opaque
+-- selected atmo objects (Atmo list) are at least this opaque
 local SELECTED_ALPHA = 0.75
 
----@type CameraProjection? this frame's view (WorldSelect.measureProjection), set at the start of draw3d
+---@type CameraProjection? this frame's view, measured at the start of draw3d
 local view = nil
 
----Whether an atmo object can show on screen this frame: in front of the camera and its sphere (g.radius)
----overlapping the screen, with a margin. Off-screen ones cost a draw each frame for nothing: with a map's
----thousands of atmo boxes most are outside the view. Without a measured view: true (draw everything)
+---Whether a ghost's bounding sphere can overlap the screen this frame (with a margin). True without a view
 ---@param g AtmoGhost
 ---@return boolean
 local function onScreen(g)
@@ -206,40 +198,36 @@ local function onScreen(g)
     local a = (rx * v.right[1] + ry * v.right[2] + rz * v.right[3]) / depth
     local b = (rx * v.up[1] + ry * v.up[2] + rz * v.up[3]) / depth
     local x, y = v.cx + v.m11 * a + v.m12 * b, v.cy + v.m21 * a + v.m22 * b
-    -- its size on screen, generous (a sphere near the screen's edge shows bigger), and a few pixels more
+    -- generous screen radius: spheres near the edge project bigger
     local sr = r / depth * math.sqrt(v.m11 * v.m11 + v.m21 * v.m21) * 1.5 + 8
     return x + sr >= 0 and x - sr <= WIN_W and y + sr >= 0 and y - sr <= WIN_H
 end
 
--- the props' ghosts (Playable.drawGhosts) through onScreen, one table reused
+-- reused probe for props' ghosts (Playable.drawGhosts)
 local ghostProbe = { pos = { 0, 0, 0 }, radius = 0 }
 
----Whether a prop's ghost at x y z (bounding radius r) can show this frame
+---Whether a prop's ghost at x y z with bounding radius r can show this frame
 local function ghostOnScreen(x, y, z, r)
     local p = ghostProbe.pos
     p[1], p[2], p[3], ghostProbe.radius = x, y, z, r
     return onScreen(ghostProbe)
 end
 
----Atmo objects (utils/atmo_layer.lua): not in the game, MGE draws them, at most AtmoLayer.maxDraws a frame
---- full false (Objects list): translucent ghosts in AtmoLayer.color
---- full true (the Atmo list): in their own color, the selected ones in the highlight color instead, where a
----   gizmo drag has them (AtmoLayer.liveGhost). Color only, no extra highlight draw: every one of
----   thousands selected shows, an outlined highlight had room for 256 at most
---- Only the ones that can show on screen (onScreen), nearest the camera first, at most AtmoLayer.maxDraws: the game
---- draws only so many shapes a frame, so the near ones make it
+-- Atmo drawing: at most AtmoLayer.maxDraws on-screen ghosts a frame, nearest first (the game caps shapes).
+-- Objects list: translucent ghosts in AtmoLayer.color. Atmo list: own colors, selected ones in the
+-- highlight color (color only, so thousands selected all show), where a drag has them
 
--- drawAtmo's on-screen ghosts this frame (reused lists): ghost, color, alpha, grow, distance, and the draw order
+-- drawAtmo's on-screen ghosts this frame (reused): ghost, color, alpha, grow, distance, draw order
 local visG, visC, visA, visGrow, visDist, visOrder = {}, {}, {}, {}, {}, {}
 local visN = 0
 local function nearerVis(i, j) return visDist[i] < visDist[j] end
 
--- orderNearest's lists: a bucket sort by distance (no comparisons: table.sort of thousands was most of a frame)
+-- orderNearest's buckets: sorting thousands with table.sort was most of a frame
 local BUCKETS = 256
 local bucketCount, bucketEnd, visKey, boundary = {}, {}, {}, {}
 
----visOrder[1..n] near to far by buckets of distance (nearly sorted: the game keeps the first ones it's sent when
----it caps draws), exactly sorted around the most-th, so visOrder[1..most] are exactly the nearest most
+---visOrder[1..n] near to far by distance buckets, exactly sorted in the bucket holding the most-th, so
+---visOrder[1..most] are exactly the nearest most
 local function orderNearest(n, most)
     if n == 0 then return end
     local sqrt, lo, hi = math.sqrt, math.huge, 0
@@ -258,7 +246,7 @@ local function orderNearest(n, most)
     end
     local at = 1
     for b = 1, BUCKETS do
-        bucketEnd[b] = at -- the next free slot of bucket b while placing; one past its last after
+        bucketEnd[b] = at -- next free slot while placing; one past the bucket's end after
         at = at + bucketCount[b]
     end
     for i = 1, n do
@@ -281,13 +269,13 @@ local function orderNearest(n, most)
     table.sort(boundary, nearerVis)
     for k = 1, m do visOrder[first + k - 1] = boundary[k] end
 end
--- the squared distance a ghost must be under to be looked at (from last frame's maxDraws-th, with a margin); a pass
--- that finds fewer than maxDraws under it runs again without one, so the drawn ones are always the nearest
+-- Squared-distance cutoff from last frame's maxDraws-th (with a margin). A pass that finds too few under
+-- it reruns without one, so the drawn ones are always the nearest
 local visCut = math.huge
-local CUT_MARGIN = 2 -- squared: ~1.4 times the distance, room for the camera to move a frame
+local CUT_MARGIN = 2 -- squared: ~1.4x the distance, room for camera movement
 local pendingDist = 0 -- nearEnough's distance for addVisible
 
----Whether a ghost is under the cutoff (its squared distance kept for addVisible); a cheap test before onScreen
+---Cheap test before onScreen; keeps the squared distance for addVisible
 local function nearEnough(g)
     local e = view and view.eye
     if not e then
@@ -306,20 +294,18 @@ local function addVisible(g, c, alpha, grow)
     visG[n], visC[n], visA[n], visGrow[n], visOrder[n], visDist[n] = g, c, alpha, grow or 0, n, pendingDist
 end
 
--- the selected ones on screen (the Atmo list): drawn first, in list order, no distances or ordering (thousands
--- selected cost no comparisons); the nearest of the rest fill what's left of maxDraws
+-- Selected ghosts on screen (Atmo list): drawn first in list order, unsorted; the nearest others fill the rest
 local selG, selA, selGrow = {}, {}, {}
 local selN = 0
 
----The atmo objects' ghosts that can show: selected ones into the sel lists (until `most`), the rest under the cutoff
----into the vis lists
+---Collects ghosts that can show: selected ones into sel (up to `most`), the rest under the cutoff into vis
 ---@param full boolean
 ---@param plain boolean?
 ---@param most number
 local function collectAtmo(full, plain, most)
     local AtmoLayer = MGE.AtmoLayer
     local list = ModData.parsed.atmo or {}
-    -- props pushed in a fight (a playable mod's dynamic atmo objects) are drawn where they are now
+    -- props moved in a fight (playable mods) are drawn where they are now
     local moved = MGE.Playable and MGE.Playable.movedGhost
     visN, selN = 0, 0
     if not full then
@@ -330,12 +316,10 @@ local function collectAtmo(full, plain, most)
         end
         return
     end
-    -- a gizmo drag: the selected ones' ghosts as it leaves them (AtmoLayer.liveGhost: matrices on the cached
-    -- ghost; copying and re-parsing every selected object's lines each frame stuttered with thousands)
-    local live = AtmoLayer.live
+    local live = AtmoLayer.live -- a gizmo drag in progress
     local grow = not plain and GROW or 0 -- F1's play view: as in game
     for i, atmoObj in ipairs(list) do
-        if selN >= most then break end -- the selected ones fill every draw
+        if selN >= most then break end -- selected ones fill every draw
         local g = AtmoLayer.ghost(atmoObj)
         if g and moved then g = moved(i, g) end
         local selected = atmoObj.selected and not plain
@@ -344,7 +328,6 @@ local function collectAtmo(full, plain, most)
             if selected then
                 if onScreen(g) then
                     selN = selN + 1
-                    -- see-through ones too: a selected box is never fainter than SELECTED_ALPHA
                     selG[selN], selA[selN], selGrow[selN] = g, math.max(colorOf(atmoObj)[4], SELECTED_ALPHA), grow
                 end
             elseif nearEnough(g) and onScreen(g) then
@@ -356,14 +339,14 @@ local function collectAtmo(full, plain, most)
 end
 
 ---@param full boolean
----@param plain boolean? with full: as the map looks when played (MGE's window hidden): no selection highlight
+---@param plain boolean? with full: as when played (window hidden), no selection highlight
 local function drawAtmo(full, plain)
     local most = MGE.AtmoLayer.maxDraws
     if not (most and most > 0) then most = math.huge end
     if not view then visCut = math.huge end
     collectAtmo(full, plain, most)
     local room = most - math.min(selN, most) -- draws left for the unselected
-    if visN < room and visCut < math.huge then -- the cutoff left too few: look at all of them
+    if visN < room and visCut < math.huge then -- cutoff left too few: retry without it
         visCut = math.huge
         collectAtmo(full, plain, most)
         room = most - math.min(selN, most)
@@ -372,7 +355,7 @@ local function drawAtmo(full, plain)
     for i = #visOrder, n + 1, -1 do visOrder[i] = nil end
     if view and room > 0 then orderNearest(n, room) end
     if n > room then n = room end
-    -- next frame's cutoff: this frame's room-th, with a margin (none while fewer show; 0 while the selected fill it)
+    -- next frame's cutoff: this frame's room-th with a margin (none if fewer show, 0 if selected fill it)
     if not view then
         visCut = math.huge
     elseif room <= 0 then
@@ -391,7 +374,7 @@ local function drawAtmo(full, plain)
     visN, selN = 0, 0
 end
 
----The object highlight (drawShapeHighlight) on a game object, read from the game
+---drawShapeHighlight on a game object
 ---@param id integer 0-based object id
 ---@param color number[]? defaults to Highlight.color
 ---@param fillOnly boolean?
@@ -406,9 +389,7 @@ local function drawObjectHighlight(id, color, fillOnly)
     drawShapeHighlight(name, x, y, z, sx, sy, sz, getObjRotTB(id), color or Highlight.color, fillOnly)
 end
 
----How the selection highlights fit in their share (Highlight.drawRoom): full ones (2 draws each) when all
----of them fit, else the fill alone (1 draw) on as many as fit. The share is theirs alone, nothing else is
----taken off it first
+---Full highlights (2 draws) when all fit in room, else fills alone (1 draw) on as many as fit
 ---@param count integer selected shapes
 ---@param room integer draws they have
 ---@return boolean fillOnly
@@ -419,12 +400,11 @@ local function highlightPlan(count, room)
     return true, math.min(count, room)
 end
 
--- player body part shapes (BodyInfo.shape): sphere x radius, box sides, cylinder (pill) x radius y length
-local BODY_SPHERE, BODY_CYLINDER = 0, 2 -- 1 is a box, the default branch
+-- BodyInfo.shape: sphere x radius, box sides, cylinder (pill) x radius y length; 1 is a box
+local BODY_SPHERE, BODY_CYLINDER = 0, 2
 
----Same highlight as objects, on every body part and joint of a player (Players list). With scale (a
----scale drag, Players.scalePreview) the player is drawn scaled around the pivot in the preview color:
----the bodies can't be resized live, this shows what the release will make
+---The object highlight on a player's body parts and joints. With scale (a scale drag), drawn scaled
+---around the pivot in the preview color: bodies can't be resized live
 ---@param player integer 0-based
 ---@param scale { pivot: number[], factor: number }?
 local function drawPlayerHighlight(player, scale)
@@ -469,11 +449,10 @@ local function drawPlayerHighlight(player, scale)
 end
 
 local JOINT_ANCHOR_RADIUS = 0.12
--- the halo's radius: what a click on a joint's anchor hits (utils/world_select.lua, WorldSelect.pickJoint)
+-- the halo's radius: what a click on an anchor hits (WorldSelect.pickJoint)
 Highlight.anchorPickRadius = JOINT_ANCHOR_RADIUS * 2
 
----A joint's anchor: a solid core in the preview color, a translucent halo so it reads inside objects.
----Faint: an unselected joint on the Joints list, there to be clicked
+---A joint's anchor: solid core plus translucent halo (readable inside objects). Faint: unselected
 ---@param faint boolean?
 local function drawAnchor(x, y, z, faint)
     local c = Highlight.previewColor
@@ -483,7 +462,7 @@ local function drawAnchor(x, y, z, faint)
     draw_sphere(x, y, z, JOINT_ANCHOR_RADIUS * 2)
 end
 
----A joint's anchor, where a Move gizmo drag has it so far (Joints.anchorOf)
+---A joint's anchor, where a Move drag has it (Joints.anchorOf)
 ---@param joint FileParserEnvObjJoint
 ---@param faint boolean?
 local function drawJointAnchor(joint, faint)
@@ -491,9 +470,7 @@ local function drawJointAnchor(joint, faint)
     if p then drawAnchor(p[1], p[2], p[3], faint) end
 end
 
----Joints list: every object a selected joint links gets the object highlight, each selected joint's
----anchor (its pos line, where the game joins the two) a sphere in the preview color. The other joints'
----anchors are faint, a click on one selects it
+---Joints list: selected joints' objects highlighted and anchors bright; other anchors faint (clickable)
 ---@param joints FileParserEnvObjJoint[] the selected ones
 local function drawJointHighlights(joints)
     local objects, selected = {}, {}
@@ -511,10 +488,8 @@ end
 
 local HOVER_COLOR = { 1.0, 1.0, 1.0 } -- what a click would pick (or take out)
 
----The Link tab's draft (Joints.draftFor): the picked objects in the selection color, the object under
----the cursor in white. A joint shows its anchor (Update keeps it), a new one where Create would put it
----(halfway between the two). The other selected joints' anchors are bright too, the unselected ones
----faint (a click on one selects it)
+---Link tab's draft: picked objects highlighted, the hovered one white, the anchor (a new joint's halfway
+---between the two). Other selected joints' anchors bright, unselected faint
 ---@param slot integer
 local function drawLinkHighlights(slot)
     local Joints = MGE.Joints
@@ -523,7 +498,6 @@ local function drawLinkHighlights(slot)
     if draft.obj1 then drawObjectHighlight(draft.obj1 - 1) end
     if draft.obj2 then drawObjectHighlight(draft.obj2 - 1) end
     if hover then drawObjectHighlight(hover.id - 1, HOVER_COLOR) end
-    -- the other selected joints bright (Update links them all to the picked pair), the rest faint
     local selected = MGE.Main.selectedJoints
     for _, other in ipairs(ModData.parsed.env_obj_joint) do
         if other.id ~= slot then drawJointAnchor(other, not selected[other.id]) end
@@ -542,26 +516,20 @@ add_hook("draw3d", MGE.hookname, function()
     local Main = MGE.Main -- created after this module loads
     if not Main or not Main.window then return end
     local ok, err = pcall(function()
-        -- this frame's view, for skipping atmo objects off screen (onScreen). Measured here, in draw3d: it
-        -- uses get_screen_pos
+        -- measured in draw3d: it uses get_screen_pos
         view = MGE.WorldSelect and MGE.WorldSelect.measureProjection() or nil
-        -- asked every frame, also when it isn't drawn (another list, window hidden): that's how it sees
-        -- the Generate tab being left, coming back looks at the shape again
+        -- called every frame even when not drawn: that's how Generate notices it was left
         local boxes, anchors
         if Highlight.preview then boxes, anchors = Highlight.preview() end
         if Highlight.placement then Highlight.placement() end -- map placement, on any list
         if not Main.window.displayed then
-            -- the window hidden (F1) to play: the atmo as it looks in game. The map placement view hides the
-            -- window too, there only it draws
+            -- window hidden (F1): the atmo as in game. The placement view draws alone
             if not MGE.isPlacing() then drawAtmo(true, true) end
             return
         end
         if Main.listTab == "players" then
-            -- the atmo as on the Objects list: faint ghosts in the atmo color, no selection highlight, so
-            -- what's only drawn stays apart from the mod's (solid) objects while placing players on the map
-            drawAtmo(false)
-            -- the players list: the selected players, not the objects (they aren't what's edited there).
-            -- During a scale drag the scaled players instead
+            drawAtmo(false) -- faint ghosts, apart from solid objects
+            -- selected players, or the scaled ones during a scale drag
             local Players = MGE.Players
             local scale = Players and Players.scalePreview
             for _, player in ipairs(scale and scale.players or Main.selectedPlayerList()) do
@@ -570,25 +538,22 @@ add_hook("draw3d", MGE.hookname, function()
             return
         end
         if Main.listTab == "joints" then
-            -- the Joints list: the selected joints, their objects and anchors (not the object selection).
-            -- On the Link tab the selected slot's draft instead
+            -- Link tab: the slot's draft instead
             local slot = Main.linkSlot()
             if slot then drawLinkHighlights(slot) else drawJointHighlights(Main.selectedJointList()) end
             return
         end
-        -- the game draws only so many shapes a frame: the Generate preview in its list's share (objects or
-        -- atmo), the atmo in its own, the selection highlights in theirs (Highlight.drawRoom). Selecting
-        -- more than fit full thins them to fills
+        -- the game caps shapes a frame: preview, atmo and selection each get a share
         for _, box in ipairs(boxes or {}) do drawPreviewBox(box) end
         for _, p in ipairs(anchors or {}) do drawAnchor(p[1], p[2], p[3]) end -- Generate's joints
         local atmo = Main.listTab == "atmo"
-        drawAtmo(atmo) -- on the Atmo list the selected ones show in the highlight color
-        -- a pick in progress (the Core tab's color picker): the object a click would take, in white
+        drawAtmo(atmo)
+        -- a pick in progress (color picker): the hovered object in white
         local WorldSelect = MGE.WorldSelect
         if WorldSelect and WorldSelect.picking and WorldSelect.hover then
             drawObjectHighlight(WorldSelect.hover.id - 1, HOVER_COLOR)
         end
-        if not atmo then -- the Atmo list's selection is shown by drawAtmo's colors
+        if not atmo then -- the Atmo list shows its selection through drawAtmo
             local ids = {}
             for _, obj in ipairs(ModData.parsed.env_obj) do
                 if obj.selected then ids[#ids + 1] = obj.id - 1 end
@@ -597,13 +562,12 @@ add_hook("draw3d", MGE.hookname, function()
             for i = 1, drawn do drawObjectHighlight(ids[i], nil, fillOnly) end
         end
     end)
-    if not ok and not Highlight.errorShown then -- report once instead of spamming every frame
+    if not ok and not Highlight.errorShown then -- report once
         Highlight.errorShown = true
         MGE.say("highlight error: " .. tostring(err))
     end
-    -- a playable mod's flying props: their ghosts (where the turn takes them), on the Atmo list (the other lists don't
-    -- edit props: fewer draws) and in the play view (F1, as in game). Last: drawn before the props, a see-through
-    -- ghost in front of (or on) its prop filled the depth first and the prop showed faded through it
+    -- playable mods' prop ghosts (where the turn takes them), on the Atmo list and in the play view.
+    -- Last: drawn earlier, a ghost fills the depth and its prop shows faded through it
     local ghosts = not Main.window.displayed or Main.listTab == "atmo"
     if ghosts and not MGE.isPlacing() and MGE.Playable and MGE.Playable.drawGhosts then
         MGE.Playable.drawGhosts(ghostOnScreen) -- catches its own errors

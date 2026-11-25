@@ -5,23 +5,23 @@ require("toriui.uielement")
 ---@field page integer
 ---@field pageSize integer
 ---@field activeTabs table<string, string> each list's active editor tab (panel id), by list
----@field listTab "objects"|"atmo"|"joints"|"players"|"misc" what the list area shows (misc: the whole mod's things)
----@field selectedPlayer integer last picked player: the players panel shows it (also when none is selected)
----@field selectedPlayers table<integer, boolean> selected players (Shift adds), the gizmo moves them together
----@field selectPlayer fun(id: integer, additive: boolean?) picks a player (list row, world click)
----@field selectedJoints table<integer, boolean> selected joint slots (Shift adds), never empty, empty slots too
----@field jointSlot integer the current joint slot (last clicked), always selected: the Link tab edits it
+---@field listTab "objects"|"atmo"|"joints"|"players"|"misc" the shown list (misc: World)
+---@field selectedPlayer integer last picked player, shown by the panel even when none is selected
+---@field selectedPlayers table<integer, boolean>
+---@field selectPlayer fun(id: integer, additive: boolean?)
+---@field selectedJoints table<integer, boolean> selected joint slots (empty ones too), never empty
+---@field jointSlot integer current slot (last clicked, always selected): the Link tab edits it
 local Main = { page = 1, pageSize = 66, listTab = "objects", selectedPlayer = 0,
     selectedPlayers = { [0] = true }, selectedJoints = { [1] = true }, jointSlot = 1,
     activeTabs = { objects = "core", atmo = "core", players = "player", joints = "jointLink", misc = "misc" } }
-MGE.Main = Main -- registered before UI modules load so they can alias it
+MGE.Main = Main -- before the UI modules load, so they can alias it
 
 local ModData = MGE.ModData
 local History = MGE.History
-local Widgets = dofile(MGE.scriptPath .. "ui/widgets.lua") -- MGE.Widgets, shared button helpers
+local Widgets = dofile(MGE.scriptPath .. "ui/widgets.lua")
 
 local defaultPos = { 0, 0 }
-local PAD = 0 -- the panel's edge to its content: none, the sections reach its edges
+local PAD = 0 -- the sections reach the panel's edges
 local SECTION_GAP = 6 -- space between window sections
 ---Moves the next section's position under one that is height tall
 ---@param height number?
@@ -30,46 +30,34 @@ local function updateContentHeight(height, gap)
     defaultPos[2] = defaultPos[2] + (height or 0) + (gap or SECTION_GAP)
 end
 
--- Layout: a thin bar across the whole top of the screen, a static panel under it on the left edge, as tall
--- as its sections, and a footer row along the screen's bottom. The screen is the game's UI size: window
--- size / GUI scale, 1920x1080 at 1.6x is 675 tall.
---   bar, left:   the list tabs (over the panel, the active one joins the list under it), Mods, Rules
---   bar, right:  the tools, close (the list's buttons are under the list: Main.setListActions)
---   panel:       the list (LIST_ROWS rows, no bars of its own), the editor tabs and panel
---   footer:      counters, messages (MGE.say), the mod name
--- The game's view stays free under the panel. It was a movable window, 710 tall with a drag bar, margins
--- and its own tab / list bars: at 1.6x it didn't fit and the list kept 2 rows
--- sizes in layout units, Widgets.px scales them by MGE's overall size (Widgets.UI_SCALE)
+-- Layout: a bar across the screen's top (list tabs, Mods, Rules; tools and close on the right), a panel
+-- on the left (list, its action buttons, editor tabs and panel) and a footer row (counters, messages,
+-- the mod name). Sizes are layout units scaled by Widgets.px
 local px = Widgets.px
 local PANEL_W = px(300)
 local BAR_H = px(30) -- the top bar
-local BAR_ICON = BAR_H - px(6) -- its icon buttons, 3 units above and under
-local BAR_GAP = Widgets.GAP -- between the bar's buttons, the same gap as everywhere (Widgets.GAP)
-local BAR_SEP = px(14) -- between its groups
+local BAR_ICON = BAR_H - px(6)
+local BAR_GAP = Widgets.GAP
+local BAR_SEP = px(14) -- between button groups
 local EDITOR_TABS_H = px(20)
-local TAB_PADDING = px(6) -- space between a tab panel's edge and its content
--- the editor area: fits the panels (Widgets.PANEL_ROWS rows each, PANELS in ui/editor.lua)
+local TAB_PADDING = px(6) -- a tab panel's edge to its content
 local EDITOR_H = Widgets.PANEL_ROWS * Widgets.ROW_H
-local FOOTER_H = Widgets.INFO_HEIGHT + px(4) -- the footer row along the screen's bottom
-local LIST_ROWS = 6 -- the list's height, it scrolls; fewer when the panel wouldn't fit the screen (below)
-local rowH = Widgets.LIST_ROW_H -- ScrollList.rowHeight (loaded below) is the same
-local screenW = WIN_W or 1280 -- the top bar starts this wide, Main.fitScreen keeps it fitted
+local FOOTER_H = Widgets.INFO_HEIGHT + px(4)
+local LIST_ROWS = 6 -- fewer when the panel wouldn't fit the screen (below)
+local rowH = Widgets.LIST_ROW_H
+local screenW = WIN_W or 1280 -- Main.fitScreen keeps the bar fitted
 local listH = LIST_ROWS * rowH
--- the list's buttons, a bar under it on the list's own dark background (Main.setListActions), lined up
--- with the grid's cells: GAP from the list's sides and its bottom, INSET under the last row (whose cells keep
--- INSET free too, so GAP between them)
+-- the list's action bar, lined up with the grid's cells
 local ACTIONS_H = px(18)
-local ACTIONS_GAP = Widgets.INSET + Widgets.GAP -- the bar's height beyond its buttons
+local ACTIONS_GAP = Widgets.INSET + Widgets.GAP
 local panelH = BAR_H + listH + ACTIONS_GAP + ACTIONS_H + TAB_PADDING * 2 + EDITOR_TABS_H + EDITOR_H + TAB_PADDING * 2
--- a big UI size at a big GUI scale made the panel taller than the screen: the list gives up rows (down to
--- 3) so the panel ends above the footer
+-- big UI sizes: the list gives up rows (down to 3) so the panel ends above the footer
 local fitH = (WIN_H or 720) - FOOTER_H
 while panelH > fitH and LIST_ROWS > 3 do
     LIST_ROWS, listH, panelH = LIST_ROWS - 1, listH - rowH, panelH - rowH
 end
-Main.LIST_ROWS = LIST_ROWS -- the Link tab's object grid is as tall (ui/editor_link.lua)
+Main.LIST_ROWS = LIST_ROWS -- the Link tab's object grid matches
 
--- the bar's and the content areas' colors (ui/widgets.lua, shared with the overlays)
 local BAR_COLOR = Widgets.BAR_COLOR
 local BAR_STYLE = { bg = BAR_COLOR, hover = Widgets.HOVER_COLOR, pressed = TB_MENU_DEFAULT_DARKEST_COLOR }
 local LIST_BG = Widgets.CONTENT_BG
@@ -85,8 +73,8 @@ local content = Main.window:addChild({
     size = { PANEL_W - PAD * 2, panelH - BAR_H },
 }, true)
 
--- the top bar: a child of the panel reaching past its right edge, shown, hidden and killed with it.
--- Interactive so clicks on it don't go through to the world (widgets.lua isMouseOverUI)
+-- the top bar: a child of the panel reaching past it, so it shows, hides and dies with it.
+-- Interactive so clicks don't reach the world
 local topBar = Main.window:addChild({
     pos = { 0, 0 },
     size = { screenW, BAR_H },
@@ -97,20 +85,20 @@ local topBar = Main.window:addChild({
 })
 Main.topBar = topBar
 
--- right end: close (quits MGE, F1 only hides it)
+-- right end: close
 local closeButton = TBMenu:spawnCloseButton(topBar, { x = -BAR_H, y = 0, w = BAR_H, h = BAR_H }, function()
     Main.window:kill() -- killAction quits
 end, { default = BAR_COLOR, hover = Widgets.HOVER_COLOR, pressed = TB_MENU_DEFAULT_DARKEST_COLOR,
-    ui = { 1, 1, 1, 1 } }) -- the bar's button colors, its default ones are the panel's red
+    ui = { 1, 1, 1, 1 } }) -- the bar's colors instead of the default red
 Widgets.popupBelowLeft(closeButton, "Close MGE (F1 only hides it)")
-if closeButton.child and closeButton.child[1] then -- its cross loads again after a graphics change
+if closeButton.child and closeButton.child[1] then -- reload the cross after a graphics change
     Widgets.trackImage(closeButton.child[1], "../textures/menu/general/buttons/crosswhite.tga")
 end
 
--- the tools, left of close: in place, gizmo tool toggles, undo / redo, save, settings
+-- the tools, left of close
 local ICON_COUNT = 8 -- in place, move, rotate, scale, undo, redo, save, settings
 local toolsW = BAR_ICON * ICON_COUNT + BAR_GAP * (ICON_COUNT - 1)
--- negative x: from the bar's right edge, so the groups follow it when the screen size changes (Main.fitScreen)
+-- negative x: from the bar's right edge, so it follows screen size changes
 local toolsX = -(BAR_H + BAR_SEP + toolsW)
 local iconButtons = topBar:addChild({
     pos = { toolsX, (BAR_H - BAR_ICON) / 2 },
@@ -120,27 +108,33 @@ local iconButtons = topBar:addChild({
 ---@type UIElement the bar under the list, set with the list panel (below)
 local actionsHolder
 
----The list's action buttons in the bar under it (Select all, New, Duplicate, Import, Export, Delete, as many
----as the list has), sharing its width. Called by each list when it's built. They were on the top bar for a
----while: under the list it's clearer what they act on
+---The shown list's action buttons in the bar under it, sharing its width (called by each list)
 ---@param items WidgetRowButton[]
 ---@return UIElement[] buttons in the same order
 function Main.setListActions(items)
     Widgets.clearChildren(actionsHolder)
     return Widgets.buttonRow(actionsHolder, 0, actionsHolder.size.h, items, Widgets.GAP, nil, Widgets.PANEL_STYLE)
 end
--- the lists' Select all button, unlit (lit: Widgets.ACTIVE_COLOR)
+-- unlit Select all (lit: Widgets.ACTIVE_COLOR)
 Main.ACTIONS_BG = Widgets.PANEL_STYLE.bg
 
--- gizmo tools: on / off toggles, at most one on (utils/gizmo.lua). Icons in mge/textures/
+---Lights a list action button while isOn() holds, checked every frame (cell clicks don't rebuild lists)
+---@param button UIElement
+---@param isOn fun(): boolean
+function Main.lightWhile(button, isOn)
+    Widgets.addDrawBefore(button, function()
+        button.bgColor = isOn() and Widgets.ACTIVE_COLOR or Main.ACTIONS_BG
+    end)
+end
+
+-- gizmo tool toggles, at most one on. Icons in mge/textures/
 local TOOLS = {
     { mode = "move", label = "Move (Alt + Q)" },
     { mode = "rotate", label = "Rotate (Alt + W)" },
     { mode = "scale", label = "Scale (Alt + E)" },
 }
 local bar = {}
--- In place (Transforms.inPlace): Rotate and Scale leave the positions, each object turns and sizes around itself.
--- Lit while on, saved in config.cfg
+-- In place (Transforms.inPlace), lit while on, saved in config.cfg
 local IN_PLACE_LABEL = "In place: Rotate / Scale each object\naround itself, positions stay"
 table.insert(bar, { label = IN_PLACE_LABEL, icon = MGE.scriptPath .. "textures/inplace.tga", onClick = function()
     MGE.Transforms.inPlace = not MGE.Transforms.inPlace
@@ -152,15 +146,14 @@ for _, tool in ipairs(TOOLS) do
     table.insert(bar, { label = tool.label, icon = MGE.scriptPath .. "textures/" .. tool.mode .. ".tga",
         onClick = function() MGE.Gizmo.toggle(tool.mode) end })
 end
--- game's undo icon, redo is the same icon mirrored (mge/textures/redo.tga)
+-- redo.tga is the game's undo icon mirrored
 table.insert(bar, { label = "Undo (Shift + Z)", icon = "../textures/menu/general/buttons/undo.tga", onClick = function() History.undo() end })
 table.insert(bar, { label = "Redo (Shift + Y)", icon = MGE.scriptPath .. "textures/redo.tga", onClick = function() History.redo() end })
--- Save (the game's save icon), the footer's right end names the file it writes; World > Core's Name changes it
+-- the footer's right end names the file Save writes
 table.insert(bar, { label = "Save (Ctrl + S) into " .. MGE.saveFolder .. ".\nName: World > Name", icon = "../textures/menu/general/buttons/savewhite.tga", onClick = function() MGE.save() end })
--- camera follow, gizmo snapping, shortcuts (ui/settings_overlay.lua), game's settings icon
 table.insert(bar, { label = "Settings", icon = "../textures/menu/general/buttons/settingswhite.tga",
     onClick = function() dofile(MGE.scriptPath .. "ui/settings_overlay.lua") end })
-for _, item in ipairs(bar) do item.popupLeft = true end -- near the screen's right edge
+for _, item in ipairs(bar) do item.popupLeft = true end -- near the right edge
 local icons = Widgets.buttonRow(iconButtons, 0, BAR_ICON, bar, BAR_GAP, nil, BAR_STYLE)
 
 ---The in place toggle lit while on
@@ -172,7 +165,7 @@ function Main.updateInPlaceButton()
 end
 Main.updateInPlaceButton()
 
----The active tool's button is highlighted (the tools come after the in place toggle)
+---Lights the active tool's button (after the in place toggle)
 local function updateToolButtons()
     for i, tool in ipairs(TOOLS) do
         local btn = icons[i + 1]
@@ -184,12 +177,10 @@ end
 table.insert(MGE.Gizmo.modeListeners, updateToolButtons)
 updateToolButtons()
 
--- tabs: the active one has the color of the panel under it and touches it, so they read as one shape
-local TAB_PANEL_COLOR = Widgets.TAB_PANEL_COLOR -- darkens the window, buttons inside (DARKER) stay visible
+-- an active tab takes its panel's color and touches it, reading as one shape
+local TAB_PANEL_COLOR = Widgets.TAB_PANEL_COLOR
 
----Active tabs are part of the panel under them: panel color, no hover/press change.
----Inactive tabs keep the normal button look (on the top bar: the bar's color). Used by the list tabs and
----the editor tabs
+---Active tabs: the panel's color, no hover / press change. Inactive: the normal button look
 ---@param btn UIElement
 ---@param active boolean
 ---@param activeColor number[]? the panel's color as the tab is drawn (default TAB_PANEL_COLOR)
@@ -205,20 +196,19 @@ local function styleTab(btn, active, activeColor, idleColor)
     end
 end
 
--- the list tabs, on the top bar over the panel (how full the mod is shows in the footer). On the bar the
--- active one is drawn solid: the see-through panel color would show the bar under it
+-- list tabs on the top bar; the active one is drawn solid (the see-through panel color would show the bar)
 local listTabNames = {
     { id = "objects", label = "Objects" },
-    { id = "atmo", label = "Atmo" }, -- atmo objects: drawn only, the mod's .atmo file (utils/atmo.lua)
+    { id = "atmo", label = "Atmo" },
     { id = "joints", label = "Joints" },
     { id = "players", label = "Players" },
-    { id = "misc", label = "World" }, -- the whole mod: message, shader, convert map, Reset all (ui/editor_misc.lua)
+    { id = "misc", label = "World" },
 }
 local listTabItems = {}
 for i, tab in ipairs(listTabNames) do
     listTabItems[i] = { label = tab.label, onClick = function() Main.setListTab(tab.id) end }
 end
--- the bar's text buttons are all this wide, as wide as their text needs, not stretched over the panel
+-- the bar's text buttons, not stretched over the panel
 local BAR_TEXT_W = px(56)
 local listTabRow = topBar:addChild({
     pos = { PAD, 0 },
@@ -231,7 +221,7 @@ end
 
 -- the game's own mod list and gamerules menus, right of the tabs
 local gameMenus = topBar:addChild({
-    pos = { PAD + listTabRow.size.w + BAR_GAP, 0 }, -- right after the tabs, the usual gap
+    pos = { PAD + listTabRow.size.w + BAR_GAP, 0 },
     size = { BAR_TEXT_W * 2 + BAR_GAP, BAR_H },
 })
 Widgets.buttonRow(gameMenus, 0, BAR_H, {
@@ -239,8 +229,7 @@ Widgets.buttonRow(gameMenus, 0, BAR_H, {
     { label = "Rules", onClick = function() dofile("system/gamerules.lua") end },
 }, BAR_GAP, Widgets.TAB_TEXT_SCALE, BAR_STYLE)
 
--- the list sits in a panel like the editor's: panel color, padding, the active list tab touches it.
--- listH (above): its rows, Widgets.LIST_ROW_H (px(20)) each
+-- the list's panel, which the active list tab touches
 local listPanel = content:addChild({
     pos = defaultPos,
     size = { content.size.w, listH + ACTIONS_GAP + ACTIONS_H + TAB_PADDING * 2 },
@@ -260,51 +249,39 @@ actionsHolder = listArea:addChild({
     pos = { Widgets.GAP, listH + Widgets.INSET },
     size = { listArea.size.w - Widgets.GAP * 2, ACTIONS_H },
 })
-updateContentHeight(listPanel.size.h, 0) -- the editor tabs sit right under the list
+updateContentHeight(listPanel.size.h, 0)
 
--- Tabs, right above the area they switch (title row and object list stay the same on every tab).
--- The area has its own panel color and the active tab uses the same color and touches the panel,
--- so it reads as one shape. Inactive tabs keep the normal button look.
+-- editor tabs, right above the panel they switch
 local TAB_GAP = Widgets.GAP
 local tabRow = content:addChild({
     pos = defaultPos,
     size = { content.size.w, EDITOR_TABS_H },
-    bgColor = Widgets.TAB_PANEL_SOLID, -- the gaps between the tabs: the inactive tabs' color
+    bgColor = Widgets.TAB_PANEL_SOLID, -- the gaps: the inactive tabs' color
 })
-updateContentHeight(tabRow.size.h, 0) -- no gap, the panel starts right under the tabs
+updateContentHeight(tabRow.size.h, 0)
 
--- editor tabs of each list, a tab's id is the editor panel it shows (PANELS in ui/editor.lua). The
--- Players and Joints lists have one tab so far, their tab row is there for more. Each list has its own
--- row, shown with the list (Main.applyTab)
+-- editor tabs per list; a tab's id is the panel it shows (PANELS in ui/editor.lua)
+local OBJECT_TABS = {
+    { id = "core", label = "Core" },
+    { id = "advanced", label = "Advanced" },
+    { id = "thrust", label = "Thrust" },
+    { id = "generate", label = "Generate" },
+}
 local TAB_SETS = {
-    objects = {
-        { id = "core", label = "Core" },
-        { id = "advanced", label = "Advanced" },
-        { id = "thrust", label = "Thrust" },
-        { id = "generate", label = "Generate" },
-    },
-    -- the same Core, Advanced, Thrust and Generate panels as objects, their rows on the atmo objects' lines
-    -- there (Advanced with the atmo's own rows instead of Model and Ids: ui/editor_atmo.lua; Thrust flies props
-    -- in Atmo Play; Generate's pieces go to the atmo, without joints: ui/editor_generate.lua)
-    atmo = {
-        { id = "core", label = "Core" },
-        { id = "advanced", label = "Advanced" },
-        { id = "thrust", label = "Thrust" },
-        { id = "generate", label = "Generate" },
-    },
+    objects = OBJECT_TABS,
+    atmo = OBJECT_TABS, -- the same panels, on atmo objects' lines
     players = { { id = "player", label = "Core" } },
-    misc = { { id = "misc", label = "Core" } }, -- the World list's one tab
+    misc = { { id = "misc", label = "Core" } },
     joints = { { id = "jointLink", label = "Link" }, { id = "joint", label = "Properties" } },
 }
--- every tab is as wide as an object tab, so a list with fewer tabs lines up with the objects' row
+-- tabs as wide as the objects' ones, so rows line up
 local TAB_SLOTS = #TAB_SETS.objects
 local tabW = (tabRow.size.w - TAB_GAP * (TAB_SLOTS - 1)) / TAB_SLOTS
 ---@type table<string, UIElement> tab rows by list
 local tabRows = {}
----@type table<string, table<string, UIElement>> tab buttons by list, then panel id (a panel can be on
----several lists: Core)
+---@type table<string, table<string, UIElement>> tab buttons by list, then panel id
 local tabButtons = {}
----@type table<string, string> a list each panel id is on (the one setTab uses when the shown list hasn't it)
+---@type table<string, string> a list each panel id is on (for setTab when the shown list lacks it)
 local tabList = {}
 for list, tabs in pairs(TAB_SETS) do
     tabRows[list] = tabRow:addChild({
@@ -332,12 +309,11 @@ local function listHasTab(list, id)
     return false
 end
 
--- the editor area inside the tab panel: fits the panels (Widgets.PANEL_ROWS rows each, see PANELS in ui/editor.lua)
 local areaH = EDITOR_H
 local tabPanel = content:addChild({
     pos = defaultPos,
     size = { content.size.w, areaH + TAB_PADDING * 2 },
-    bgColor = LIST_BG, -- dark like the list, the active editor tab joins it
+    bgColor = LIST_BG, -- the active editor tab joins it
 })
 local editorContainer = tabPanel:addChild({
     pos = { TAB_PADDING, TAB_PADDING },
@@ -345,27 +321,21 @@ local editorContainer = tabPanel:addChild({
 })
 updateContentHeight(tabPanel.size.h)
 
--- Duplicate/Delete/Import/Export are the list's buttons under the list (Main.setListActions), Save is with the
--- tools (its name on World > Core), Reindex is in the Advanced panel
-
--- footer: one row along the bottom of the screen over the game's view, no background, a child of the panel
--- reaching past its edges like the top bar. Left: the counters, middle: the latest message (MGE.say: chat
--- isn't shown with the HUD off, up to 3 stacked), right: the mod Save writes
--- Placed by Main.fitScreen, like the top bar's width
+-- Footer along the screen's bottom (children of the panel, placed by Main.fitScreen): counters left,
+-- messages in the middle (chat is hidden with the HUD), the mod Save writes on the right
 local FOOTER_EDGE = px(8) -- from the screen's sides
-local MESSAGE_W = px(380) -- the middle: room for a message (the credits are on the World list)
-local MESSAGE_SHOW, MESSAGE_FADE = 7, 1 -- seconds a message shows, then fades
-local MESSAGE_MAX = 3 -- messages shown at once: the newest in the footer's middle, older ones stacked above it
+local MESSAGE_W = px(380)
+local MESSAGE_SHOW, MESSAGE_FADE = 7, 1 -- seconds shown, then fading
+local MESSAGE_MAX = 3 -- newest in the middle, older ones stacked above
 ---@return UIElement
 local function addFooterPart()
     return Main.window:addChild({ pos = { 0, 0 }, size = { 1, FOOTER_H } })
 end
-local limitsRow = addFooterPart() -- object, dynamic id and joint usage, set by setDynamicStrings
+local limitsRow = addFooterPart() -- object, dynamic id and joint usage
 local fileRow = addFooterPart() -- the file Save writes, unsaved changes
 local shown = {} -- what the file row shows (below)
 
--- the message rows, bottom up: the footer's middle (the newest), then the older ones above it (placed by
--- Main.fitScreen). Black like the rest of the footer (FOOTER_COLOR, set below), empty without messages
+-- message rows, bottom up
 ---@type UIElement[]
 local messageRows = {}
 for k = 1, MESSAGE_MAX do
@@ -374,14 +344,12 @@ for k = 1, MESSAGE_MAX do
     messageRows[k] = row
 end
 
----@type { text: string, at: number }[] the messages that show, oldest first (at most MESSAGE_MAX)
+---@type { text: string, at: number }[] shown messages, oldest first
 local messages = {}
----@type string[] what each message row has laid out (Widgets.infoText fits the text to the width once)
+---@type string[] what each message row has laid out
 local rowTexts = {}
 
----MGE.say's footer half: the message in the middle, one line, without chat color codes. The ones before it
----move up, at most MESSAGE_MAX show. A text already showing moves to the middle with its time restarted
----instead of showing twice (a save says "gamerules saved" again after "saved ...")
+---MGE.say's footer half: one line without color codes. A repeated text moves to the newest slot
 ---@param text string
 function MGE.onMessage(text)
     text = text:gsub("%^%d%d", ""):gsub("%s*\n%s*", "  ")
@@ -392,22 +360,20 @@ function MGE.onMessage(text)
     if #messages > MESSAGE_MAX then table.remove(messages, 1) end
 end
 
--- on the newest row: the footer's middle is always shown with the window, the rows above it too
 Widgets.addDrawBefore(messageRows[1], function()
     local now = os.clock_real()
-    -- each one shows MESSAGE_SHOW seconds, then fades for MESSAGE_FADE, on its own clock
     for i = #messages, 1, -1 do
         if now - messages[i].at >= MESSAGE_SHOW + MESSAGE_FADE then table.remove(messages, i) end
     end
     for k, row in ipairs(messageRows) do
         local m = messages[#messages - k + 1] -- row 1 the newest
-        -- a row without a message is emptied: its old text would otherwise still be drawn, see-through
+        -- empty rows are cleared, else their old text stays drawn
         local text, alpha = "", 0
         if m then
             local age = now - m.at
             text, alpha = m.text, age > MESSAGE_SHOW and 1 - (age - MESSAGE_SHOW) / MESSAGE_FADE or 1
         end
-        row.uiColor[4] = alpha -- the text reads the row's color as it draws
+        row.uiColor[4] = alpha
         if text ~= rowTexts[k] then
             Widgets.infoText(row, text)
             rowTexts[k] = text
@@ -415,69 +381,60 @@ Widgets.addDrawBefore(messageRows[1], function()
     end
 end)
 
----Fits what spans the screen to its size: the top bar's width (its right-hand groups count from its right
----edge) and the footer along the bottom. At start and when the game's window or GUI scale changes (the
----resolution_changed hook): those were placed for the size MGE started with
+---Fits the top bar and footer to the screen (at start and on resolution / GUI scale changes)
 function Main.fitScreen()
     local w, h = get_window_size()
     w, h = w or WIN_W or 1280, h or WIN_H or 720
     topBar.size.w = w
-    topBar:moveTo(0, 0) -- updates its children's positions
+    topBar:moveTo(0, 0) -- repositions its children
     local sideW = (w - MESSAGE_W) / 2 - FOOTER_EDGE - BAR_SEP
     for _, part in ipairs({ { limitsRow, FOOTER_EDGE }, { fileRow, w - FOOTER_EDGE - sideW } }) do
         part[1].size.w = sideW
         part[1]:moveTo(part[2], h - FOOTER_H)
     end
-    -- the messages: the newest in the footer's middle, the older ones stacked above it, as wide
     for k, row in ipairs(messageRows) do
         row.size.w = MESSAGE_W
         row:moveTo((w - MESSAGE_W) / 2, h - FOOTER_H * k)
     end
-    rowTexts = {} -- the message rows lay their text out again for the new width
-    shown = {} -- the file row lays its text out again for its new width
+    rowTexts, shown = {}, {} -- lay text out again for the new widths
     if Main.refreshCounters then Main.refreshCounters() end
 end
 table.insert(Widgets.onScreenChanged, Main.fitScreen)
 Main.fitScreen()
 
--- footer text: black over the game's view, dark red while something needs attention (dynamic objects,
--- unsaved changes)
+-- footer text: black over the light game view, dark red for warnings
 local WARNING_COLOR = { 0.6, 0.02, 0.02, 1 }
-local FOOTER_COLOR = { 0, 0, 0, 1 } -- black: the footer is over the game's (light) view
+local FOOTER_COLOR = { 0, 0, 0, 1 }
 
--- File row: checked every frame, the mod text is only built again when the data changed (an edit
--- commits a new undo state, a reload parses new data) or the source changed (load, save). Lua
--- strings are interned, comparing savedText is cheap
+-- File row: checked every frame but recomputed only when the data (undo state, reload) or the source
+-- changed. Interned strings make the comparisons cheap
 Widgets.addDrawBefore(fileRow, function()
     local parsed, state, saved = ModData.parsed, History.states[History.index], MGE.savedText
-    local source = tostring(MGE.sourcePath) .. "|" .. tostring(MGE.saveName) -- the typed name changes the target too
-    -- the atmo's saved text too (a save marks it saved, utils/atmo.lua), compared as it is: joined with anything it
-    -- was copied each frame, hundreds of KB with a big atmo. A shader picked counts too (headerVersion)
+    local source = tostring(MGE.sourcePath) .. "|" .. tostring(MGE.saveName)
+    -- the atmo's saved text compared alone: joining it would copy hundreds of KB a frame
     local atmo, header = MGE.Atmo.state.text, MGE.Atmo.headerVersion
     if shown.parsed == parsed and shown.state == state and shown.source == source and shown.saved == saved
         and shown.atmo == atmo and shown.header == header and shown.done then return end
     shown = { parsed = parsed, state = state, source = source, saved = saved, atmo = atmo, header = header, done = true }
     local target = MGE.saveTarget()
     local unsaved = MGE.hasUnsavedChanges()
-    -- where Save writes (a mod from outside modmaker/ is copied there, its original stays as it is)
     local text = "Mod: " .. target .. (unsaved and "  (unsaved changes)" or "")
     fileRow.uiColor = unsaved and WARNING_COLOR or FOOTER_COLOR
     Widgets.infoText(fileRow, text, RIGHTMID)
 end)
 
 
-dofile(MGE.scriptPath .. "ui/scroll_list.lua") -- MGE.ScrollList, used by the lists and the file picker
-MGE.ScrollList.bgColor = LIST_BG -- every list: the object grid, players, the file picker, assets
-dofile(MGE.scriptPath .. "ui/file_picker.lua") -- MGE.FilePicker, folder browser: imports, Model, Shader and Map rows
-dofile(MGE.scriptPath .. "ui/color_picker.lua") -- MGE.ColorPicker, the Core tab's Color name
-dofile(MGE.scriptPath .. "ui/assets.lua") -- MGE.Assets, export / import overlay for the lists' buttons
+dofile(MGE.scriptPath .. "ui/scroll_list.lua")
+MGE.ScrollList.bgColor = LIST_BG
+dofile(MGE.scriptPath .. "ui/file_picker.lua")
+dofile(MGE.scriptPath .. "ui/color_picker.lua")
+dofile(MGE.scriptPath .. "ui/assets.lua")
 local obj_selector = dofile(MGE.scriptPath .. "ui/obj_selector.lua")
 local joint_list = dofile(MGE.scriptPath .. "ui/joint_list.lua")
 local player_list = dofile(MGE.scriptPath .. "ui/player_list.lua")
 local editor = dofile(MGE.scriptPath .. "ui/editor.lua")
 
----Shows the shown list's tab row and its active editor panel. hide(true) keeps hidden parts hidden when
----the window is re-shown (F1)
+---Shows the shown list's tab row and active panel
 function Main.applyTab()
     for list, row in pairs(tabRows) do
         if list == Main.listTab then row:show(true) else row:hide(true) end
@@ -486,16 +443,14 @@ function Main.applyTab()
     local active = Main.activeTabs[Main.listTab]
     editor.applyPanel(active)
     for id, btn in pairs(tabButtons[Main.listTab] or {}) do
-        styleTab(btn, id == active, LIST_BG, Widgets.TAB_PANEL_SOLID) -- active: the editor panel's dark
+        styleTab(btn, id == active, LIST_BG, Widgets.TAB_PANEL_SOLID)
     end
-    -- window hidden (F1): show() above draws a child even under a hidden parent, and rebuilt blocks are
-    -- created shown (a new mod's /lm rebuilt the editor and left its tab row and panel on screen). Hidden
-    -- again, hide() without noreload keeps the flags set above, so F1 shows the right row and panel
+    -- window hidden (F1): show() above draws children even under a hidden parent; hide again, keeping the
+    -- flags so F1 shows the right row and panel
     if Main.window and not Main.window.destroyed and not Main.window.displayed then Main.window:hide() end
 end
 
----Makes a tab its list's active one (shown when that list is), e.g. "core" or "player". A panel on several
----lists (Core: objects and atmo) is the shown list's when it has it
+---Makes a tab its list's active one; a panel on several lists goes to the shown one if it has it
 ---@param id string panel id, see TAB_SETS
 function Main.setTab(id)
     local list = listHasTab(Main.listTab, id) and Main.listTab or tabList[id]
@@ -504,10 +459,8 @@ function Main.setTab(id)
     Main.applyTab()
 end
 
----Selecting objects or atmo objects (a click in the world or the list, a box) while their list is on
----Generate: back to Core, the gizmo and the rows then work on the selection instead of the preview
----@param list string? "objects" or "atmo", the list the selection is on, default the shown one (a click that switches
----lists passes the one it switches to, before switching: it opens on Core)
+---Selecting on a list showing Generate switches it to Core, so the gizmo and rows work on the selection
+---@param list string? "objects" or "atmo", default the shown one
 function Main.leaveGenerate(list)
     list = list or Main.listTab
     if (list ~= "objects" and list ~= "atmo") or Main.activeTabs[list] ~= "generate" then return end
@@ -515,31 +468,27 @@ function Main.leaveGenerate(list)
     if list == Main.listTab then Main.applyTab() end
 end
 
----After objects or atmo objects got selected on the shown list, once its window shows the selection (each
----caller refreshes the way it needs: the list's cells, or the whole window): Generate goes back to Core
----(Main.leaveGenerate) and camera follow frames the selection. Every way of selecting ends here: a click in the
----world or the list, a box, select all. Not for deselecting: the camera and tab stay
+---Every way of selecting ends here (not deselecting): Generate back to Core, camera follow
 function Main.selectionMade()
     Main.leaveGenerate()
     MGE.Camera.followSelection()
 end
 
----Players in the current mod (numplayers gamerule), keeps the selected players in range
+---Players in the mod (numplayers), keeping the selection in range
 ---@return integer
 function Main.getPlayerCount()
     local count = math.max(tonumber(get_game_rules().numplayers) or 2, 1)
     for id in pairs(Main.selectedPlayers) do
-        if id >= count then Main.selectedPlayers[id] = nil end -- picked in a mod with more players
+        if id >= count then Main.selectedPlayers[id] = nil end
     end
     if Main.selectedPlayer >= count then Main.selectedPlayer = 0 end
     return count
 end
 
----Selected players in order, what the gizmo, the highlight, Import, the Scale row and camera follow work on.
----Can be empty (Ctrl + A on all, Shift + click on the last one)
+---Selected players in order (can be empty)
 ---@return integer[]
 function Main.selectedPlayerList()
-    Main.getPlayerCount() -- in range
+    Main.getPlayerCount() -- keeps it in range
     local list = {}
     for id in pairs(Main.selectedPlayers) do table.insert(list, id) end
     table.sort(list)
@@ -552,10 +501,7 @@ local function applyListTab()
     end
 end
 
----Picks a player (its row in the Players list, a click on it in the world): the list, the players panel
----and the highlight show it, camera follow frames the selection. Like objects (ModData.clickSelect): a
----click selects only that player, clicking the only selected one deselects it, Shift (additive) adds
----it or takes it out. The panel shows the last picked one (Main.selectedPlayer), also with none selected
+---Picks a player like ModData.clickSelect picks objects; the panel shows the last picked one
 ---@param id integer 0-based
 ---@param additive boolean?
 function Main.selectPlayer(id, additive)
@@ -568,18 +514,18 @@ function Main.selectPlayer(id, additive)
         Main.selectedPlayer = id
     elseif Main.selectedPlayers[id] then
         Main.selectedPlayers[id] = nil
-        if id == Main.selectedPlayer then -- the panel moves to another selected player, if any
+        if id == Main.selectedPlayer then -- the panel moves to another selected one
             for p in pairs(Main.selectedPlayers) do Main.selectedPlayer = p break end
         end
     else
         Main.selectedPlayers[id] = true
         Main.selectedPlayer = id
     end
-    Main.updateWindow() -- list row highlights, panel values
+    Main.updateWindow()
     MGE.Camera.followPlayer(Main.selectedPlayerList())
 end
 
----Ctrl + A on the Players list: every player, or none when all are selected already (like objects)
+---Ctrl + A on the Players list: all, or none when all are selected
 function Main.toggleSelectAllPlayers()
     local count = Main.getPlayerCount()
     local all = true
@@ -594,8 +540,7 @@ function Main.toggleSelectAllPlayers()
     Main.updateWindow()
 end
 
----Selected joints in id order, only joints the mod has. Selected empty slots (Main.selectedJoints keeps
----them: the Link tab makes a joint there) are left out
+---Selected joints in id order (empty slots left out)
 ---@return FileParserEnvObjJoint[]
 function Main.selectedJointList()
     local list = {}
@@ -606,13 +551,13 @@ function Main.selectedJointList()
     return list
 end
 
----The current joint slot: the last one clicked, always selected (a joint or empty). The Link tab edits it
+---The current joint slot (see jointSlot)
 ---@return integer
 function Main.selectedSlot()
     return Main.jointSlot
 end
 
----The slot whose objects a world click picks: the current slot while the Joints list's Link tab shows
+---The slot world clicks pick objects for: the current one while the Link tab shows
 ---@return integer?
 function Main.linkSlot()
     if Main.listTab ~= "joints" or Main.activeTabs.joints ~= "jointLink" then return nil end
@@ -628,24 +573,22 @@ local function followJoints()
     end
     if MGE.Camera.followMoves and #objects > 0 then MGE.Camera.focus(objects) end
 end
-Main.followJoints = followJoints -- also after the Link tab's Create / Update (ui/editor_link.lua)
+Main.followJoints = followJoints
 
----After the joint selection changed: a draft for another slot is dropped (the Link tab starts from the
----saved link again)
+---Drops a draft for another slot after the joint selection changed
 local function dropOtherDraft()
     local draft = MGE.Joints.draft
     if draft and draft.jointId ~= Main.jointSlot then MGE.Joints.resetDraft() end
 end
 
----Picks a joint slot (its cell in the Joints list): a click makes it the current slot and selects only
----it, Shift (additive) adds it or takes it out (the Properties tab edits all selected). One slot always
----stays selected. An empty slot opens the Link tab: linking two objects is what it needs
+---Picks a joint slot: click selects only it, Shift toggles it; one always stays selected. An empty
+---slot opens the Link tab
 ---@param id integer joint id
 ---@param additive boolean?
 function Main.selectJoint(id, additive)
     local selected = Main.selectedJoints
     if additive and selected[id] then
-        if next(selected, nil) ~= id or next(selected, id) ~= nil then -- not the last selected one
+        if next(selected, nil) ~= id or next(selected, id) ~= nil then -- not the only one
             selected[id] = nil
             if Main.jointSlot == id then Main.jointSlot = next(selected) end
         end
@@ -661,7 +604,7 @@ function Main.selectJoint(id, additive)
         followJoints()
         if not MGE.Joints.find(id) and Main.activeTabs.joints ~= "jointLink" then Main.setTab("jointLink") end
     end
-    Main.onSelectionChanged() -- the panel; the cells are restyled by the grid
+    Main.onSelectionChanged() -- the grid restyles its cells itself
 end
 
 ---Selects only these joint slots, the first is the current one, e.g. a new joint
@@ -674,8 +617,7 @@ function Main.selectJointsOnly(ids)
     dropOtherDraft()
 end
 
----Ctrl + A on the Joints list: every joint, or back to only the current slot when all are selected
----already. Empty slots aren't selected by it, the current slot stays selected
+---Ctrl + A on the Joints list: every joint, or only the current slot when all are selected
 function Main.toggleSelectAllJoints()
     local joints = ModData.parsed.env_obj_joint
     local all = #joints > 0
@@ -692,18 +634,16 @@ function Main.toggleSelectAllJoints()
     Main.updateWindow()
 end
 
----Switches the list area between objects, atmo objects, joints and players, the top level choice. On
----the Atmo list the mod's objects are see-through (utils/atmo_layer.lua), the atmo objects are edited
+---Switches the shown list (the Atmo list makes the mod's objects see-through)
 ---@param id "objects"|"atmo"|"joints"|"players"
 function Main.setListTab(id)
     local changed = Main.listTab ~= id
     Main.listTab = id
-    if id ~= "joints" then MGE.Joints.worldPick = false end -- the Link tab's Pick from world ends with the list
+    if id ~= "joints" then MGE.Joints.worldPick = false end
     MGE.AtmoLayer.setObjectsSeeThrough(id == "atmo")
     applyListTab()
     Main.applyTab()
     Main.updateWindow()
-    -- with camera follow on: the picked player's camera, the selected joints, or the object selection
     if changed then
         if id == "players" then
             MGE.Camera.followPlayer(Main.selectedPlayerList())
@@ -737,7 +677,7 @@ local function setDynamicStrings()
         (warning and " (" .. warning .. ")" or "") ..
         "    Joints " .. #ModData.parsed.env_obj_joint .. "/" .. MGE.MAX_ENV_JOINTS, LEFTMID)
 end
-Main.refreshCounters = setDynamicStrings -- also after a screen size change (Main.fitScreen)
+Main.refreshCounters = setDynamicStrings
 
 local function createObjSelector()
     if Main.listTab == "players" then
@@ -747,7 +687,6 @@ local function createObjSelector()
     elseif Main.listTab == "atmo" then
         obj_selector.create(obj_selector_container, ModData.parsed.atmo, "atmo")
     elseif Main.listTab == "misc" then
-        -- nothing to pick: the panel's rows are about the whole mod
         Main.setListActions({})
         obj_selector_container:addChild({
             pos = { Widgets.px(8), 0 },
@@ -773,42 +712,39 @@ function Main.updateWindow()
     Widgets.clearChildren(obj_selector_container)
     setDynamicStrings()
     createObjSelector()
-    Main.onSelectionChanged() -- called after select all, saves and reloads
+    Main.onSelectionChanged()
 end
 
----Selects or deselects every object (object list's select all icon, Ctrl+A)
----@param value boolean? nil selects all, or deselects all when everything is already selected
-function Main.toggleSelectAll(value)
-    local objects = ModData.parsed.env_obj
+---Selects or deselects every object of a list
+---@param list FileParserEnvObj[]
+---@param value boolean? nil selects all, or deselects all when all are selected
+local function selectAllIn(list, value)
     if value == nil then
         value = false
-        for _, obj in ipairs(objects) do
+        for _, obj in ipairs(list) do
             if not obj.selected then value = true break end
         end
     end
-    for _, obj in ipairs(objects) do
-        obj.selected = value or nil
-    end
+    for _, obj in ipairs(list) do obj.selected = value or nil end
     Main.updateWindow()
-    if value then Main.selectionMade() end -- like any selecting: Generate back to Core, camera follow
+    if value then Main.selectionMade() end
 end
 
----Selects every atmo object, or none when all are selected already (the Atmo list's select all, Ctrl + A)
+---Select all / Ctrl + A on the Objects list
+---@param value boolean? see selectAllIn
+function Main.toggleSelectAll(value)
+    selectAllIn(ModData.parsed.env_obj, value)
+end
+
+---Select all / Ctrl + A on the Atmo list
 function Main.toggleSelectAllAtmo()
-    local list = ModData.parsed.atmo
-    local all = #list > 0
-    for _, obj in ipairs(list) do
-        if not obj.selected then all = false break end
-    end
-    for _, obj in ipairs(list) do obj.selected = not all or nil end
-    Main.updateWindow()
-    if not all then Main.selectionMade() end -- like any selecting: Generate back to Core, camera follow
+    selectAllIn(ModData.parsed.atmo)
 end
 
 function Main.resetWindow()
     Main.page = 1
-    Main.selectedJoints, Main.jointSlot = { [1] = true }, 1 -- another mod: its joints are other joints
-    MGE.Joints.resetDraft() -- its slot belongs to the old mod
+    Main.selectedJoints, Main.jointSlot = { [1] = true }, 1 -- another mod's joints
+    MGE.Joints.resetDraft()
     Main.updateWindow()
 end
 
@@ -818,6 +754,6 @@ createEditor()
 Main.applyTab()
 applyListTab()
 
--- closing the window quits the script, window is already being killed so quit skips it
+-- closing the window quits (quit skips the window, it's already dying)
 Main.window.killAction = function() MGE.quit(true) end
 return Main

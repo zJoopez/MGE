@@ -1,17 +1,9 @@
--- Map placement view, opened by the Convert Map overlay's Place button (ui/map_overlay.lua): where a
--- map conversion is picked. The map is drawn in the world where Convert puts it, with the box of it
--- that gets converted (the region). The gizmo (toolbar Move / Rotate / Scale, Alt + Q / W / E) works
--- on what the bar at the top picks:
---   Region: Move it, Scale it per axis (its size), in the map's own axes. It doesn't turn: Rotate
---           switches over to the Map
---   Map:    Move (where the map sits: the anchor), Rotate around z (yaw), Scale (white cube: map scale)
--- Orange: what Convert adds (the biggest pieces up to the budget), purple: added to the atmo (the ones
--- after the overlay's Budget, its Atmo count, utils/atmo_layer.lua), red: in the region but over the
--- budget, grey: the map around the region (MapPlace.contextMargin, its biggest boxes). The counts in
--- the bar are the conversion's own (MapConv.select, run again after every region change). The preview
--- draws every kept box and at most MapPlace.maxDraws other shapes a frame, the bar says when some are left out.
--- Convert adds the boxes and closes the view, Settings (or Esc) goes back to the overlay. Both keep
--- the placement for the next time. World clicks don't select while it's open, camera drags still work.
+-- Map placement view (Convert Map's Place): the map drawn where Convert puts it, plus the region that
+-- gets converted. The gizmo edits what the top bar picks: the Region (Move, per-axis Scale, in map
+-- axes) or the Map (Move, Rotate around z, uniform Scale).
+-- Colors: orange becomes objects, purple goes to the atmo, red is over budget, grey is context.
+-- Convert adds the boxes; Settings / Esc go back to the overlay; both keep the placement. World clicks
+-- don't select meanwhile
 local MapConv = MGE.MapConv
 local Mat3 = MGE.Mat3
 local Vec = MapConv.Vec
@@ -21,12 +13,10 @@ local Highlight = MGE.Highlight
 ---@class MapPlace
 local MapPlace = {
     active = false,
-    -- the game draws only so many 3D shapes a frame (how many depends on its graphics settings), a whole
-    -- map (dust2) is far more. Every kept box is drawn (Budget + Atmo, the player's pick), the rest on top
-    -- of them is capped (a draw each): over budget, grey context, kept outlines
+    -- draws on top of the kept boxes (over budget, context, outlines): the game caps shapes a frame
     maxDraws = 512,
     contextLimit = 250, -- grey boxes at most, the biggest near the region
-    contextMargin = 0.5, -- grey boxes come from around the region: this share of its size on each side
+    contextMargin = 0.5, -- context reach: this share of the region's size on each side
     minRegion = 16, -- map units, smallest region side
 }
 MGE.MapPlace = MapPlace
@@ -41,15 +31,13 @@ local COLORS = {
 ---@class MapPlaceSession
 ---@field pieces MapConvPiece[] MapConv.pieces of the map
 ---@field report MapConvReport the report that came with them
----@field options MapConvOptions the overlay's options (budget, scale, yaw...), region and anchor aside
+---@field options MapConvOptions the overlay's options (budget, scale, yaw...)
 ---@field region { min: number[], max: number[] } map units
----@field anchor number[] map units. Its height is worked out (ground): the lowest kept box sits lift
----above the ground (z 0), the game's floor can't be removed and nothing should end up under it
----@field lift number world units the lowest point sits above the ground, 0 or more (Map Move up / down)
----@field onConvert fun(placed: MapPlaced): (fun()?), string? converts: a function that adds the boxes (run
----once the view is closed and MGE's window is back), or nil and why nothing could be added (the view
----stays open)
----@field onSettings fun(placed: MapPlaced) back to the overlay, keeping the placement
+---@field anchor number[] map units; its height is derived (ground): nothing may end up under the floor
+---@field lift number world units the lowest point sits above the ground, >= 0
+---@field onConvert fun(placed: MapPlaced): (fun()?), string? returns the adding step (run after the view
+---closes), or nil and why nothing could be added
+---@field onSettings fun(placed: MapPlaced) back to the overlay
 
 ---@class MapPlaced what the view picked
 ---@field region { min: number[], max: number[] }
@@ -57,20 +45,20 @@ local COLORS = {
 ---@field yaw number
 ---@field scale number
 ---@field lift number
----@field simplify boolean the bar's Simplify toggle (Merge.flat)
----@field dropCovered boolean the bar's Covered toggle (Merge.hidden with MapConv.COVERED_SHARE)
+---@field simplify boolean the bar's Simplify toggle
+---@field dropCovered boolean the bar's Covered toggle
 
 ---@type MapPlaceSession?
 local session = nil
 ---@type "region"|"map" what the gizmo works on
 local editing = "region"
--- the conversion as it stands: kept and cut boxes (map units), the rest of the map for context
+-- the conversion so far (map units)
 local kept, cut, context = {}, {}, {}
--- the whole map merged, the biggest first: context is picked from it around the region
+-- the whole map merged, biggest first: context comes from it
 local allContext = {}
----@type { pieces: MapConvPiece[], key: string, boxes: MapConvBox[] }? the last allContext and what it was made from
+---@type { pieces: MapConvPiece[], key: string, boxes: MapConvBox[] }?
 local contextCache = nil
--- how many of kept, cut and context are drawn: every kept one, the rest in MapPlace.maxDraws (see plan)
+-- how many of each are drawn (see plan)
 local shown = { kept = 0, cut = 0, context = 0, outlines = 0, trimmed = false }
 ---@type { key: string, kept: HighlightBox[], cut: HighlightBox[], context: HighlightBox[] }?
 local world = nil
@@ -79,11 +67,11 @@ local world = nil
 local live = {}
 ---@type UIElement?
 local bar = nil
--- MGE's window was shown when the view opened: it's hidden meanwhile and shown again after
+-- MGE's window is hidden meanwhile and shown again after
 local windowWasShown = false
----@type GizmoMode? the gizmo's tool when the view opened: it starts on Move, stop puts this one back
+---@type GizmoMode? the tool to restore on stop
 local modeBefore = nil
----@type fun()? the bar's refresh while it's up, also a gizmo mode listener (Gizmo.modeListeners)
+---@type fun()? the bar's refresh, also a gizmo mode listener
 local refreshBar = nil
 ---@type UIElement?
 local info = nil
@@ -104,7 +92,7 @@ local function regionCenter()
     return { (r.min[1] + r.max[1]) / 2, (r.min[2] + r.max[2]) / 2, (r.min[3] + r.max[3]) / 2 }
 end
 
----@return HighlightBox the region in the world, committed (no drag)
+---@return HighlightBox the region in the world (without a drag)
 local function regionBox()
     local r = session.region
     local box = { center = regionCenter(), frame = Mat3.IDENTITY, sides = Vec.sub(r.max, r.min) }
@@ -112,8 +100,7 @@ local function regionBox()
     return { pos = pos, frame = frame, sides = sides }
 end
 
----@return integer how many kept boxes become objects: those past it go to the atmo (utils/atmo_layer.lua). The
----overlay's Budget (objectBudget), at most the object ids free in the mod
+---@return integer kept boxes that become objects (the rest go to the atmo)
 local function objectCount()
     local free = MGE.ModData.freeCount()
     return math.min(free, session.options.objectBudget or free)
@@ -130,7 +117,7 @@ local function setInfo(message)
         .. "   Move / Scale: Alt + Q / E, Rotate (the map): Alt + W"))
 end
 
----The grey context: boxes of the whole map whose middle is around the region but not in it
+---Context: boxes whose middle is around the region but not in it
 local function pickContext()
     local r = session.region
     local min, max = {}, {}
@@ -150,10 +137,8 @@ local function pickContext()
     end
 end
 
----How many boxes of each kind are drawn, one draw per fill: the region box (fill and outline), every
----kept box (what Convert adds: the overlay's Budget + Atmo, the player picked that many for their
----graphics settings; capped by maxDraws they were cut off past ~380 with a big atmo), then from
----MapPlace.maxDraws on top of them: over budget, context, then outlines for the kept boxes
+---Draw counts: the region (2), every kept box, then maxDraws more for over budget, context and kept
+---outlines, in that order
 local function plan()
     shown.kept = #kept
     local left = MapPlace.maxDraws - 2
@@ -165,27 +150,26 @@ local function plan()
     shown.trimmed = shown.kept < #kept or shown.cut < #cut or shown.context < #context
 end
 
----Height of the anchor: the lowest point of the kept boxes goes lift above the ground. The map only
----turns around z, so heights in map units carry over: world z = (z - anchor z) * scale
+---The anchor's height: the lowest kept point goes lift above the ground (the map only turns around z,
+---so world z = (z - anchor z) * scale)
 local function ground()
     local lowest = math.huge
     for _, box in ipairs(kept) do
         lowest = math.min(lowest, box.center[3] - MapConv.halfHeight(box))
     end
-    if lowest == math.huge then return end -- nothing kept, the height stays
+    if lowest == math.huge then return end
     session.anchor[3] = lowest - session.lift / session.options.scale
     world = nil
 end
 
----After a change: the camera looks at the region again (keeping its distance when it's far enough),
----like moving objects does with Camera follow on
+---Camera follow: frames the region after a change
 local function follow()
     if not MGE.Camera.followMoves then return end
     local box = regionBox()
     MGE.Camera.focusOn(box.pos, Vec.length(box.sides) / 2)
 end
 
----Runs the conversion's selection for the region again
+---Reruns the conversion's selection for the region
 local function reselect()
     local options = MapConv.withDefaults(session.options)
     options.region = session.region
@@ -197,7 +181,7 @@ local function reselect()
     setInfo()
 end
 
----World boxes for drawing, made again when the conversion or the placement changed
+---World boxes for drawing, rebuilt when the conversion or placement changed
 local function worldBoxes()
     local p = placement()
     local key = table.concat({ p.scale, p.yaw, session.anchor[1], session.anchor[2], session.anchor[3] }, "|")
@@ -216,8 +200,7 @@ local function worldBoxes()
     return world
 end
 
----A drawn box moved by the drag in progress: the map's around the dojo center (move, turn, scale), the
----region's by its own offset and per axis factors
+---A drawn box as the drag in progress leaves it
 ---@param box HighlightBox
 ---@param isRegion boolean
 ---@return HighlightBox
@@ -230,13 +213,13 @@ local function withLive(box, isRegion)
         if live.factors then sides = { sides[1] * live.factors[1], sides[2] * live.factors[2], sides[3] * live.factors[3] } end
         return { pos = pos, frame = box.frame, sides = sides }
     end
-    local center = regionBox().pos -- the map turns and scales around the region (mapTarget)
+    local center = regionBox().pos -- the map turns and scales around the region
     local pivot = { center[1], center[2], 0 }
     local turn = live.rotation or Mat3.IDENTITY
     local f = live.factors and live.factors[1] or 1
     local pos = Vec.add(pivot, Vec.scale(Mat3.apply(turn, Vec.sub(box.pos, pivot)), f))
     if live.offset then pos = Vec.add(pos, live.offset) end
-    -- not turned: the box's own frame (Highlight.drawBox keeps its rotation converted)
+    -- unturned: keep the frame (its converted rotation stays cached)
     return { pos = pos, frame = live.rotation and Mat3.mul(turn, box.frame) or box.frame, sides = Vec.scale(box.sides, f) }
 end
 
@@ -244,10 +227,9 @@ end
 local function draw()
     if not session then return end
     local boxes = worldBoxes()
-    -- draw counts as planned (plan): fills, outlines only on the biggest kept boxes that fit
     for _, box in ipairs(boxes.context) do Highlight.drawBox(withLive(box, false), COLORS.context, 0.08, false) end
     for _, box in ipairs(boxes.cut) do Highlight.drawBox(withLive(box, false), COLORS.cut, 0.3, false) end
-    -- kept past the object budget: the atmo's, by Convert (the smallest, kept is in budget order)
+    -- kept boxes past the object budget go to the atmo
     local free = objectCount()
     for i, box in ipairs(boxes.kept) do
         Highlight.drawBox(withLive(box, false), i > free and MGE.AtmoLayer.color or COLORS.kept, Highlight.previewAlpha,
@@ -291,8 +273,7 @@ local function regionTarget()
     }
 end
 
----The anchor that keeps the region's center where it is when the map turns by turn or scales by
----factor (MapConv.anchorAround), heights aside: ground works them out again
+---The anchor keeping the region's center in place when the map turns or scales (heights: ground)
 ---@param turn number[][] around z
 ---@param factor number
 ---@return number[] anchor
@@ -300,9 +281,8 @@ local function anchorAroundRegion(turn, factor)
     return MapConv.anchorAround(session.anchor, placement(), regionBox().pos, turn, factor)
 end
 
----The map as a gizmo target, around the region's center (where the view looks, the dojo center
----can be far off): Move (anchor across, lift up and down: never below the ground), Rotate around z
----(yaw), the white Scale cube (map scale). The region goes along, it's in map units
+---The map as a gizmo target around the region's center: Move (lift never below ground), Rotate around
+---z, uniform Scale. The region moves along (it's in map units)
 ---@return GizmoTarget
 local function mapTarget()
     return {
@@ -311,7 +291,6 @@ local function mapTarget()
         ringsOnly = 3,
         pivot = function() return regionBox().pos end,
         frame = mapFrame,
-        -- the preview doesn't go below the ground either
         previewMove = function(offset) live = { offset = { offset[1], offset[2], math.max(offset[3], -session.lift) } } end,
         previewRotate = function(rotation) live = { rotation = rotation } end,
         previewScale = function(factors) live = { factors = factors } end,
@@ -354,8 +333,7 @@ local function gizmoTarget(mode)
     if not session then return nil end
     if editing == "region" then
         if mode ~= "rotate" then return regionTarget() end
-        -- the region stays in the map's axes, Rotate turns the map: picking it (the bar, Alt + W) while
-        -- the region is edited goes over to the map, so the tool always does something
+        -- the region doesn't turn: Rotate switches to the map
         editing = "map"
         if refreshBar then refreshBar() end
     end
@@ -376,7 +354,7 @@ local function placed(s)
     }
 end
 
----Ends the view (Convert, Settings, Esc, quit), the gizmo and world clicks go back to the selection
+---Ends the view; the gizmo and world clicks go back to the selection
 local function stop()
     MGE.Gizmo.cancel()
     MGE.Gizmo.targetOverride = nil
@@ -387,14 +365,14 @@ local function stop()
     end
     refreshBar = nil
     if bar and not bar.destroyed then bar:kill() end
-    -- the selection's tool as it was (the view turns Move on), after the bar's listener is gone
+    -- the tool as before, after the bar's listener is gone
     if modeBefore and not MGE.quitting then MGE.Gizmo.setMode(modeBefore) end
     modeBefore = nil
-    -- MGE's window back, as it was before the view (not while quitting, it's being closed)
+    -- the window back (not while quitting)
     local window = MGE.Main and MGE.Main.window
     if windowWasShown and window and not window.destroyed and not MGE.quitting then
         window:show(false)
-        MGE.Main.applyTab() -- the shown list's tab row and editor panel, whatever happened meanwhile
+        MGE.Main.applyTab()
         MGE.Main.updateWindow()
     end
     windowWasShown = false
@@ -404,24 +382,23 @@ local function stop()
     MapPlace.active = false
 end
 
----Settings (and Esc, MGE.closeTopOverlay): back to the overlay, the placement is kept
+---Settings / Esc: back to the overlay, keeping the placement
 function MapPlace.settings()
     if not session then return end
     local s = session
     stop()
     s.onSettings(placed(s))
 end
-MapPlace.cancel = MapPlace.settings -- what Esc calls
+MapPlace.cancel = MapPlace.settings -- Esc
 
----Convert: adds the boxes and closes the view. When nothing could be added it stays open and says why
+---Convert: adds the boxes and closes, or stays open and says why not
 function MapPlace.convert()
     if not session then return end
-    MGE.Gizmo.cancel() -- a drag in progress isn't part of it
+    MGE.Gizmo.cancel()
     local s = session
     local finish, err = s.onConvert(placed(s))
     if finish then
-        -- the window back first: adding the boxes switches its tab and reloads the mod, done while it
-        -- was hidden the editor's tabs didn't come back until another tab was picked
+        -- the window back first: adding switches tabs and reloads, which misbehaved while hidden
         stop()
         finish()
     else
@@ -436,22 +413,19 @@ local function light(button, on)
     if not button.destroyed then button.bgColor = on and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg end
 end
 
----Bar at the top, MGE's window is hidden meanwhile:
----  Region | Map (what the gizmo edits), Move | Rotate | Scale (the gizmo tool: the window's toolbar
----  isn't shown), Settings | Convert
----  Simplify | Covered (what the budget holds)
----  counts
+---Top bar (MGE's window is hidden): Region | Map, Move | Rotate | Scale, Settings | Convert;
+---Simplify | Covered; counts
 local function buildBar()
-    local px = Widgets.px -- MGE's overall size (Widgets.UI_SCALE)
+    local px = Widgets.px
     local w, pad, gap = px(720), px(6), px(24)
     local rowH, toggleH = px(30), px(26)
     local h = pad + rowH + 4 + toggleH + 4 + Widgets.INFO_HEIGHT + 4 + pad
     local window = MGE.Main.window
     bar = UIElement:new({
-        globalid = window.globalid, -- drawn with MGE's window
+        globalid = window.globalid,
         pos = { (WIN_W - w) / 2, 10 },
         size = { w, h },
-        bgColor = Widgets.CONTENT_BG, -- like MGE's lists and editor
+        bgColor = Widgets.CONTENT_BG,
         shapeType = ROUNDED,
         rounded = 5,
         interactive = true, -- clicks on it don't reach the world
@@ -476,7 +450,7 @@ local function buildBar()
     local function pick(what)
         Gizmo.cancel()
         editing = what
-        -- the region doesn't turn (gizmoTarget would go back to the map): its Move instead
+        -- the region doesn't turn
         if what == "region" and Gizmo.mode == "rotate" then Gizmo.setMode("move") end
         refresh()
     end
@@ -501,7 +475,7 @@ local function buildBar()
     local toggleRow = bar:addChild({ pos = { pad, pad + rowH + 4 }, size = { inner, toggleH } })
     toggles = Widgets.buttonRow(toggleRow, 0, toggleH, {
         { label = "Simplify", onClick = function()
-            session.options.simplify = session.options.simplify == false -- nil (default) counts as on
+            session.options.simplify = session.options.simplify == false -- nil counts as on
             reselect()
             refresh()
         end },
@@ -524,13 +498,11 @@ function MapPlace.start(s)
     MapPlace.active = true
     editing = "region"
     live = {}
-    -- the whole map, merged, the biggest boxes first: the grey context around the region comes from it
+    -- the whole map merged, for context; no Simplify / dropping (too slow on dust2 for a background)
     local all = MapConv.withDefaults(s.options)
-    -- grey background only: Simplify over the whole map (dust2: 11 000 pieces) isn't worth the wait
     all.region, all.budget, all.simplify = nil, math.huge, false
-    all.dropHidden, all.dropCovered = false, false -- the grey context doesn't need them: 0.3 s on dust2
-    -- the same pieces (the overlay keeps them per map) and options give the same context: kept, so
-    -- Settings and Place again don't merge the whole map again (0.3 s on dust2)
+    all.dropHidden, all.dropCovered = false, false
+    -- cached per pieces and options (0.3 s on dust2)
     local key = table.concat({ tostring(all.merge), all.minSize }, "|")
     if contextCache and contextCache.pieces == s.pieces and contextCache.key == key then
         allContext = contextCache.boxes
@@ -544,7 +516,7 @@ function MapPlace.start(s)
     if MGE.Gizmo.mode == "none" then MGE.Gizmo.setMode("move") end
     Highlight.placement = draw
     MGE.WorldSelect.clicksOff = true
-    -- MGE's window out of the way, the bar has what's needed (shown again by stop)
+    -- MGE's window out of the way (stop shows it again)
     local window = MGE.Main.window
     windowWasShown = window.displayed == true
     if windowWasShown then window:hide(false) end

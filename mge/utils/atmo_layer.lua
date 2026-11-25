@@ -1,17 +1,9 @@
--- The atmo layer: atmo objects, kept in ModData.parsed.atmo and saved inside the mod (utils/atmo.lua: read with
--- the mod, written by Save). The game draws atmo objects without collisions and past its object limit
--- (MGE.MAX_ENV_OBJECTS); Atmo Play draws a mod's atmo, or a player loads its exported .atmo file
--- (World > Export) through the main menu's Shaders & Atmos > Atmos.
--- MGE draws them itself (utils/highlight.lua with AtmoLayer.ghost); the Atmo list shows them (A1, A2...).
---   To atmo (Objects > Advanced):  the selected objects become atmo objects, their ids are free for others
---   To objects (the Atmo tab):     selected atmo objects come back as objects, as many as there are free ids
---   Export atmo (World > Export):  writes the atmo as a separate .atmo file (AtmoLayer.exportAtmo)
--- Atmo objects aren't in the world, but they're edited like objects (utils/transforms.lua reads and
--- writes their lines). AtmoLayer.moveBy / rotateBy / scaleBy only draw a gizmo drag's preview.
--- Only so many are drawn (the nearest): the game draws only so many shapes a frame, and the Generate
--- preview comes first.
--- An atmo object's id is its place in the atmo list, NOT an object id: never hand one to get_obj_*
--- (AtmoLayer.isAtmo tells them apart)
+-- The atmo layer: atmo objects in ModData.parsed.atmo, saved inside the mod (utils/atmo.lua). The game
+-- draws atmos without collisions and past its object limit. MGE draws them itself (utils/highlight.lua
+-- via AtmoLayer.ghost); the Atmo list shows them as A1, A2...
+-- They're edited like objects (utils/transforms.lua writes their lines); moveBy / rotateBy / scaleBy
+-- only serve previews. Only the nearest maxDraws are drawn.
+-- An atmo id is its list index, NOT an object id: never pass one to get_obj_* (see AtmoLayer.isAtmo)
 local ModData = MGE.ModData
 local History = MGE.History
 local Mat3 = MGE.Mat3
@@ -19,17 +11,16 @@ local FileHandler = MGE.FileHandler
 
 ---@class AtmoLayer
 local AtmoLayer = {
-    color = { 0.75, 0.45, 1.0 }, -- ghost fill, selected ones use the selection highlight's color
+    color = { 0.75, 0.45, 1.0 }, -- ghost fill; selected ones use the selection color
     alpha = 0.15,
-    -- at most this many atmo shapes drawn a frame, the nearest the camera (Settings > Max draws). The game draws
-    -- only so many shapes a frame (fewer on higher graphics); a cap keeps big maps' fps steady
+    -- most atmo shapes drawn a frame, nearest first (Settings > Max draws): the game caps shapes a frame
     maxDraws = 1000,
     DRAW_CHOICES = { 5000, 1000, 500 },
-    MAX_GENERATE = 5000, -- most pieces one Generate adds to the atmo: no more could be drawn (DRAW_CHOICES' most)
-    -- the objects' alpha while the Atmo list shows (set live, put back after): see-through, the atmo in front
+    MAX_GENERATE = 5000, -- most pieces one Generate adds to the atmo (no more could be drawn)
+    -- the objects' alpha while the Atmo list shows, so the atmo stands out
     seeThroughAlpha = 0.15,
     ---@type { move: number[]?, rotation: number[][]?, scale: number[]?, pivot: number[], frame: number[][] }?
-    ---a gizmo drag in progress on the selected atmo objects: their ghosts are drawn where it puts them
+    ---a gizmo drag in progress on the selected atmo objects, drawn as a preview
     live = nil,
 }
 MGE.AtmoLayer = AtmoLayer
@@ -37,7 +28,7 @@ MGE.AtmoLayer = AtmoLayer
 ---@param value string?
 ---@return number[]
 local function numbers(value)
-    -- the usual three numbers (pos, rot, sides) in one match: re-reading thousands of ghosts after an edit
+    -- fast path for the usual three numbers: thousands of ghosts are re-read after an edit
     local text = tostring(value or "")
     local a, b, c, rest = text:match("^%s*(%S+)%s+(%S+)%s+(%S+)%s*(.*)$")
     if a and rest == "" then return { tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0 } end
@@ -47,7 +38,7 @@ local function numbers(value)
 end
 
 ---@param obj FileParserEnvObj
----@return string "box", "sphere" or "cylinder" (a pill in game), as mod files and atmos write them
+---@return string "box", "sphere" or "cylinder" (a pill in game)
 local function shapeOf(obj)
     local shape = tostring(obj.props.shape or "box"):match("^%s*(%a+)") or "box"
     if shape == "sphere" or shape == "cylinder" or shape == "capsule" then
@@ -57,14 +48,40 @@ local function shapeOf(obj)
 end
 AtmoLayer.shapeOf = shapeOf
 
----A rot line (degrees) as the rotation draw_*_m needs to show it the way the game shows the object:
----rotX(-x) rotY(-y) rotZ(-z), the same matrix get_obj_rot gives for it (measured in game with
----mge/tools/rotcheck.lua, 2026-11-14: rot 10 -20 30 matched exactly) and Transforms.orientationOf's.
----Earlier versions drew rotX(x) rotY(y) rotZ(z) and then its transpose: ghosts showed turned wrong
+---@return number bounding sphere radius from the center (Atmo Play's, loaded after this file)
+local function ghostRadius(shape, sides)
+    return MGE.AtmoPlay.Colliders.radius(shape, sides)
+end
+
+---@param id integer 0-based
+---@return any r, any g, any b, any a the game's color, r nil without one
+local function objColor(id)
+    local ok, r, g, b, a = pcall(get_obj_color, id)
+    if ok and type(r) == "table" then r, g, b, a = r[1], r[2], r[3], r[4] end
+    if ok and tonumber(r) then return r, g, b, a or 1 end
+    return nil, 0, 0, 0
+end
+AtmoLayer.liveColor = objColor
+
+---Keeps the atmo objects keep() accepts, renumbering their ids
+---@param keep fun(obj: FileParserEnvObj): boolean
+local function keepAtmo(keep)
+    local stay = {}
+    for _, obj in ipairs(ModData.parsed.atmo) do
+        if keep(obj) then
+            stay[#stay + 1] = obj
+            obj.id = #stay
+        end
+    end
+    ModData.parsed.atmo = stay
+end
+
+---A rot line (degrees) as the matrix draw_*_m needs: rotX(-x) rotY(-y) rotZ(-z), same as get_obj_rot
+---(checked in game with tools/rotcheck.lua)
 ---@param rot number[]
 ---@return number[][]
 function AtmoLayer.frameOf(rot)
-    -- Atmo Play's (the same math): looked up here, MGE.AtmoPlay loads after this file
+    -- looked up at call time: MGE.AtmoPlay loads after this file
     return MGE.AtmoPlay.Colliders.frameOf(rot)
 end
 
@@ -73,24 +90,21 @@ end
 ---@field pos number[]
 ---@field frame number[][]
 ---@field sides number[] box sides, sphere: radius first, pill: radius, length
----@field radius number a sphere around it from pos (Highlight's view culling)
----@field fileSides number[] the sides line's numbers as written (sides are made positive and at least 0.01 for
----drawing): what the transforms read (Transforms' sidesOf)
+---@field radius number bounding sphere from pos (view culling)
+---@field fileSides number[] the sides line as written (sides is made positive, min 0.01, for drawing)
 
--- frames by rot line: ghosts with the same rotation share one frame table (a map's boxes mostly have a
--- handful of rotations). A rotate drag then turns each once a frame (liveGhost), the highlight converts each
--- once (its rotCache is by frame). Frames are only read, never changed
+-- Ghosts with the same rot line share one read-only frame table: maps have few rotations, so drags and
+-- the highlight's rotCache work per frame, not per object
 ---@type table<string, number[][]>
 local frameByRot = {}
 
----What an atmo object looks like, for drawing. Worked out again only when its lines change
+---What an atmo object looks like, for drawing. Recomputed only when its lines change
 ---@param obj FileParserEnvObj
 ---@return AtmoGhost? nil without a pos line
 function AtmoLayer.ghost(obj)
     local p = obj.props
     if not p.pos then return nil end
-    -- the four lines compared as they are (Lua compares equal strings at once): joining them into one key
-    -- for every atmo object every frame was most of looking a ghost up
+    -- compare the lines directly (interned strings): building a key per object per frame was slow
     local cached = obj.ghostCache
     if cached and cached.pos == p.pos and cached.rot == p.rot and cached.sides == p.sides and cached.shape == p.shape then
         return cached.ghost
@@ -99,8 +113,7 @@ function AtmoLayer.ghost(obj)
     local sides = {}
     for k = 1, 3 do sides[k] = math.max(math.abs(fileSides[k] or 0), 0.01) end
     local shape = shapeOf(obj)
-    local radius = shape == "sphere" and sides[1] or shape == "cylinder" and sides[2] / 2 + sides[1]
-        or math.sqrt(sides[1] ^ 2 + sides[2] ^ 2 + sides[3] ^ 2) / 2
+    local radius = ghostRadius(shape, sides)
     local rotLine = p.rot or ""
     local frame = frameByRot[rotLine]
     if not frame then
@@ -113,8 +126,7 @@ function AtmoLayer.ghost(obj)
     return ghost
 end
 
----Game values an atmo object needs in its lines: the flag (static or not, for To objects' id range) and
----the color (for the atmo). Objects from the file have them, older ones may not
+---Fills in flag (for To objects' id range) and color from the game when the lines lack them
 ---@param obj FileParserEnvObj in the world
 local function writeMissingLines(obj)
     local id = obj.id - 1
@@ -123,22 +135,20 @@ local function writeMissingLines(obj)
         obj.props.flag = tostring(flag or MGE.FLAGS.STATIC)
     end
     if obj.props.color == nil then
-        local ok, r, g, b, a = pcall(get_obj_color, id)
-        if ok and type(r) == "table" then r, g, b, a = r[1], r[2], r[3], r[4] end
-        if ok and tonumber(r) then obj.props.color = FileHandler.formatNumbers(r, g, b, a or 1) end
+        local r, g, b, a = objColor(id)
+        if r then obj.props.color = FileHandler.formatNumbers(r, g, b, a) end
     end
 end
 
----Moves the selected objects into the atmo: they leave the game's objects (their ids are freed), still
----selected. Objects joined by a joint stay: a joint can only hold objects in the game
----@param mark boolean? Playable's move: each gets the FROM_KEY line (its id), so Default can move it back
+---Moves the selected objects into the atmo, freeing their ids. Joint-linked objects stay
+---@param mark boolean? Playable: tag each with FROM_KEY (its id) so Default can move it back
 function AtmoLayer.moveIn(mark)
     local selected = ModData.getSelected()
     if #selected == 0 then
         MGE.say("select the objects to move to the atmo first")
         return
     end
-    ModData.refreshJointIds() -- links made since the mod loaded count too
+    ModData.refreshJointIds()
     local moved, joined = {}, 0
     for i = #ModData.parsed.env_obj, 1, -1 do
         local obj = ModData.parsed.env_obj[i]
@@ -152,7 +162,7 @@ function AtmoLayer.moveIn(mark)
                 obj.kind = "atmo"
                 table.remove(ModData.parsed.env_obj, i)
                 ModData.releaseId(obj.id)
-                table.insert(moved, 1, obj) -- kept in id order
+                table.insert(moved, 1, obj) -- id order
             end
         end
     end
@@ -162,16 +172,15 @@ function AtmoLayer.moveIn(mark)
     if #moved == 0 then return end
     for _, obj in ipairs(moved) do
         table.insert(ModData.parsed.atmo, obj)
-        obj.id = #ModData.parsed.atmo -- atmo ids are their place in the list
+        obj.id = #ModData.parsed.atmo
     end
     MGE.say("moved " .. #moved .. " objects to the atmo (" .. #ModData.parsed.atmo .. " in all)")
     History.commit()
     MGE.apply()
 end
 
--- the line Playable (World > Atmo) writes on the objects it moves into the atmo: their object id. Default moves
--- them back with it (utils/playable.lua). Saved with the atmo, which keeps it over reopening; the game's
--- atmo loader skips it like the other object lines (flag, mass...)
+-- Playable's tag on objects it moves into the atmo: their object id, so Default can move them back.
+-- The game's atmo loader skips it
 AtmoLayer.FROM_KEY = "mge_was_object"
 
 ---Takes id off the free lists when it's on one
@@ -189,9 +198,8 @@ local function takeFreeId(id)
     return false
 end
 
----Makes atmo objects objects again: free ids (an object Playable moved gets its old id back when that one's
----free), out of the atmo, without the FROM_KEY line. When there aren't enough ids the first ones come back
----and the rest stay in the atmo. No undo step: the caller commits
+---Makes atmo objects objects again (FROM_KEY ones get their old id if free). With too few free ids,
+---the first ones come back. No undo step: the caller commits
 ---@param list FileParserEnvObj[] atmo objects
 ---@return integer count moved back
 function AtmoLayer.returnObjects(list)
@@ -207,7 +215,7 @@ function AtmoLayer.returnObjects(list)
             planned[#plans] = i
         end
     end
-    local got = ModData.allocateIds(plans) -- fits: count is at most the free ids
+    local got = ModData.allocateIds(plans) -- fits: count <= free ids
     if not got then
         for i = 1, count do if ids[i] then ModData.releaseId(ids[i]) end end
         return 0
@@ -221,20 +229,12 @@ function AtmoLayer.returnObjects(list)
         obj.id, obj.kind = ids[i], "env_obj"
         table.insert(ModData.parsed.env_obj, obj)
     end
-    local stay = {}
-    for _, obj in ipairs(ModData.parsed.atmo) do
-        if not back[obj] then
-            stay[#stay + 1] = obj
-            obj.id = #stay
-        end
-    end
-    ModData.parsed.atmo = stay
+    keepAtmo(function(obj) return not back[obj] end)
     ModData.sortObjects()
     return count
 end
 
----Moves the selected atmo objects back: they get free ids and are objects in the game again, still selected. When
----there aren't enough ids the first ones come back and the rest stay in the atmo
+---Moves the selected atmo objects back to objects, still selected
 function AtmoLayer.moveOut()
     local list = ModData.getSelectedAtmo()
     if #list == 0 then
@@ -252,22 +252,21 @@ function AtmoLayer.moveOut()
     MGE.apply()
 end
 
----To atmo (the Advanced tab): moveIn, then the Atmo list shows them, still selected
+---To atmo: moveIn, then show the Atmo list
 function AtmoLayer.toAtmo()
     local before = #ModData.parsed.atmo
     AtmoLayer.moveIn()
     if #ModData.parsed.atmo > before and MGE.Main then MGE.Main.setListTab("atmo") end
 end
 
----To objects (the Atmo list's Core tab): moveOut, then the Objects list shows them, still selected
+---To objects: moveOut, then show the Objects list
 function AtmoLayer.toObjects()
     local before = #ModData.parsed.atmo
     AtmoLayer.moveOut()
     if #ModData.parsed.atmo < before and MGE.Main then MGE.Main.setListTab("objects") end
 end
 
----Adds objects to the atmo, selected (an import's objects over the free ids, ui/assets.lua). No undo
----step or save of its own: the import makes them
+---Adds objects to the atmo, selected (an import's overflow). The caller commits and applies
 ---@param objects FileParserEnvObj[]
 function AtmoLayer.add(objects)
     for _, obj in ipairs(objects) do
@@ -278,12 +277,8 @@ function AtmoLayer.add(objects)
     end
 end
 
----Unloads the atmo the game has loaded (main menu > Shaders & Atmos > Atmos, or its default atmo from
----data/atmospheres/atmo.cfg), back to the game's default look: MGE draws the mod's atmo itself, a
----loaded copy of it (MGE - <mod>.atmo, World > Export) would show every object twice, its old version
----where the edited ones were. Called once, when MGE starts.
----Nothing loaded (_ATMO nil, the game manager's own flag): nothing happens, the shader stays as it is.
----The default in atmo.cfg stays: the player's choice for the next game start
+---Unloads the game's loaded atmo at startup: MGE draws the mod's atmo itself, and a loaded export would
+---show every object twice. atmo.cfg's default is left alone
 ---@return boolean unloaded
 function AtmoLayer.unloadGameAtmo()
     if rawget(_G, "_ATMO") == nil then return false end
@@ -294,38 +289,29 @@ function AtmoLayer.unloadGameAtmo()
     return ok
 end
 
----Removes the selected atmo objects (the list's Delete, ui/editor.lua does the rest)
+---Removes the selected atmo objects (ui/editor.lua does the rest)
 ---@return integer removed
 function AtmoLayer.removeSelected()
-    local stay = {}
-    for _, obj in ipairs(ModData.parsed.atmo) do
-        if not obj.selected then
-            stay[#stay + 1] = obj
-            obj.id = #stay
-        end
-    end
-    local removed = #ModData.parsed.atmo - #stay
-    ModData.parsed.atmo = stay
-    return removed
+    local before = #ModData.parsed.atmo
+    keepAtmo(function(obj) return not obj.selected end)
+    return before - #ModData.parsed.atmo
 end
 
----The object is an atmo object (kind "atmo": its id is its place in the atmo list, not an object id)
 ---@param obj FileParserEnvObj
----@return boolean
+---@return boolean its id is an atmo list index, not an object id
 function AtmoLayer.isAtmo(obj)
     return obj.kind == "atmo"
 end
 
----pos line as numbers, 0 0 0 without one
 ---@param obj FileParserEnvObj
----@return number[]
+---@return number[] pos line, 0 0 0 without one
 local function posOf(obj)
     local p = numbers(obj.props.pos)
     return { p[1] or 0, p[2] or 0, p[3] or 0 }
 end
 AtmoLayer.posOf = posOf
 
----Middle of the atmo objects (average of their pos lines), where the gizmo goes for them alone
+---Average of the pos lines (the gizmo's spot for atmo alone)
 ---@param list FileParserEnvObj[]
 ---@return number[]
 function AtmoLayer.center(list)
@@ -337,11 +323,10 @@ function AtmoLayer.center(list)
     return c
 end
 
----Moves atmo objects by offset: pos lines only (no undo step: the caller commits, with the
----objects' move when there are some)
+---Moves atmo objects' pos lines. The caller commits
 ---@param list FileParserEnvObj[]
 ---@param offset number[]
----@param props table<FileParserEnvObj, table>? write into these copies of the props instead (preview)
+---@param props table<FileParserEnvObj, table>? write into these copies instead (preview)
 function AtmoLayer.moveBy(list, offset, props)
     for _, obj in ipairs(list) do
         local target = props and props[obj] or obj
@@ -352,9 +337,8 @@ end
 
 local RotatingOld = dofile(MGE.scriptPath .. "utils/rotating.lua")
 
----Turns atmo objects by a rotation matrix around pivot, with the same math as the objects' rotate
----(Transforms.rotBy: RotatingOld on the pos and rot lines), so an atmo object ends up the way an
----object would. Lines only, the caller commits
+---Rotates atmo objects around pivot with the objects' rotate math (Transforms.rotBy), so they match.
+---The caller commits
 ---@param list FileParserEnvObj[]
 ---@param rotation number[][]
 ---@param pivot number[]
@@ -367,16 +351,14 @@ function AtmoLayer.rotateBy(list, rotation, pivot, props)
         local r = math.rad
         local outRot = RotatingOld.SetRotOffset(r(rot[1] or 0), r(rot[2] or 0), r(rot[3] or 0), ox, oy, oz)
         MGE.Transforms.writeVector(target, "rot", outRot)
-        if not MGE.Transforms.inPlace then -- in place: the position stays
+        if not MGE.Transforms.inPlace then
             local outPos = RotatingOld.SetRotPos(pos[1] or 0, pos[2] or 0, pos[3] or 0, pivot[1], pivot[2], pivot[3], ox, oy, oz)
             MGE.Transforms.writeVector(target, "pos", outPos)
         end
     end
 end
 
----Scales atmo objects by factors along frame's axes around pivot, like the objects' gizmo Scale
----(transforms.lua's planScale: positions through the group scale, sides by Transforms.scaleSidesFor with the
----shape their shape line gives). Lines only, the caller commits
+---Scales atmo objects along frame's axes around pivot, like the objects' gizmo Scale. The caller commits
 ---@param list FileParserEnvObj[]
 ---@param factors number[]
 ---@param pivot number[]
@@ -396,24 +378,20 @@ function AtmoLayer.scaleBy(list, factors, pivot, frame, props)
     end
 end
 
----A selected atmo object's ghost as the gizmo drag in progress (AtmoLayer.live) leaves it, worked out from
----the ghost alone: the same math as moveBy / rotateBy / scaleBy (the Rotate / Scale tools' final edit), as
----matrices on its cached pos, frame and sides. liveCopies copied every selected object's lines, wrote and
----parsed them again each frame: with thousands selected the drag stuttered. Rotate: pos around the pivot,
----frame turned (rotateBy's Euler steps are this rotation). Scale: pos through the group scale, sides by
----Transforms.scaleSidesAlong with the ghost's axes (its frame's columns, rotateBy's orientationOf)
+---A selected ghost as the drag in progress (AtmoLayer.live) leaves it: the moveBy / rotateBy / scaleBy
+---math done on the cached ghost, not on copied lines (which stuttered with thousands selected)
 ---@param g AtmoGhost
 ---@param live table AtmoLayer.live
 ---@return AtmoGhost
 function AtmoLayer.liveGhost(g, live)
-    -- plain numbers for the position (no table per step): this runs for every selected object each frame
+    -- plain numbers: runs for every selected object each frame
     local x, y, z = g.pos[1], g.pos[2], g.pos[3]
     local frame, sides, radius = g.frame, g.sides, g.radius
     if live.move then
         local m = live.move
         x, y, z = x + m[1], y + m[2], z + m[3]
     end
-    local inPlace = MGE.Transforms.inPlace -- the positions stay (Transforms.inPlace)
+    local inPlace = MGE.Transforms.inPlace
     if live.rotation then
         local c, r = live.pivot, live.rotation
         if not inPlace then
@@ -422,7 +400,7 @@ function AtmoLayer.liveGhost(g, live)
             y = c[2] + r[2][1] * dx + r[2][2] * dy + r[2][3] * dz
             z = c[3] + r[3][1] * dx + r[3][2] * dy + r[3][3] * dz
         end
-        -- each shared frame turned once for this drag step (AtmoLayer.live is new every step)
+        -- each shared frame turned once per drag step (live is new every step)
         live.turned = live.turned or {}
         local turned = live.turned[frame]
         if not turned then
@@ -433,8 +411,7 @@ function AtmoLayer.liveGhost(g, live)
     end
     if live.scale then
         local c, gf = live.pivot, live.frame
-        -- once per drag step (AtmoLayer.live is new every step): the group scale and, per shared frame, the
-        -- sides' factors (Transforms.sideFactors: logs and exps). Per object it was most of a scale drag's frame
+        -- group scale once per step, side factors once per shared frame
         local map = live.map
         if not map then
             map = Mat3.mul(Mat3.mul(gf, { { live.scale[1], 0, 0 }, { 0, live.scale[2], 0 }, { 0, 0, live.scale[3] } }),
@@ -450,21 +427,16 @@ function AtmoLayer.liveGhost(g, live)
         live.factorsBy = live.factorsBy or {}
         local f = live.factorsBy[frame]
         if not f then
-            local axes = { { frame[1][1], frame[2][1], frame[3][1] }, { frame[1][2], frame[2][2], frame[3][2] },
-                { frame[1][3], frame[2][3], frame[3][3] } }
-            f = MGE.Transforms.sideFactors(axes, gf, live.scale)
+            f = MGE.Transforms.sideFactors(Mat3.transpose(frame), gf, live.scale)
             live.factorsBy[frame] = f
         end
         sides = MGE.Transforms.applySideFactors(sides, f, g.shape == "sphere", g.shape == "cylinder")
-        radius = g.shape == "sphere" and sides[1] or g.shape == "cylinder" and sides[2] / 2 + sides[1]
-            or math.sqrt(sides[1] ^ 2 + sides[2] ^ 2 + sides[3] ^ 2) / 2
+        radius = ghostRadius(g.shape, sides)
     end
-    -- move and rotate keep the sides, so the radius too
     return { shape = g.shape, pos = { x, y, z }, frame = frame, sides = sides, radius = radius }
 end
 
----The selected atmo objects as a gizmo drag in progress would leave them: copies with changed lines
----(AtmoLayer.live), drawn instead of them. nil when no drag is on
+---The selected atmo objects as the drag in progress would leave them (copies), nil without a drag
 ---@return table<FileParserEnvObj, FileParserEnvObj>? copies by object
 function AtmoLayer.liveCopies()
     local live = AtmoLayer.live
@@ -480,12 +452,11 @@ function AtmoLayer.liveCopies()
     return copies
 end
 
----@type table<integer, number[]>? the objects' live colors before they turned see-through (game ids, 0-based)
+---@type table<integer, number[]>? colors before see-through, by 0-based game id
 local seeThrough = nil
 
----The mod's objects see-through (the Atmo list: the atmo objects are what's edited) or back. Live only:
----their color's alpha set with set_obj_color, the file's lines untouched, the colors before put back.
----A reload brings the file's colors back by itself, AtmoLayer.reapplySeeThrough makes them see-through again
+---Makes the mod's objects see-through (Atmo list) or restores them. Live alpha only, lines untouched.
+---A reload restores file colors; reapplySeeThrough redoes it
 ---@param on boolean
 function AtmoLayer.setObjectsSeeThrough(on)
     if on then
@@ -494,11 +465,10 @@ function AtmoLayer.setObjectsSeeThrough(on)
         for _, obj in ipairs(ModData.parsed.env_obj) do
             local id = obj.id - 1
             if get_obj_pos(id) ~= nil then
-                local ok, r, g, b, a = pcall(get_obj_color, id)
-                if ok and type(r) == "table" then r, g, b, a = r[1], r[2], r[3], r[4] end
-                if ok and tonumber(r) then
-                    seeThrough[id] = { r, g, b, a or 1 }
-                    pcall(set_obj_color, id, r, g, b, math.min(a or 1, AtmoLayer.seeThroughAlpha))
+                local r, g, b, a = objColor(id)
+                if r then
+                    seeThrough[id] = { r, g, b, a }
+                    pcall(set_obj_color, id, r, g, b, math.min(a, AtmoLayer.seeThroughAlpha))
                 end
             end
         end
@@ -510,9 +480,7 @@ function AtmoLayer.setObjectsSeeThrough(on)
     end
 end
 
----Sets an object's color live (an undo's restore, History's applyLive) as the Atmo list wants it: while the objects
----are see-through, the color is kept as the one to put back and the object stays see-through (a plain
----set_obj_color showed it solid until the list was left and opened again)
+---Sets an object's live color (undo) keeping see-through: the color is stored for restoring instead
 ---@param id integer 0-based
 function AtmoLayer.setObjectColor(id, r, g, b, a)
     if seeThrough then
@@ -522,7 +490,7 @@ function AtmoLayer.setObjectColor(id, r, g, b, a)
     set_obj_color(id, r, g, b, a)
 end
 
----After a reload (the game set the file's colors again): see-through again when it was
+---After a reload: see-through again if it was
 function AtmoLayer.reapplySeeThrough()
     if not seeThrough then return end
     seeThrough = nil
@@ -531,9 +499,7 @@ end
 
 table.insert(MGE.onQuit, function() AtmoLayer.setObjectsSeeThrough(false) end)
 
----Export atmo (World > Export): asks a name (MGE.askExportName, default the mod's), then writes the atmo as it is now
----to its own file, data/atmospheres/MGE - exp_<name>.atmo, for players without Atmo Play (main menu > Shaders &
----Atmos > Atmos). Save keeps the atmo inside the mod
+---World > Export > Atmo: writes data/atmospheres/MGE - exp_<name>.atmo for players without Atmo Play
 function AtmoLayer.exportAtmo()
     local Atmo = MGE.Atmo
     if Atmo.contentCount() == 0 then

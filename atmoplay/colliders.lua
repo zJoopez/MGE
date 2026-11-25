@@ -1,7 +1,6 @@
--- Atmo lines to collision shapes. Entities are read as the game's atmo parser reads them (Atmospheres.ParseFile):
--- "env_obj <name>" starts one, a "player N" line ignores the lines up to the next env_obj, a later line of a key wins,
--- size and sides are one line. Not collidable: custom models, randomly placed or animated entities, parented ones.
--- An entity whose flag lacks the static bit (8) is a prop (dynamics.lua), returned apart.
+-- Atmo lines to collision shapes, parsed like the game's Atmospheres.ParseFile ("player N" skips to the next
+-- env_obj, later keys win, size = sides). Custom models, random, animated and parented entities aren't
+-- collidable. Entities without the static flag bit are props (dynamics.lua), returned apart
 
 local NS = ATMOPLAY_LOADING
 
@@ -67,8 +66,8 @@ function Colliders.startsActive(p, hasThrust)
     return start
 end
 
----`prop_collide <player> <dynamic> <atmo>` (no line: all on; the older prop_real 0 / prop_hits 0 still read): whether a
----prop becomes real near players / near real dynamic objects, and whether its flight hits other props
+---`prop_collide <player> <dynamic> <atmo>` (no line: all on; legacy prop_real / prop_hits read): whether a prop
+---becomes real near players / real dynamic objects, and whether it hits other props in flight
 ---@param p table<string, string>
 ---@return boolean player, boolean dynamic, boolean atmo
 function Colliders.collision(p)
@@ -132,9 +131,8 @@ function Colliders.flagKey(value)
     return n ~= 0 and tostring(n) or ""
 end
 
----A pool group: what a pool object can't change once loaded (no setter, or setters replays don't record), so each
----kind gets its own pool objects: shape|friction|hardness|bounce|flag bits|mass (mass for props only). Empty parts at
----the end are left out ("box|10000", "sphere||2")
+---A pool group: what a pool object can't change once loaded (no setter, or not recorded by replays):
+---shape|friction|hardness|bounce|flag bits|mass (props only). Trailing empty parts dropped ("box|10000")
 ---@param prop boolean? a prop: its mass counts
 ---@return string
 function Colliders.groupKey(shape, lines, prop)
@@ -193,8 +191,7 @@ function Colliders.entities(lines)
     return entities, header
 end
 
----What an entity is to Atmo Play from its lines: skipped (and why), or its shape, pool group and whether it's a prop.
----Colliders.build and MGE's split check share it
+---An entity's verdict: skipped (and why), or its shape, pool group and whether it's a prop
 ---@param p table<string, string>
 ---@return string? reason "random", "animated", "parented", "model", "unplaced"
 ---@return string? shape

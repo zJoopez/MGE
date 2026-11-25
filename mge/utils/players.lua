@@ -1,23 +1,15 @@
--- Players' start positions and rotations: the engageplayerpos / engageplayerrot gamerules, x y z per
--- player separated by commas ("2.50,0.00,1.00,-2.50,0.00,1.00"). Measured in game
--- (mge/debug_playerpos_probe.lua):
---   * a change in engageplayerpos moves every part of that player by exactly that much
---   * engageplayerrot turns the player around its head (the head stays where it is), x y z degrees
---     as rotX(x) * rotY(y) * rotZ(z) (mge/debug_playerrot_probe.lua)
---   * empty, "0" or all zeros means not set: engagedistance / engageheight place the players and
---     engageplayerrot is ignored. Custom player models are placed by it too (their part positions
---     are relative)
--- So edits work in offsets from what's in the world: Move adds to the position, Rotate changes the
--- rotation and shifts the position so the player's center stays put. In a mod without positions the
--- first edit fills them in for every player: a first guess, a reload, then the measured difference
--- is corrected (one reload you don't see), so nobody moves until the edit itself.
--- Changes go through set_gamerule, then MGE.syncGamerules writes them into the mod data (one undo
--- step, History.commit) and MGE.apply reloads so the game places the players.
+-- Players' start positions and rotations: engageplayerpos / engageplayerrot, comma-separated x y z per
+-- player. Measured in game: pos moves every part by exactly that much; rot turns around the head as
+-- rotX(x) rotY(y) rotZ(z) degrees; empty / all zeros means unset (engagedistance places them, rot is
+-- ignored).
+-- Edits are offsets from the world. Without positions the first edit fills them in (a guess, a hidden
+-- reload, then the measured difference corrected). Changes go through set_gamerule, syncGamerules
+-- (one undo step) and a reload
 
 local Mat3 = MGE.Mat3
 local History = MGE.History
 local HOOK_SET = MGE.hookname .. "_players"
-local atan2 = math.atan2 or math.atan -- the game's Lua has atan2, newer Lua takes two arguments in atan
+local atan2 = math.atan2 or math.atan -- 5.1 has atan2
 
 ---@class Players
 local Players = {}
@@ -42,10 +34,9 @@ local function readList(name)
     return list
 end
 
----Precise like everything MGE writes (FileHandler.formatNumber), "2.50" style would round off up to
----0.005 on every edit and the rotation's center keeping would drift
+---Full precision: rounding like "2.50" would drift the center over edits
 ---@param list number[]
----@param count integer? players, default numplayers (given while numplayers is being changed)
+---@param count integer? players, default numplayers (given while it changes)
 ---@return string
 local function formatList(list, count)
     local parts = {}
@@ -53,9 +44,7 @@ local function formatList(list, count)
     return table.concat(parts, ",")
 end
 
----Angle rounded to whole degrees, "-0" as 0. The game keeps engageplayerrot in whole degrees (its
----modmaker writes 0,0,180, a saved working copy had 11,0,156 where MGE wrote decimals): a fraction
----was lost on the reload, 0.5 degree wheel steps after a gizmo turn changed nothing
+---Rounded to whole degrees ("-0" as 0): the game keeps engageplayerrot in whole degrees
 ---@param degrees number
 ---@return number
 function Players.wholeDegrees(degrees)
@@ -63,6 +52,14 @@ function Players.wholeDegrees(degrees)
     return r == 0 and 0 or r
 end
 local wholeDegrees = Players.wholeDegrees
+
+---@param list number[] a gamerule list
+---@param player integer 0-based
+---@return number[] the player's x y z, 0 where missing
+local function tripleOf(list, player)
+    local i = player * 3
+    return { list[i + 1] or 0, list[i + 2] or 0, list[i + 3] or 0 }
+end
 
 ---@return boolean the mod sets player positions
 function Players.hasPositions()
@@ -82,8 +79,7 @@ end
 ---@return number[]?
 function Players.getRot(player)
     if not Players.hasPositions() then return nil end
-    local list = readList(ROT) or {}
-    return { list[player * 3 + 1] or 0, list[player * 3 + 2] or 0, list[player * 3 + 3] or 0 }
+    return tripleOf(readList(ROT) or {}, player)
 end
 
 -- live bodies ---------------------------------------------------------------------------------------
@@ -132,9 +128,7 @@ function Players.yaw(player)
     return math.deg(atan2(m[2][1], m[1][1]))
 end
 
----Live state of every body part, to preview a drag from and put back after it. Joint positions
----aren't kept: the game moves them with the bodies (mge/debug_playerjoint_probe.lua: bodies only,
----joints 0.000 off)
+---Live state of every body part, to preview a drag from and restore after. Joints follow the bodies
 ---@param player integer
 ---@return table
 function Players.snapshot(player)
@@ -146,13 +140,12 @@ function Players.snapshot(player)
     return s
 end
 
----@type { players: integer[], pivot: number[], factor: number }? a scale drag in progress, the highlight
----draws these players scaled (the bodies can't be resized live)
+---@type { players: integer[], pivot: number[], factor: number }? a scale drag in progress, drawn by the
+---highlight (bodies can't be resized live)
 Players.scalePreview = nil
 
----Puts every body part where fn says, from a snapshot (fn gets and returns a position, turn a
----rotation added to the part's own). Joints follow the bodies on their own: setting them too
----(set_joint_pos) moved them a second time, up to 0.28 off in the rotate preview
+---Puts every body part where fn says, from a snapshot. Joints follow on their own (setting them too
+---moves them twice)
 ---@param player integer
 ---@param snap table Players.snapshot
 ---@param fn fun(p: number[]): number[]
@@ -175,22 +168,22 @@ end
 local function commit(pos, rot, count)
     set_gamerule(POS, formatList(pos, count))
     set_gamerule(ROT, formatList(rot, count))
-    -- a mod without a version line is read the old way, where engageplayerrot does nothing
+    -- unversioned mods ignore engageplayerrot
     MGE.FileHandler.ensureVersion(MGE.ModData.parsed)
     MGE.syncGamerules()
     History.commit()
     MGE.apply()
 end
 
----@type { waitFrames: integer, run: fun() }? work waiting for a reload: the fill-in of ensurePositions,
----the measured correction after a scale. Players are placed a couple of frames after the reload
+---@type { waitFrames: integer, run: fun() }? work waiting for a reload (players are placed a few
+---frames after it)
 local pending = nil
 
 ---Reloads (MGE.apply, no undo step) and runs fn once the players are placed again, to measure them
 ---@param fn fun()
 local function afterReload(fn)
     pending = { run = fn }
-    MGE.FileHandler.ensureVersion(MGE.ModData.parsed) -- the rotations count in what's measured (commit)
+    MGE.FileHandler.ensureVersion(MGE.ModData.parsed) -- so rotations apply in what's measured
     MGE.apply()
 end
 
@@ -199,14 +192,13 @@ add_hook("draw3d", HOOK_SET, function()
     pending.waitFrames = (pending.waitFrames or 3) - 1
     if pending.waitFrames > 0 then return end
     local done = pending
-    pending = nil -- before running: the work may wait for another reload
+    pending = nil -- before running: it may wait for another reload
     local ok, err = pcall(done.run)
     if not ok then MGE.say("players: " .. tostring(err)) end
 end)
 
----Moves every listed player's positions so their centers are at targets (measured now), returns the
----corrected position list. The game places players in ways that aren't simple for custom models,
----measuring after a reload and adding the difference is exact: positions move a player as they are
+---Position list corrected so each player's measured center lands on its target (exact: positions
+---shift a player rigidly)
 ---@param targets table<integer, number[]> player -> wanted center
 ---@return number[]
 local function correctedPositions(targets)
@@ -218,14 +210,12 @@ local function correctedPositions(targets)
     return pos
 end
 
----Runs then() once the mod has positions for every player that keep them where they are now. With
----positions already set that's right away. Otherwise every player gets its head as a first guess
----(and its facing as rotation), the mod reloads without an undo step, and after the reload the
----difference between where the players should be and where they are is added
+---Runs then_ once the mod has positions that keep every player where it is now: right away if set,
+---else after a guess (head and facing), a reload without undo step and a measured correction
 ---@param then_ fun()
 local function ensurePositions(then_)
     if Players.hasPositions() then return then_() end
-    if pending then return end -- already waiting for a reload, the edit waiting for it wins
+    if pending then return end -- already waiting for a reload
     local pos, rot, targets = {}, {}, {}
     for p = 0, Players.count() - 1 do
         local head = Players.head(p)
@@ -235,11 +225,11 @@ local function ensurePositions(then_)
     end
     set_gamerule(POS, formatList(pos))
     set_gamerule(ROT, formatList(rot))
-    -- no undo step: undoing the edit goes back to no positions at all
+    -- no undo step: undoing the edit goes back to no positions
     afterReload(function()
         local corrected = correctedPositions(targets)
         set_gamerule(POS, formatList(corrected))
-        -- the bodies are where the guess put them, shift them to the corrected place for the edit
+        -- shift the bodies from the guess to the corrected place
         for p, t in pairs(targets) do
             local c, snap = Players.center(p), Players.snapshot(p)
             local d = { t[1] - c[1], t[2] - c[2], t[3] - c[3] }
@@ -262,7 +252,7 @@ end
 ---@param offset number[]
 function Players.moveBy(players, offset)
     local list = asList(players)
-    -- camera follow, like moving objects: measured now, the bodies are placed after the reload
+    -- measured now: the bodies are placed after the reload
     MGE.Camera.followPlayer(list, { offset = offset })
     ensurePositions(function()
         local pos, rot = readList(POS) or {}, readList(ROT) or {}
@@ -273,7 +263,7 @@ function Players.moveBy(players, offset)
     end)
 end
 
----Center of several players (average of their centers), what the gizmo turns them around
+---Average of the players' centers (the gizmo's pivot)
 ---@param players integer[]
 ---@return number[]
 function Players.groupCenter(players)
@@ -285,18 +275,15 @@ function Players.groupCenter(players)
     return s
 end
 
----Rotation matrix of engageplayerrot's x y z (degrees): rotX(x) * rotY(y) * rotZ(z), standard right
----handed, measured in game (mge/debug_playerrot_probe.lua: 30 40 50 gave exactly that matrix)
+---engageplayerrot's x y z (degrees) as rotX(x) rotY(y) rotZ(z), measured in game
 ---@param r number[] x y z degrees
 ---@return number[][]
 local function rotMatrix(r)
     return Mat3.fromEulerDegrees(r[1], r[2], r[3])
 end
 
----Turns players by a world rotation around pivot (default: their center) as one rigid group, one undo
----step: each player's rotation is composed with it and written back as x y z, and its position moves
----so its center ends up at pivot + m (center - pivot). The game turns a player around its head h,
----which alone would put the center at h + m (center - h): the position takes up the difference
+---Turns players by a world rotation around pivot as one rigid group (one undo step). The game turns
+---around the head, so the position takes up the difference to turning around the pivot
 ---@param players integer|integer[] 0-based
 ---@param m number[][] world rotation
 ---@param pivot number[]? default Players.groupCenter
@@ -307,10 +294,9 @@ function Players.rotateByMatrix(players, m, pivot)
         local p = pivot or Players.groupCenter(list)
         for _, player in ipairs(list) do
             local i = player * 3
-            local current = rotMatrix({ rot[i + 1] or 0, rot[i + 2] or 0, rot[i + 3] or 0 })
+            local current = rotMatrix(tripleOf(rot, player))
             local x, y, z = Mat3.toEulerXYZ(Mat3.mul(m, current))
-            -- whole degrees (wholeDegrees): the turn this player really gets is the rounded one, its
-            -- position follows that turn
+            -- rounded like the game will: the position follows the rounded turn
             local turned = { wholeDegrees(math.deg(x)), wholeDegrees(math.deg(y)), wholeDegrees(math.deg(z)) }
             rot[i + 1], rot[i + 2], rot[i + 3] = turned[1], turned[2], turned[3]
             local mi = Mat3.mul(rotMatrix(turned), Mat3.transpose(current))
@@ -323,22 +309,16 @@ function Players.rotateByMatrix(players, m, pivot)
     end)
 end
 
----Player's current rotation as a matrix: engageplayerrot when the mod sets positions, otherwise how the
----body is turned now (its groin)
+---Current rotation: engageplayerrot when positions are set, else the groin's live rotation
 ---@param player integer
 ---@return number[][]
 local function currentRotation(player)
     local rot = Players.hasPositions() and readList(ROT)
-    if rot then
-        local i = player * 3
-        return rotMatrix({ rot[i + 1] or 0, rot[i + 2] or 0, rot[i + 3] or 0 })
-    end
+    if rot then return rotMatrix(tripleOf(rot, player)) end
     return bodyRot(get_body_info(player, BODYPARTS.GROIN))
 end
 
----Where the players panel shows the players, like objects' Pos / Rot rows for a selection: the group's
----center counted from the dojo center (MGE.POS_ORIGIN), and the rotation in degrees (x y z,
----engageplayerrot's order) of the first one, the group's frame (the picked player)
+---Pos / Rot as the panel shows them: group center relative to POS_ORIGIN, the first player's rotation
 ---@param players integer|integer[] first: the one whose rotation is shown
 ---@return number[] pos, number[] rot
 function Players.shown(players)
@@ -348,8 +328,7 @@ function Players.shown(players)
     return { c[1] - o[1], c[2] - o[2], c[3] - o[3] }, { math.deg(x), math.deg(y), math.deg(z) }
 end
 
----Pos row: moves the players so their group's center is at the typed axes (counted from the dojo
----center), the other axes stay. They move together, the distances between them stay
+---Pos row: moves the group so its center's typed axes match
 ---@param players integer|integer[]
 ---@param typed (number?)[]
 function Players.setShownPos(players, typed)
@@ -359,8 +338,7 @@ function Players.setShownPos(players, typed)
     Players.moveBy(players, offset)
 end
 
----Rot row: turns the players so the first one has the typed angles (degrees, the other axes stay),
----all of them as one rigid group around their center like the Rotate gizmo
+---Rot row: turns the group so the first player has the typed angles
 ---@param players integer|integer[] first: the one the angles are for
 ---@param typed (number?)[]
 function Players.setShownRot(players, typed)
@@ -368,7 +346,6 @@ function Players.setShownRot(players, typed)
     local _, shownRot = Players.shown(list)
     local wanted = {}
     for k = 1, 3 do wanted[k] = typed[k] or shownRot[k] end
-    -- the world rotation from the first one's now to the wanted one
     Players.rotateByMatrix(list, Mat3.mul(rotMatrix(wanted), Mat3.transpose(currentRotation(list[1]))))
 end
 
@@ -405,10 +382,8 @@ function Players.setValues(player, typedPos, typedRot)
 end
 
 -- scaling -------------------------------------------------------------------------------------------
--- A player's size is its `player N` section: every body part's pos and sides, every joint's pos and
--- radius, in the model's own frame (engageplayerrot turns it, engageplayerpos moves it). Scaling
--- rewrites them, uniformly, around the model's center. Density stays: a bigger player is heavier,
--- like a bigger object. Joint strength stays too.
+-- Scaling rewrites the `player N` section's part positions, sides and joint radii around the model's
+-- center. Density and strength stay (a bigger player is heavier)
 
 ---Parts of a player section: ordered entries { kind, name, header, props = { { key, value } } },
 ---lines before the first part kept as they are
@@ -474,9 +449,8 @@ local function readVec(value)
     return x and y and z and { x, y, z } or nil
 end
 
----Rewrites a player's section scaled by factor around its model center: every body part and joint
----gets explicit pos and sides / radius lines (taken from the live body where the section has none),
----everything else stays. A player using the shared part lines (all players) gets its own section
+---Rewrites a player's section scaled around its model center. Missing pos / sides / radius lines come
+---from the live body; a player on shared parts gets its own section
 ---@param player integer
 ---@param factor number
 local function scaleSection(player, factor)
@@ -495,10 +469,9 @@ local function scaleSection(player, factor)
         return byKey[key]
     end
 
-    -- live -> model frame: model = ref + R^T (live - liveRef). The model's head as written, or any
-    -- fixed point for a default body: a shift of the whole model is corrected after the reload
+    -- live -> model frame: ref + R^T (live - liveRef); any whole-model shift is corrected after the reload
     local rot = readList(ROT) or {}
-    local Rt = Mat3.transpose(rotMatrix({ rot[player * 3 + 1] or 0, rot[player * 3 + 2] or 0, rot[player * 3 + 3] or 0 }))
+    local Rt = Mat3.transpose(rotMatrix(tripleOf(rot, player)))
     local liveRef = Players.head(player)
     local ref = readVec(byKey["body:head"] and getProp(byKey["body:head"], "pos")) or { 1, 0.9, 2.9 }
     local function toModel(live)
@@ -543,15 +516,14 @@ local function scaleSection(player, factor)
     FH.setPlayerLines(ModData.parsed, player, sectionLines(section))
 end
 
--- defaults for parts without the line, from the game's own modmaker.tbm (data/mod): every body part
--- 0.25 density, joint strengths per joint, every body part and joint 0.3 friction and 0.1 bounce
+-- defaults for parts without the line, from the game's modmaker.tbm
 local DEFAULT_DENSITY = 0.25
 local DEFAULT_STRENGTH = {
     neck = 1, chest = 4, lumbar = 3, abs = 3, r_pecs = 3, r_shoulder = 4, r_elbow = 2, l_pecs = 3,
     l_shoulder = 4, l_elbow = 2, r_wrist = 2, l_wrist = 2, r_glute = 4, l_glute = 4, r_hip = 2, l_hip = 2,
     r_knee = 4, l_knee = 4, r_ankle = 1, l_ankle = 1,
 }
--- which parts have the line (body parts / joints) and its default per part name
+-- which part kinds have the line, and its default per part name
 local PART_KEYS = {
     density = { body = true, default = function() return DEFAULT_DENSITY end },
     strength = { joint = true, default = function(name) return DEFAULT_STRENGTH[name] or 1 end },
@@ -559,8 +531,8 @@ local PART_KEYS = {
     bounce = { body = true, joint = true, default = function() return 0.1 end },
 }
 
----Calls fn(part, value) for every part a key applies to in a parsed player section, value being the
----line's number or the default. With create, parts missing from the section are added
+---Calls fn(part, value) for every part the key applies to (value: its line or the default). With
+---create, missing parts are added
 ---@param section table parseSection result
 ---@param key "density"|"strength"|"friction"|"bounce"
 ---@param create boolean
@@ -592,8 +564,7 @@ local function playerSection(player)
     return parseSection(FH.getPlayerLines(ModData.parsed, player) or FH.getSharedPlayerLines(ModData.parsed) or {})
 end
 
----Average density of a player's body parts, strength of its joints, or friction / bounce of both, as
----the mod sets them (parts without the line count with the game's default): what the players panel shows
+---Average of a part value over a player's parts (defaults for missing lines)
 ---@param player integer
 ---@param key "density"|"strength"|"friction"|"bounce"
 ---@return number
@@ -614,9 +585,8 @@ local function distance(a, b)
     return math.sqrt(x * x + y * y + z * z)
 end
 
----A player's size compared to the default body: its model's head to groin distance (the mod's lines,
----the default's where it has none) over the default's. Scaling multiplies it by the factor. From the
----mod data, not the live bodies: right after a change the panel shows it, before the players are placed
+---Size relative to the default body (head to groin distance), from the mod data so it shows before
+---the players are placed
 ---@param player integer
 ---@return number
 function Players.size(player)
@@ -628,7 +598,7 @@ function Players.size(player)
     return distance(head or DEFAULT_HEAD, groin or DEFAULT_GROIN) / distance(DEFAULT_HEAD, DEFAULT_GROIN)
 end
 
----Average size of players (Players.size): what the players panel's Scale row shows
+---Average Players.size (the Scale row)
 ---@param players integer|integer[]
 ---@return number
 function Players.groupSize(players)
@@ -637,9 +607,7 @@ function Players.groupSize(players)
     return #list > 0 and sum / #list or 1
 end
 
----Rewrites a value of every part of players with change(value) -> new value, one undo step and a
----reload. Parts without the line get it, other lines stay. A player using the shared part lines gets its
----own section. Positions don't change, no correction needed
+---Rewrites a part value on every part of the players (one undo step and a reload)
 local function changeParts(list, key, change)
     local FH = MGE.FileHandler
     for _, player in ipairs(list) do
@@ -650,11 +618,10 @@ local function changeParts(list, key, change)
         FH.setPlayerLines(MGE.ModData.parsed, player, sectionLines(section))
     end
     History.commit()
-    MGE.apply() -- body and joint changes need a reload
+    MGE.apply()
 end
 
----Multiplies a value of the parts of players (density: body parts, strength: joints, friction /
----bounce: both), their ratios stay. A negative factor only for friction (it can be negative)
+---Multiplies a part value (ratios stay). Negative factors only for friction
 ---@param players integer|integer[] 0-based
 ---@param key "density"|"strength"|"friction"|"bounce"
 ---@param factor number
@@ -664,7 +631,7 @@ function Players.multiplyParts(players, key, factor)
     changeParts(list, key, function(value) return value * factor end)
 end
 
----Sets a value on every part of players (where a factor can't work: the average is 0)
+---Sets a part value everywhere (when the average is 0, a factor can't work)
 ---@param players integer|integer[] 0-based
 ---@param key "density"|"strength"|"friction"|"bounce"
 ---@param value number
@@ -674,8 +641,7 @@ function Players.setParts(players, key, value)
     changeParts(list, key, function() return value end)
 end
 
----World bounds of a player's body parts (each part as a box / sphere / capsule's reach around its
----center, rotation ignored: close enough to put a player on the floor)
+---Rough world bounds of a player's body parts (rotation ignored)
 ---@param player integer
 ---@return { min: number[], max: number[] }
 function Players.bounds(player)
@@ -692,16 +658,15 @@ function Players.bounds(player)
     return { min = lo, max = hi }
 end
 
----Scales players uniformly around pivot (default: their center) as one group, one undo step: every
----player's model by factor, and its center moves to pivot + factor (center - pivot). Where the game
----puts a rewritten model is measured after a reload and corrected with the position
+---Scales players uniformly around pivot as one group (one undo step). Placement is measured after a
+---reload and corrected
 ---@param players integer|integer[] 0-based
 ---@param factor number
 ---@param pivot number[]? default Players.groupCenter
 function Players.scaleBy(players, factor, pivot)
     local list = asList(players)
-    if #list == 0 or factor <= 0 or math.abs(factor - 1) < 1e-9 then return end -- nothing selected / no change
-    MGE.Camera.followPlayer(list, { factor = factor, pivot = pivot or Players.groupCenter(list) }) -- like moveBy
+    if #list == 0 or factor <= 0 or math.abs(factor - 1) < 1e-9 then return end
+    MGE.Camera.followPlayer(list, { factor = factor, pivot = pivot or Players.groupCenter(list) })
     ensurePositions(function()
         local p = pivot or Players.groupCenter(list)
         local targets = {}
@@ -712,14 +677,14 @@ function Players.scaleBy(players, factor, pivot)
         end
         afterReload(function()
             local rot = readList(ROT) or {}
-            commit(correctedPositions(targets), rot) -- the sections and the corrected positions, one undo step
+            commit(correctedPositions(targets), rot)
         end)
     end)
 end
 
 -- adding and removing players -----------------------------------------------------------------------
 
-Players.MAX = 4 -- the game's gamerules menu goes from one to four players
+Players.MAX = 4 -- the game's gamerules menu allows 1-4
 local NUMPLAYERS = "numplayers"
 local DUPLICATE_GAP = 0.3 -- between the copied players and their copies, along x
 
@@ -741,11 +706,9 @@ local function groupBounds(list)
     return { min = lo, max = hi }
 end
 
----Adds players after the last one, one undo step. Every entry is a copy of a player (its own part
----lines, rotation and position + shift) or false for a default body (nothing in the section, shared
----part lines still apply) whose position is first a guess. After the reload each new player is
----measured and corrected: copies to their source's center + shift, new bodies onto the floor at
----spawnPoint. Calls done(new ids) after the first reload, when the mod has them
+---Adds players after the last one (one undo step): each entry copies a player (shifted) or is false
+---for a default body placed on the floor at spawnPoint. Placement is measured and corrected after the
+---reload; done(new ids) runs then
 ---@param sources (integer|false)[]
 ---@param shift number[] for copies
 ---@param spawnPoint number[]? for default bodies (floor point), default in front of player 0
@@ -771,7 +734,7 @@ local function addPlayers(sources, shift, spawnPoint, done)
                 local own = FH.getPlayerLines(ModData.parsed, src)
                 if own then FH.setPlayerLines(ModData.parsed, id, own) else FH.renumberPlayers(ModData.parsed, { [id] = false }) end
             else
-                -- a leftover section with this id (past the old numplayers) would give it that model
+                -- drop a leftover section with this id
                 FH.renumberPlayers(ModData.parsed, { [id] = false })
                 local p = spawnPoint or Players.head(0)
                 fresh[id] = p
@@ -786,31 +749,30 @@ local function addPlayers(sources, shift, spawnPoint, done)
         afterReload(function()
             for id, p in pairs(fresh) do
                 local b, c = Players.bounds(id), Players.center(id)
-                local d = MGE.Camera.spawnShift(b, p) -- center over the point, lowest part on the floor
+                local d = MGE.Camera.spawnShift(b, p)
                 targets[id] = { c[1] + d[1], c[2] + d[2], c[3] + d[3] }
             end
-            if done then done(ids) end -- the mod has them now (numplayers loaded)
-            -- camera follow on the new ones where the correction puts them: the group center (average of
-            -- centers) moves by the average of each one's shift to its target
+            if done then done(ids) end
+            -- camera follow where the correction will put them
             local now, offset = Players.groupCenter(ids), { 0, 0, 0 }
             for _, id in ipairs(ids) do
                 for k = 1, 3 do offset[k] = offset[k] + targets[id][k] / #ids end
             end
             for k = 1, 3 do offset[k] = offset[k] - now[k] end
             MGE.Camera.followPlayer(ids, { offset = offset })
-            commit(correctedPositions(targets), readList(ROT) or {}) -- one undo step for all of it
+            commit(correctedPositions(targets), readList(ROT) or {})
         end)
     end)
 end
 
----New player with the default body (or the mod's shared part lines), standing on the floor at point
+---New player with the default body (or shared parts), on the floor at point
 ---@param point number[]? floor point, default in front of player 0
 ---@param done fun(ids: integer[])? called with the new id
 function Players.addNew(point, done)
     addPlayers({ false }, { 0, 0, 0 }, point, done)
 end
 
----Copies of players (their part lines, rotation), placed next to them along x as one group
+---Copies of players, placed next to them along x
 ---@param players integer|integer[] 0-based
 ---@param done fun(ids: integer[])? called with the copies' ids
 function Players.duplicate(players, done)
@@ -820,9 +782,7 @@ function Players.duplicate(players, done)
     addPlayers(list, { b.max[1] - b.min[1] + DUPLICATE_GAP, 0, 0 }, nil, done)
 end
 
----Removes players, one undo step: their sections go, later players move down to fill the ids (their
----sections, positions and rotations with them), numplayers follows. At least one player stays.
----Positions are filled in first, so the players left stay where they are
+---Removes players (one undo step); later players move down to fill the ids. One always stays
 ---@param players integer|integer[] 0-based
 ---@param done fun(map: table<integer, integer|false>)? old id -> new id, false for removed
 function Players.remove(players, done)
@@ -853,7 +813,7 @@ function Players.remove(players, done)
                 kept = kept + 1
             end
         end
-        -- one pass: every header is renamed from its old id, a rename never meets a renamed one
+        -- one pass: renames never meet a renamed header
         MGE.FileHandler.renumberPlayers(MGE.ModData.parsed, map)
         set_gamerule(NUMPLAYERS, tostring(kept))
         if done then done(map) end
@@ -863,20 +823,17 @@ end
 
 -- gizmo target --------------------------------------------------------------------------------------
 
----Gizmo target for one or several players (utils/gizmo.lua): Move, Rotate (rings on the world axes)
----and uniform Scale as one group around their shared center. Measured when made, so the pivot stays
----where the drag started while the preview moves the bodies
+---Gizmo target for players: Move, Rotate and uniform Scale around their shared center (fixed at creation)
 ---@param players integer|integer[] 0-based
 ---@return table?
 function Players.target(players)
-    if pending then return nil end -- waiting for a reload, the players are about to be placed again
+    if pending then return nil end -- about to be placed again
     local list = {}
     for _, player in ipairs(asList(players)) do
         if Players.exists(player) then table.insert(list, player) end
     end
     if #list == 0 then return nil end
     local snaps, pivot = nil, Players.groupCenter(list)
-    -- Scale: the white cube only, players grow and shrink evenly (Players.scaleBy)
     local t = { players = list, scalable = true, uniformScaleOnly = true }
     function t.pivot() return pivot end
     function t.frame() return Mat3.IDENTITY end
@@ -899,10 +856,7 @@ function Players.target(players)
             return { pivot[1] + r[1], pivot[2] + r[2], pivot[3] + r[3] }
         end, m)
     end
-    -- Scale isn't previewed on the bodies: set_body_sides / set_joint_radius don't change anything
-    -- live (mge/debug_playerscale_probe.lua: chest sides stayed 0.5, wanted 0.75) and joints keep their
-    -- old offsets, the parts looked scattered. The highlight draws the scaled players instead
-    -- (Players.scalePreview, utils/highlight.lua), the real ones stay until the release reloads
+    -- set_body_sides / set_joint_radius do nothing live: the highlight draws the scale instead
     function t.previewScale(factors)
         Players.scalePreview = { players = list, pivot = pivot, factor = factors[1] }
     end

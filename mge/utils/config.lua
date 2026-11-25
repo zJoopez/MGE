@@ -1,28 +1,12 @@
--- MGE's config file: the Settings overlay's values and the color picker's palette, kept between game sessions in
--- config.cfg next to main.lua (gitignored, not in the release zip: an update keeps it). One "key value" a line:
---
---   uiScale 1.3
---   cameraFollow 1
---   inPlace 0                 Rotate / Scale around each object itself (the top bar's toggle, Transforms.inPlace)
---   wheelStep 0.5             the mouse wheel over a number field and the gizmo's move / scale snap (Ctrl),
---                             wheelFineStep with Shift
---   rotateStep 15             the wheel over a Rot field and the gizmo's ring snap (Ctrl), degrees
---   propFlight 2              how drawn props fly in a playable mod (Playable.flightLevel): 1 simple, 2 shapes,
---                             3 full (Atmo Play's Dynamics.LEVELS)
---   propGhosts 1              the flying props' move predictions while a turn waits (Playable.ghosts)
---   propPauseFar 0            flying props far from every player pause (Playable.pauseFar, Atmo Play's far props)
---   maxDraws 1000             atmo shapes drawn a frame, the nearest (AtmoLayer.maxDraws)
---   palette 255 128 0 255     one line a color, r g b a 0-255
---
--- Read when MGE starts (Config.load, before the window is built: the UI size is needed then), put on the
--- modules once they're loaded (Config.apply), written when Settings closes, the UI size changes and the
--- palette changes (Config.save). Unknown keys and bad values are skipped: the defaults stay
+-- config.cfg next to main.lua (gitignored, so updates keep it): Settings values and the color palette,
+-- one "key value" a line (see Config.ENTRIES; palette lines are r g b a 0-255).
+-- load runs before the window is built (UI size), apply once modules exist, save on Settings close and
+-- on UI size / palette changes. Unknown keys and bad values are skipped
 local Config = {}
 MGE.Config = Config
 
--- Snapping (Settings), one set of steps for the mouse wheel over a number field (ui/editor_rows.lua) and the
--- gizmo's Ctrl snap (utils/gizmo.lua): the step, with Shift the fine one, and the rotate step in degrees for
--- Rot fields and the rings (with Shift: 1 degree). Kept here: the editor rows load after the config is applied
+-- Snap steps for the wheel over number fields and the gizmo's Ctrl snap (Shift: fine / 1 degree).
+-- Kept here: the editor rows load after the config is applied
 ---@type number
 Config.wheelStep = 0.5
 ---@type number
@@ -161,8 +145,8 @@ local function readFile(path)
     return text
 end
 
----Reads config.cfg. The UI size goes straight to MGE_UI_SCALE (ui/widgets.lua reads it when it loads), the
----rest waits for Config.apply. A palette saved before the config existed (assets/palette.txt) is taken in
+---Reads config.cfg. The UI size goes straight to MGE_UI_SCALE (read by ui/widgets.lua), the rest waits
+---for Config.apply. Imports a legacy assets/palette.txt
 function Config.load()
     Config.values, Config.palette = Config.parse(readFile(Config.path()))
     if #Config.palette == 0 then

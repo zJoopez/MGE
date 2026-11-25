@@ -35,7 +35,7 @@ local MAX_ENV_OBJECTS = 256
 local MAX_NONSTATIC_OBJECTS = 48
 local MAX_ENV_JOINTS = 24 -- env_obj_joint ids 1-24
 
----Shallow copy, used for props and object tables
+---Shallow copy
 ---@generic T: table
 ---@param t T
 ---@return T
@@ -45,19 +45,17 @@ function ModData.copy(t)
     return copy
 end
 
----Usual click selection, for the object list and clicks in the world: a click selects only the
----clicked object (clicking the only selected one deselects it), Shift + click adds it to or removes
----it from the selection
+---Click selects only obj (clicking the only selected one deselects it); Shift + click toggles it
 ---@param obj FileParserEnvObj
----@param additive boolean Shift held: toggle only this object
----@return boolean selected whether the clicked object ended up selected
+---@param additive boolean Shift held
+---@return boolean selected whether obj ended up selected
 function ModData.clickSelect(obj, additive)
     if additive then
         obj.selected = not obj.selected or nil
         return obj.selected == true
     end
     local onlySelected = obj.selected
-    -- only the object's own layer: the objects and the atmo objects (the Atmo list) are selected apart
+    -- objects and atmo objects are selected apart
     local list = obj.kind == "atmo" and (ModData.parsed.atmo or {}) or ModData.parsed.env_obj
     for _, other in ipairs(list) do
         if other ~= obj and other.selected then onlySelected = false end
@@ -67,63 +65,61 @@ function ModData.clickSelect(obj, additive)
     return obj.selected == true
 end
 
----What the editor's rows, the gizmo and the transforms work on: the selected atmo objects while the
----Atmo list shows, otherwise the selected objects
+---What the editor, gizmo and transforms work on: selected atmo objects on the Atmo list, else objects
 ---@return FileParserEnvObj[]
 function ModData.getEditSelection()
     if MGE.Main and MGE.Main.listTab == "atmo" then return ModData.getSelectedAtmo() end
     return ModData.getSelected()
 end
 
----Selected atmo objects (utils/atmo_layer.lua). getSelected has only the objects in the game
+---@param list FileParserEnvObj[]?
+---@return FileParserEnvObj[]
+local function selectedIn(list)
+    local selected = {}
+    for _, obj in ipairs(list or {}) do
+        if obj.selected then selected[#selected + 1] = obj end
+    end
+    return selected
+end
+
 ---@return FileParserEnvObj[]
 function ModData.getSelectedAtmo()
-    local selected = {}
-    for _, obj in ipairs(ModData.parsed.atmo or {}) do
-        if obj.selected then table.insert(selected, obj) end
-    end
-    return selected
+    return selectedIn(ModData.parsed.atmo)
 end
 
----@return FileParserEnvObj[]
+---@return FileParserEnvObj[] selected objects in the game (not atmo)
 function ModData.getSelected()
-    local selected = {}
-    for _, obj in ipairs(ModData.parsed.env_obj) do
-        if obj.selected then table.insert(selected, obj) end
-    end
-    return selected
+    return selectedIn(ModData.parsed.env_obj)
 end
 
----Objects are kept in id order, call after adding objects or changing ids
+---Keeps objects in id order: call after adding objects or changing ids
 function ModData.sortObjects()
     table.sort(ModData.parsed.env_obj, function(a, b) return a.id < b.id end)
 end
 
----Static objects need ids above MAX_NONSTATIC_OBJECTS. Static is the 8 bit of flag, other bits
----(ungrippable, shield...) don't make an object static.
+---The flag's static bit (8); other bits don't make an object static
 ---@param obj FileParserEnvObj
----@param loaded boolean? object is in the world, a missing flag line is read from the game
+---@param loaded boolean? in the world: a missing flag line is read from the game
 ---@return boolean
 function ModData.isStatic(obj, loaded)
     local flag = tonumber(obj.props.flag)
     if flag == nil and loaded then flag = get_obj_flag(obj.id - 1) end
-    if flag == nil then return true end -- unknown (asset without a flag line), the safer id pool
+    if flag == nil then return true end -- unknown: the safer pool
     return bit.band(flag, FLAGS.STATIC) ~= 0
 end
 
----Id pool an object belongs to: static objects take ids above 48, dynamic and joint-linked ones 1-48
+---Static objects take ids above 48, dynamic and joint-linked ones 1-48
 ---@param obj FileParserEnvObj
 ---@param loaded boolean? see isStatic
----@param jointIds table<integer, boolean>? joint-linked ids, defaults to the mod's
+---@param jointIds table<integer, boolean>? joint-linked ids, default the mod's
 ---@return IdPool
 function ModData.idPool(obj, loaded, jointIds)
     if ModData.isStatic(obj, loaded) and not (jointIds or ModData.jointIds)[obj.id] then return "static" end
     return "nonStatic"
 end
 
----Object ids linked to any of the joints
 ---@param joints FileParserEnvObjJoint[]?
----@return table<integer, boolean>
+---@return table<integer, boolean> object ids linked to any joint
 local function getJointIds(joints)
     local ids = {}
     for _, joint in ipairs(joints or {}) do
@@ -133,19 +129,17 @@ local function getJointIds(joints)
     return ids
 end
 
--- Id rules: only joints strictly need ids 1-MAX_NONSTATIC_OBJECTS (the game ignores joints to higher
--- ids). Dynamic objects can sit on any id, above 48 the game treats them partly as static, so they
--- only prefer low ids and the window warns until Reindex moves them down. Ids only change on
--- Reindex, or when joint-linked copies need low ids that static objects hold.
+-- Id rules: only joints strictly need ids 1-48 (the game ignores joints to higher ids). Dynamic objects
+-- above 48 are treated partly as static, so they prefer low ids and the window warns until Reindex.
+-- Ids change only on Reindex, or when joint-linked copies need low ids that static objects hold.
 
----Free id list an id belongs to
 ---@param id integer
----@return IdPool
+---@return IdPool the free list id belongs to
 local function rangeOf(id)
     return id <= MAX_NONSTATIC_OBJECTS and "nonStatic" or "static"
 end
 
----Returns an id to the free lists, e.g. after deleting its object
+---Returns an id to the free lists
 ---@param id integer
 function ModData.releaseId(id)
     local list = ModData.freeIds[rangeOf(id)]
@@ -153,14 +147,12 @@ function ModData.releaseId(id)
     table.sort(list)
 end
 
----Free object ids, both pools (static and dynamic): how many objects can still be added
----@return integer
+---@return integer free object ids in both pools
 function ModData.freeCount()
     return #ModData.freeIds.static + #ModData.freeIds.nonStatic
 end
 
----Objects that should be on ids 1-MAX_NONSTATIC_OBJECTS: dynamic ones and joint-linked ones
----@return integer
+---@return integer objects that belong on ids 1-48 (dynamic or joint-linked)
 function ModData.countDynamic()
     local count = 0
     for _, obj in ipairs(ModData.parsed.env_obj) do
@@ -169,8 +161,7 @@ function ModData.countDynamic()
     return count
 end
 
----Dynamic objects above id MAX_NONSTATIC_OBJECTS, treated partly as static by the game until Reindex
----@return integer
+---@return integer dynamic objects above id 48 (partly static to the game until Reindex)
 function ModData.countMisplaced()
     local count = 0
     for _, obj in ipairs(ModData.parsed.env_obj) do
@@ -179,7 +170,7 @@ function ModData.countMisplaced()
     return count
 end
 
----Gives obj a new id. The game flag is read by id, so a missing flag line is written first
+---Gives obj a new id. The game's flag is read by id, so a missing flag line is written first
 ---@param obj FileParserEnvObj
 ---@param id integer
 local function changeId(obj, id)
@@ -187,8 +178,8 @@ local function changeId(obj, id)
     obj.id = id
 end
 
----Frees ids 1-MAX_NONSTATIC_OBJECTS for joint-linked objects by moving static objects on low ids to
----free high ids (highest low ids first). Nothing moves unless `count` low ids can be freed
+---Frees low ids for joint-linked objects by moving static objects up (highest low ids first).
+---All or nothing
 ---@param count integer low ids needed in total
 ---@return boolean enough
 local function freeLowIds(count)
@@ -214,10 +205,9 @@ local function freeLowIds(count)
     return true
 end
 
----Picks ids for new objects (duplicate, import), all or nothing. Joint-linked objects get ids
----1-MAX_NONSTATIC_OBJECTS (static objects are moved up when needed), the others take their preferred
----range when it has free ids, otherwise any free id. Prints why when they don't fit
----@param plans { pool: IdPool, linked: boolean }[] one per new object, pool is the preferred range
+---Picks ids for new objects, all or nothing. Joint-linked ones get low ids; others prefer their pool,
+---else any free id. Says why when they don't fit
+---@param plans { pool: IdPool, linked: boolean }[] one per new object
 ---@return integer[]? ids same order as plans
 function ModData.allocateIds(plans)
     local free = ModData.freeIds
@@ -237,7 +227,7 @@ function ModData.allocateIds(plans)
     end
 
     local ids = {}
-    for i, plan in ipairs(plans) do -- joint-linked first, they can't use the other range
+    for i, plan in ipairs(plans) do -- joint-linked first
         if plan.linked then ids[i] = table.remove(free.nonStatic, 1) end
     end
     for i, plan in ipairs(plans) do
@@ -245,7 +235,7 @@ function ModData.allocateIds(plans)
             if #free[plan.pool] > 0 then
                 ids[i] = table.remove(free[plan.pool], 1)
             elseif plan.pool == "static" then
-                ids[i] = table.remove(free.nonStatic) -- highest low id, keeps the lowest ones free
+                ids[i] = table.remove(free.nonStatic) -- highest low id, keeps the lowest free
             else
                 ids[i] = table.remove(free.static, 1)
             end
@@ -254,15 +244,14 @@ function ModData.allocateIds(plans)
     return ids
 end
 
----Puts dynamic and joint-linked objects on ids 1-MAX_NONSTATIC_OBJECTS and static ones above, as far
----as ids allow: dynamic objects above take free low ids or swap with static objects on low ids, then
----the remaining static objects on low ids move to free high ids. Joints follow the new ids.
+---Puts dynamic / joint-linked objects on ids 1-48 and static ones above, as far as ids allow (taking
+---free low ids or swapping with low static objects). Joints follow the new ids
 ---@return integer moved objects that got a new id
----@return integer left dynamic objects still above (more need low ids than there are)
+---@return integer left dynamic objects still above
 function ModData.reindex()
     local free = ModData.freeIds
     local highDynamic, lowStatic = {}, {}
-    -- pools are read before any id changes, a missing flag line is read from the game by id
+    -- pools are read before any id changes (missing flags come from the game by id)
     for _, obj in ipairs(ModData.parsed.env_obj) do
         local pool = ModData.idPool(obj, true)
         if pool == "nonStatic" and obj.id > MAX_NONSTATIC_OBJECTS then
@@ -274,7 +263,7 @@ function ModData.reindex()
     table.sort(highDynamic, function(a, b) return a.id < b.id end)
     table.sort(lowStatic, function(a, b) return a.id > b.id end) -- highest low ids move first
 
-    local idMap = {} -- old id -> new id, every object moves at most once
+    local idMap = {} -- old id -> new id, each object moves at most once
     local function move(obj, id)
         idMap[obj.id] = id
         changeId(obj, id)
@@ -308,20 +297,18 @@ function ModData.reindex()
         joint.obj1 = idMap[joint.obj1] or joint.obj1
         joint.obj2 = idMap[joint.obj2] or joint.obj2
     end
-    ModData.jointIds = getJointIds(ModData.parsed.env_obj_joint) -- ids changed, the old set is stale
+    ModData.jointIds = getJointIds(ModData.parsed.env_obj_joint)
     ModData.sortObjects()
     return moved, left
 end
 
----Reads the joint-linked object ids again (ModData.jointIds is set when the mod loads): a new link
----made in the editor counts before the reload, e.g. for a Reindex right away (utils/joints.lua)
+---Re-reads joint-linked ids, so links made since the load count before the reload
 function ModData.refreshJointIds()
     ModData.jointIds = getJointIds(ModData.parsed.env_obj_joint)
 end
 
--- model_name is relative to mod_assets/<the mod file's folders>/<mod name>/, as used by the game's own
--- mods: mod/owo.tbm uses ../Noki/PinTori for mod_assets/Noki/PinTori.obj, mod/Fun/HoleInTheWall/
--- holeinthewall6.tbm uses ../../../events/sakura for mod_assets/events/sakura.obj
+-- model_name is relative to mod_assets/<the mod file's folders>/<mod name>/, as the game's own mods use
+-- it: mod/owo.tbm's ../Noki/PinTori is mod_assets/Noki/PinTori.obj
 
 ---@param path string? "" for the root
 ---@return string[]
@@ -331,33 +318,28 @@ local function splitPath(path)
     return parts
 end
 
----model_name for a model: MGE's data keeps them for a file in data/mod itself (whatever folder the mod
----came from), whose model folder is mod_assets/<mod name>/, so models are one folder up from it. With
----modPath, for a mod file there instead: one more folder up per folder it's in
----@param model string model path in mod_assets without .obj, e.g. "Noki/PinTori"
----@param modPath string? mod file path relative to data/mod, default a file in data/mod itself
+---model_name for a model, for a mod file at modPath (default: one in data/mod itself, which is how
+---MGE's data keeps them)
+---@param model string path in mod_assets without .obj, e.g. "Noki/PinTori"
+---@param modPath string? relative to data/mod
 ---@return string
 function ModData.toModelName(model, modPath)
-    return string.rep("../", #splitPath(modPath) > 0 and #splitPath(modPath) or 1) .. model
+    return string.rep("../", math.max(#splitPath(modPath), 1)) .. model
 end
 
----The mod data as a file at path (under data/mod) needs it: model_name lines point from that file's
----model folder. MGE's data has them for data/mod itself (toModelName), a mod saved into a subfolder
----gets a copy with them rewritten. The data itself isn't changed
+---The data as a file at path needs it: a copy with model_name lines rewritten for a subfolder.
+---The data itself isn't changed
 ---@param path string
 ---@return FileParserResult
 function ModData.parsedFor(path)
     if #splitPath(path) <= 1 then return ModData.parsed end
-    local copy = {}
-    for k, v in pairs(ModData.parsed) do copy[k] = v end
+    local copy = ModData.copy(ModData.parsed)
     copy.env_obj = {}
     for i, obj in ipairs(ModData.parsed.env_obj) do
-        local model = obj.props.use_model == "1" and ModData.fromModelName(obj.props.model_name, "mod.tbm") -- data/mod's
+        local model = obj.props.use_model == "1" and ModData.fromModelName(obj.props.model_name, "mod.tbm")
         if model then
-            local o = {}
-            for k, v in pairs(obj) do o[k] = v end
-            o.props = {}
-            for k, v in pairs(obj.props) do o.props[k] = v end
+            local o = ModData.copy(obj)
+            o.props = ModData.copy(obj.props)
             o.props.model_name = ModData.toModelName(model, path)
             copy.env_obj[i] = o
         else
@@ -367,13 +349,12 @@ function ModData.parsedFor(path)
     return copy
 end
 
----Model path in mod_assets (without .obj) that a model_name points to, for the mod file at modPath
 ---@param modelName string?
----@param modPath string? mod file path relative to data/mod, e.g. "Fun/HoleInTheWall/holeinthewall6.tbm"
----@return string? nil when it points outside mod_assets
+---@param modPath string? relative to data/mod, e.g. "Fun/HoleInTheWall/holeinthewall6.tbm"
+---@return string? the mod_assets path (without .obj) it points to, nil outside mod_assets
 function ModData.fromModelName(modelName, modPath)
     if not modelName or modelName == "" then return nil end
-    -- the mod's model folder: its folders, then a folder named like the mod
+    -- the mod's model folder: its folders, then one named like the mod
     local parts = splitPath(modPath)
     if #parts > 0 then parts[#parts] = parts[#parts]:gsub("%.tbm$", "") else parts = { "mod" } end
     for _, part in ipairs(splitPath(modelName)) do
@@ -387,9 +368,8 @@ function ModData.fromModelName(modelName, modPath)
     return table.concat(parts, "/")
 end
 
----MGE's data keeps models relative to data/mod, whatever folder the loaded file is in (a mod from a subfolder,
----or the working copy in modmaker/): rewrite them that way. Every write (Save, the working copy, Export) puts
----them back for its file's folder (ModData.parsedFor)
+---Rewrites model_names as relative to data/mod (the data's convention) for a mod loaded from a
+---subfolder. Writes convert back (parsedFor)
 local function rebaseModels()
     if not tostring(MGE.modPath or ""):find("[/\\]") then return end
     for _, obj in ipairs(ModData.parsed.env_obj) do
@@ -406,19 +386,16 @@ local function init()
     ModData.jointIds = {}
 end
 
----Re-reads the loaded mod file and finds free object ids in the world. The atmo layer (parsed.atmo)
----isn't in the file (utils/atmo.lua): the one there is kept. Opening another mod replaces it (Atmo.load,
----main.lua's start and match_begin)
+---Re-reads the loaded mod and finds free ids in the world. Keeps the atmo layer and playable params
+---(opening another mod replaces them in main.lua)
 function ModData.reloadObjects()
     local atmo = ModData.parsed and ModData.parsed.atmo or {}
-    -- kept like the atmo layer: the working copy is an ordinary mod. Opening a mod sets it (main.lua)
     local playable = ModData.parsed and ModData.parsed.playable
     init()
     ModData.loadedPlayable, ModData.loadedAtmo = nil, nil
 
     if MGE.modPath then
-        -- a playable mod (utils/playable.lua): its pool and atmo lines aren't parsed as the mod. A drawn mod
-        -- (Default, utils/atmo.lua's bundledText) has only the atmo lines: its atmo, nothing playable
+        -- a playable or drawn mod: its pool / atmo lines aren't parsed as the mod
         local lines = FileHandler.readLines(MGE.modFolder .. MGE.modPath) or {}
         local split = MGE.Playable and MGE.Playable.split(lines)
         if split and split.header then
@@ -429,28 +406,25 @@ function ModData.reloadObjects()
             end
         end
         ModData.parsed = FileHandler.parseLines(split and split.lines or lines)
-        -- shared body/joint parts (fatkido.tbm) as every player's own section, written back shared while
-        -- they're all the same
-        local rules = get_game_rules and get_game_rules() or {} -- the offline tests have no game
+        local rules = get_game_rules and get_game_rules() or {} -- offline tests have no game
         local count = math.max(tonumber(rules.numplayers) or 2, 1)
         FileHandler.splitSharedPlayers(ModData.parsed, count)
         rebaseModels()
         ModData.jointIds = getJointIds(ModData.parsed.env_obj_joint)
     elseif tostring(MGE.modName or ""):match("%.tbm$") then
-        MGE.say("Mod not found") -- the built-in classic (gamerule "classic", no .tbm) has no file: nothing to say
+        MGE.say("Mod not found") -- built-in classic has no .tbm: nothing to say
     end
     ModData.parsed.atmo = atmo
     ModData.parsed.playable = playable
 
-    -- free ids come from the world, also without a mod file, otherwise imports have no ids to use
+    -- free ids come from the world, also without a mod file
     for i = 0, MAX_ENV_OBJECTS - 1 do
         if get_obj_pos(i) == nil then
             local pool = i >= MAX_NONSTATIC_OBJECTS and ModData.freeIds.static or ModData.freeIds.nonStatic
             table.insert(pool, i + 1)
         end
     end
-    -- a playable mod's pool objects are in the world but not in the data: their ids are free (Save makes
-    -- the pool again from the free ids)
+    -- a playable mod's pool objects are in the world but not the data: their ids are free
     if ModData.loadedPlayable then
         for _, id in ipairs(ModData.loadedPlayable.pool) do
             if get_obj_pos(id - 1) ~= nil then ModData.releaseId(id) end
@@ -459,17 +433,15 @@ function ModData.reloadObjects()
     MGE.say("Mod data updated")
 end
 
-init() --initialize data on load
+init()
 
--- shared with other modules
 MGE.ModData = ModData
 MGE.FLAGS = FLAGS
 MGE.SHAPE = SHAPE
 MGE.MAX_ENV_OBJECTS = MAX_ENV_OBJECTS
 MGE.MAX_NONSTATIC_OBJECTS = MAX_NONSTATIC_OBJECTS
 MGE.MAX_ENV_JOINTS = MAX_ENV_JOINTS
--- smallest object side MGE writes, zero sized objects crash the physics engine
+-- smallest side MGE writes: zero-sized objects crash physics
 MGE.MIN_SIDE = 0.0001
--- the dojo center (middle between the players) in mod file / world coordinates. The Pos row shows
--- positions relative to it, exported assets and generated shapes are centered on it
+-- the dojo center in world coordinates: the Pos row is relative to it, assets and shapes center on it
 MGE.POS_ORIGIN = { 1, -0.1, 0 }

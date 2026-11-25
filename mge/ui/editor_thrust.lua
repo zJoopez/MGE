@@ -10,23 +10,19 @@ local sharedChoice = Rows.sharedChoice
 local createInputRow = Rows.createInputRow
 local createChoiceRow = Rows.createChoiceRow
 
--- Thrust: "thrust <frames> <x> <y> <z> <space>" pushes the object along x y z every <frames> frames.
--- <space> picks the axes the direction uses. No line means no thrust. The game has no live thrust
--- setter, changes are applied by saving. On the Atmo list it edits the atmo objects' lines: a prop (no static
--- bit) with thrust flies in Atmo Play (atmoplay/flight.lua); the game's own atmo skips the line
+-- "thrust <frames> <x> <y> <z> <space>" pushes along x y z every <frames> frames. No live setter:
+-- applies by reloading. On the Atmo list, props with thrust fly in Atmo Play
 ---@class Thrust
 ---@field frames integer
 ---@field dir number[] x y z
 ---@field space integer see THRUST_SPACES
 
--- values of <space>: 0 world axes, 1 the object's (turns with it). It was the other way round, World
--- pushed along the object's axes in game (the user's test, 2026-11-15). Most of the game's mods leave
--- <space> out (3565 of 3617 thrust lines): 0, world, like a line without it
+-- <space>: 0 world axes (also when left out, as most mods do), 1 the object's
 local THRUST_SPACES = {
     { label = "World", value = 0 },
-    { label = "Object", value = 1 }, -- turns with the object
+    { label = "Object", value = 1 },
 }
--- used for the parts of a thrust that an object doesn't have yet (turning it on, typing one field): World
+-- the parts of a thrust an object doesn't have yet
 local THRUST_DEFAULT = { frames = 1, dir = { 0, 0, 0 }, space = 0 }
 
 ---@param line string? a thrust line's value
@@ -48,11 +44,8 @@ local function getThrust(obj)
     return parseThrust(obj.props.thrust)
 end
 
--- the thrust line an object had before Off, by object id: picking World / Object after Off brings it back
--- (it brought back a thrust with no direction, it pushed nothing). By id: every save reloads the mod and
--- re-reads the objects as new tables, the ids stay. An id can be another object's later (a delete, Reindex,
--- another mod): the memory keeps the object's pos and sides and only counts for an object that still has
--- them. Used up once it's back. Kept while MGE runs, not saved
+-- The thrust an object had before Off, so World / Object restores it. By id (reloads make new tables),
+-- checked against pos and sides in case the id now belongs to another object. Session only
 ---@type table<string, { thrust: string, pos: string?, sides: string? }> by "o<id>" / "a<id>" (atmo ids are their own)
 local thrustBeforeOff = {}
 
@@ -77,23 +70,23 @@ local function formatThrust(thrust)
         " " .. thrust.space
 end
 
----Changes the thrust of every selected object and saves when any of them changed
----@param edit fun(thrust: Thrust): Thrust? gets a copy of the object's thrust (defaults when it has none), nil removes it
+---Edits every selected object's thrust; commits if any changed
+---@param edit fun(thrust: Thrust): Thrust? gets a copy (defaults without one), nil removes it
 local function editThrust(edit)
     local changed = false
     for _, v in ipairs(getSelected()) do
         local had = getThrust(v)
-        -- an object turned Off starts from the thrust it had (thrustBeforeOff), not from nothing
+        -- an object turned Off starts from its old thrust
         local current = had or parseThrust(rememberedThrust(v)) or THRUST_DEFAULT
         local thrust = edit({ frames = current.frames, dir = { current.dir[1], current.dir[2], current.dir[3] },
             space = current.space })
         local value = thrust and formatThrust(thrust) or nil
-        -- compared as values, the file may write the same thrust differently ("1.00" / "1")
+        -- compared formatted: "1.00" and "1" are the same
         if value ~= (had and formatThrust(had) or nil) then
             if not value and had then
                 thrustBeforeOff[offKey(v)] = { thrust = formatThrust(had), pos = v.props.pos, sides = v.props.sides }
             elseif value then
-                thrustBeforeOff[offKey(v)] = nil -- back on: used up
+                thrustBeforeOff[offKey(v)] = nil
             end
             v.props.thrust = value
             changed = true
@@ -101,7 +94,6 @@ local function editThrust(edit)
     end
     if not changed then return end
     History.commit()
-    -- atmo objects aren't in the .tbm: their lines only (Atmo Play reads them in the next fight)
     if atmoShown() then Rows.afterAtmoEdit() else MGE.apply() end
 end
 
@@ -113,7 +105,7 @@ local function setThrustField(index)
     if not value then return end
     editThrust(function(thrust)
         if index == 1 then
-            thrust.frames = math.max(1, math.floor(value + 0.5)) -- whole frames, 0 would never fire
+            thrust.frames = math.max(1, math.floor(value + 0.5)) -- 0 would never fire
         else
             thrust.dir[index - 1] = value
         end
@@ -121,8 +113,7 @@ local function setThrustField(index)
     end)
 end
 
----Thrust panel: frames, direction and its axes (or Off). Placeholders and highlights show the selection's
----values ("mixed" when they differ), objects without thrust show the defaults that typing a value gives
+---Thrust panel: Frames, Direction and Axes (or Off); objects without thrust show the defaults
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[]
 local function buildThrust(holder, selected)
@@ -141,7 +132,7 @@ local function buildThrust(holder, selected)
         "Push along the axes below. Turns thrust on if it's off.")
     inwuts.thrust = { framesInputs[1], dirInputs[1], dirInputs[2], dirInputs[3] }
 
-    -- Off then the axes choices (backing out on the left, like Cancel / Reset), objects without thrust count as Off
+    -- objects without thrust count as Off
     local choices = { { label = "Off", value = "off" } }
     for _, space in ipairs(THRUST_SPACES) do table.insert(choices, space) end
     local current = sharedChoice(selected, function(obj)

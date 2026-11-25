@@ -1,50 +1,32 @@
--- Camera control for MGE: looks at objects from the current viewing direction, far enough away
--- that they fit on screen.
---
--- The game's free orbital camera (mode 4) keeps its own distance, capped at about 13.5, and rebuilds
--- the camera position from it every frame. Tested in game (mge/debug_camera.lua):
---   * set_camera_pos, also every frame from the camera hook, is undone by the game's update
---   * set_camera_range doesn't change the distance
---   * returning 1 from the camera hook skips the game's camera update: the position holds, but the
---     game's own orbiting stops too
--- So while MGE controls the camera it owns it completely: the camera hook places it every frame and
--- returns 1, and MGE handles orbiting (left mouse drag) and zoom (mouse wheel) itself. Control
--- goes back to the game when the MGE window is hidden, the camera mode changes or MGE quits.
--- A left press on a gizmo handle drags the gizmo instead (utils/gizmo.lua), the camera stays put.
+-- Camera framing. The game's orbit camera (mode 4) caps its distance at ~13.5 and undoes set_camera_pos
+-- every frame; returning 1 from the camera hook keeps MGE's position but stops the game's orbiting.
+-- So while MGE controls the camera it owns it: places it every frame and does orbit (left drag) and zoom
+-- (wheel) itself. Control goes back when the window hides, the camera mode changes or MGE quits
 
 local SHAPE = MGE.SHAPE
 local HOOK_SET = MGE.hookname .. "_camera"
-local atan2 = math.atan2 or math.atan -- the game's Lua has atan2, newer Lua takes two arguments in atan
+local atan2 = math.atan2 or math.atan -- 5.1 has atan2
 
 ---@class Camera
 ---@field followMoves boolean
 local Camera = {
-    fitFactor = 2.5,     -- camera distance per unit of selection radius (covers the game's field of view)
+    fitFactor = 2.5,     -- camera distance per unit of selection radius
     margin = 1,          -- extra distance so objects don't touch the screen edges
-    -- closest framing distance (selecting, and spawning in view through fitDistance). The game cuts off what's
-    -- closer to the camera than about 5: a box framed at 2.5 was cut open, it looked like the camera was inside
-    -- it, though the camera was where MGE put it. Measured in game 2026-11-15 with a zoom log: whole down to
-    -- 5.03 at 100 from the dojo center (cut at 4.37), 5.78 at 2000 (cut at 5.03), cut already at y 5
+    -- closest framing distance: the game clips what's nearer than ~5 to the camera
     minDistance = 6,
-    -- largest radius an object counts with when framing. Many mods use a huge object as the ground,
-    -- framing all of it put the camera thousands of units away. Bigger objects are framed like one this
-    -- size at their center, so a selection with a ground object still shows the other objects
+    -- objects count with at most this radius when framing (mods use huge ground objects)
     maxObjectRadius = 10,
-    zoomStep = 1.15,     -- distance factor per mouse wheel step
-    zoomMin = 6,         -- closest zoom, the same cut-off as minDistance
-    zoomMax = 200,       -- also the furthest framing distance (objects spread very far apart)
+    zoomStep = 1.15,     -- distance factor per wheel step
+    zoomMin = 6,         -- same clip limit as minDistance
+    zoomMax = 200,       -- also the furthest framing distance
     orbitSpeed = 0.008,  -- radians per dragged pixel
     maxPitch = math.rad(85),
-    dragThreshold = 4,   -- pixels before a press turns into an orbit drag (shorter left clicks select objects)
-    -- mouse buttons that orbit when dragged. Only the left button's presses reach Lua: for right and
-    -- middle the game only passes the release on (mge/debug_mouse.lua, tested in game), so their drags
-    -- can't be seen. Using the game's own right drag orbit doesn't work either, the camera hook has to
-    -- skip the game's camera update (see above), which stops its orbit. A left press on a gizmo handle
-    -- drags the gizmo, anywhere else it orbits (or selects, when it's a click)
+    dragThreshold = 4,   -- pixels before a press becomes an orbit (shorter clicks select)
+    -- only the left button's presses reach Lua (right / middle send just the release)
     orbitButtons = { [1] = true },
-    ---@type number? distance MGE keeps the camera at, nil when the game controls the camera
+    ---@type number? MGE's camera distance, nil while the game controls the camera
     distance = nil,
-    followMoves = true,  -- selecting and moving point the camera at the selection (Camera button in the top menu)
+    followMoves = true,  -- selecting and moving point the camera at the selection (top bar toggle)
     ---@type number[]? look-at point
     target = nil,
     yaw = 0,             -- direction from the target to the camera
@@ -69,11 +51,8 @@ local function objectRadius(id)
     return math.sqrt(sx * sx + sy * sy + sz * sz) / 2           -- box: half diagonal
 end
 
----Center and radius of a sphere around the objects, each object counting with at most
----Camera.maxObjectRadius (huge ground objects). The center is the selection pivot the gizmo and the
----Pos / Rot / Scale rows use (Transforms.getSelectionPivot: average of the file positions), so the
----gizmo sits in the middle of the screen. The middle of the objects' box was used before: for an uneven
----selection (Select All) it's somewhere else and the gizmo ended up off center
+---Bounding sphere of the objects (each at most maxObjectRadius), centered on the selection pivot so
+---the gizmo sits mid-screen
 ---@param objects FileParserEnvObj[]
 ---@return number[]? center, number radius
 function Camera.bounds(objects)
@@ -81,12 +60,12 @@ function Camera.bounds(objects)
     local positions = {}
     for _, obj in ipairs(objects) do
         if obj.kind == "atmo" then
-            -- an atmo object: its lines (its id isn't an object's), ghost-sized like it's drawn
+            -- atmo: from its ghost (its id isn't an object's)
             local g = MGE.AtmoLayer.ghost(obj)
             if g then
                 table.insert(positions, { pos = g.pos, radius = math.min(g.radius, Camera.maxObjectRadius) })
             end
-        elseif get_obj_pos(obj.id - 1) ~= nil then -- in the world, position as the file has it (like the pivot)
+        elseif get_obj_pos(obj.id - 1) ~= nil then -- file position, like the pivot
             local radius = math.min(objectRadius(obj.id - 1), Camera.maxObjectRadius)
             table.insert(positions, { pos = Transforms.positionOf(obj), radius = radius })
         end
@@ -102,23 +81,27 @@ function Camera.bounds(objects)
     return center, radius
 end
 
----Camera distance that fits a sphere of this radius on screen, the same framing Camera.focus uses
+---Camera distance that fits a sphere of this radius on screen
 ---@param radius number
 ---@return number
 function Camera.fitDistance(radius)
     return math.min(math.max(radius * Camera.fitFactor + Camera.margin, Camera.minDistance), Camera.zoomMax)
 end
 
----Where the camera is and the unit direction it looks in, MGE's own camera or the game's. With MGE's
----camera also how far away the point it looks at is (Camera.target): spawnPoint puts things there
+---@return number x, number y, number z MGE camera's position from target, yaw, pitch and distance
+local function orbitPos()
+    local t, d, cp = Camera.target, Camera.distance, math.cos(Camera.pitch)
+    return t[1] + math.cos(Camera.yaw) * cp * d, t[2] + math.sin(Camera.yaw) * cp * d, t[3] + math.sin(Camera.pitch) * d
+end
+
+---Camera position and unit view direction (MGE's or the game's); with MGE's camera also the distance
+---to its target, where spawnPoint puts things
 ---@return number[] origin, number[] dir, number? lookDistance
 function Camera.viewRay()
     local origin, lookat, lookDistance
     if Camera.distance and Camera.target then
-        local t, d, cp = Camera.target, Camera.distance, math.cos(Camera.pitch)
-        origin = { t[1] + math.cos(Camera.yaw) * cp * d, t[2] + math.sin(Camera.yaw) * cp * d,
-            t[3] + math.sin(Camera.pitch) * d }
-        lookat, lookDistance = t, d -- the look-at point is the distance away
+        origin = { orbitPos() }
+        lookat, lookDistance = Camera.target, Camera.distance
     else
         local c = get_camera_info()
         origin, lookat = { c.pos.x, c.pos.y, c.pos.z }, { c.lookat.x, c.lookat.y, c.lookat.z }
@@ -129,30 +112,25 @@ function Camera.viewRay()
     return origin, { dir[1] / len, dir[2] / len, dir[3] / len }, lookDistance
 end
 
--- Spawning in view (Generate tab, imports, New): new things go on screen, about as far from the camera
--- as framing them would put it, not at the dojo center
-Camera.GROUND_Z = 0          -- the floor, things are put on it when the view meets it close enough
-Camera.GROUND_NEAR = 1       -- the view meeting the floor between these shares of the framing distance
-                             -- (not nearer than framing: the game cuts off what's close, see minDistance)
-Camera.GROUND_FAR = 1.6      -- counts as close enough,
-Camera.GROUND_MAX = 25       -- and so does any distance up to this: small things frame close, but on the
-                             -- floor a usual editing view away they're still easy to see
+-- Spawning in view (Generate, imports, New): new things go on screen at about framing distance.
+-- On the game's camera they land on the floor where the view meets it, if that's within
+-- GROUND_NEAR..GROUND_FAR of the framing distance (or up to GROUND_MAX)
+Camera.GROUND_Z = 0
+Camera.GROUND_NEAR = 1
+Camera.GROUND_FAR = 1.6
+Camera.GROUND_MAX = 25
 
 ---@class SpawnBounds box around what is spawned, world axes, any position
 ---@field min number[]
 ---@field max number[]
 
----Where something goes in front of the camera. MGE's camera (lookDistance): centered on the point it
----looks at, not below the floor. Camera follow keeps the camera's distance and looks at the new thing,
----so anywhere else along the view line moved the camera: opening the Generate tab again and again (it
----places its preview so) walked the camera along the view line, the floor point behind a preview being
----looked at, or a framing distance shorter than the zoom. The game's camera: on the floor where the
----view line meets it, when that's about the distance that fits it on screen (or within GROUND_MAX),
----otherwise centered on the view line at that distance (not below the floor)
+---Where something goes in front of the camera, never below the floor. MGE's camera: at its target (any
+---other spot would make camera follow walk the camera). The game's camera: on the floor (see GROUND_*),
+---else on the view line at framing distance
 ---@param bounds SpawnBounds
 ---@param origin number[]? view line to use (Generate keeps one), defaults to Camera.viewRay()
 ---@param dir number[]? unit direction of that line
----@param lookDistance number? how far along it MGE's camera looks (Camera.viewRay's third value)
+---@param lookDistance number? MGE camera's target distance (viewRay's third value)
 ---@return number[] point x y: the center goes there, z: the lowest point
 function Camera.spawnPoint(bounds, origin, dir, lookDistance)
     if not origin or not dir then origin, dir, lookDistance = Camera.viewRay() end
@@ -188,14 +166,11 @@ function Camera.spawnShift(bounds, point)
     }
 end
 
--- The game won't put the camera under the floor: a camera MGE places below it is pushed back up, right
--- next to the target, and the gizmo (sized from the camera distance, drawn from the camera's real
--- position) collapses to nothing. So the orbit stops this far above the floor (0.3 worked but stopped
--- the view noticeably early)
+-- The game pushes a camera below the floor up next to the target (collapsing the gizmo), so the orbit
+-- stops this far above the floor
 Camera.minHeight =  0
 
----Lowest pitch that keeps a camera at `distance` from `target` at least minHeight above the floor.
----Looking up from below is still possible while the target is high enough
+---Lowest pitch that keeps the camera at least minHeight above the floor
 ---@param target number[]
 ---@param distance number
 ---@return number pitch radians (from -maxPitch to maxPitch)
@@ -207,15 +182,13 @@ function Camera.minPitch(target, distance)
     return math.min(math.max(math.asin(s), -Camera.maxPitch), Camera.maxPitch)
 end
 
----Places the camera from target, yaw, pitch and distance, kept above the floor (Camera.minPitch). The
----pitch itself is raised, so a drag further down doesn't build up and the drag back up answers at once
+---Places the camera from target, yaw, pitch and distance, above the floor. Clamps the pitch itself, so
+---dragging back up answers at once
 local function place()
-    local t, d = Camera.target, Camera.distance
-    Camera.pitch = math.max(Camera.pitch, Camera.minPitch(t, d))
-    local cp = math.cos(Camera.pitch)
+    local t = Camera.target
+    Camera.pitch = math.max(Camera.pitch, Camera.minPitch(t, Camera.distance))
     set_camera_lookat(t[1], t[2], t[3])
-    set_camera_pos(t[1] + math.cos(Camera.yaw) * cp * d, t[2] + math.sin(Camera.yaw) * cp * d,
-        t[3] + math.sin(Camera.pitch) * d)
+    set_camera_pos(orbitPos())
 end
 
 ---True while MGE owns the camera
@@ -224,14 +197,13 @@ function Camera.isControlling()
     return Camera.distance ~= nil
 end
 
----Gives the camera back to the game (its orbital camera continues from its own distance)
+---Gives the camera back to the game
 function Camera.release()
     Camera.distance, Camera.target, drag = nil, nil, nil
     remove_hooks(HOOK_SET)
 end
 
----MGE's camera works while the window is shown, or while the map placement view has it hidden
----(ui/map_place.lua: orbit and zoom keep working there)
+---MGE's camera works while the window shows, or in the placement view
 local function windowShown()
     local Main = MGE.Main
     if MGE.isPlacing() then return true end
@@ -250,25 +222,24 @@ local function takeControl()
             return
         end
         place()
-        return 1 -- skip the game's camera update, it would put the camera back at its own distance
+        return 1 -- skip the game's camera update
     end)
     add_hook("mouse_button_down", HOOK_SET, function(button, x, y)
         if button == 4 or button == 5 then -- wheel: 4 up = closer
-            -- the wheel's x, y aren't the cursor: check toriui's tracked cursor (MOUSE_X / Y), so scrolling
-            -- a list (ours or the game's) doesn't zoom. No zoom under an overlay either (Mods, file picker)
+            -- the wheel's x, y aren't the cursor: use toriui's MOUSE_X / Y, so scrolling a list doesn't zoom
             if overUI(MOUSE_X or x, MOUSE_Y or y) or (MGE.overlayOpen and MGE.overlayOpen()) then return end
             local factor = button == 4 and 1 / Camera.zoomStep or Camera.zoomStep
             Camera.distance = math.min(math.max(Camera.distance * factor, Camera.zoomMin), Camera.zoomMax)
         elseif overUI(x, y) then
             return
         elseif Camera.orbitButtons[button] and not gizmoBusy() then
-            -- dragging orbits, a short left click still selects (world_select.lua)
+            -- dragging orbits, a short click still selects
             drag = { x = x, y = y, dragging = false, button = button }
         end
     end)
     add_hook("mouse_move", HOOK_SET, function(x, y)
         if not drag then return end
-        -- the press grabbed a gizmo handle (its hook may run after this one): the gizmo gets the drag
+        -- the press grabbed a gizmo handle (its hook may run after this one)
         if gizmoBusy() then
             drag = nil
             return
@@ -276,7 +247,7 @@ local function takeControl()
         local dx, dy = x - drag.x, y - drag.y
         if not drag.dragging then
             if math.abs(dx) <= Camera.dragThreshold and math.abs(dy) <= Camera.dragThreshold then return end
-            drag.dragging = true -- from here on it's an orbit, not a click
+            drag.dragging = true
         end
         Camera.yaw = Camera.yaw - dx * Camera.orbitSpeed
         Camera.pitch = math.min(math.max(Camera.pitch + dy * Camera.orbitSpeed, -Camera.maxPitch), Camera.maxPitch)
@@ -287,7 +258,7 @@ local function takeControl()
     end)
 end
 
----Points the camera at the objects from the current viewing direction, keeping the zoom (Camera.focusOn)
+---Points the camera at the objects, keeping the zoom (Camera.focusOn)
 ---@param objects FileParserEnvObj[]
 function Camera.focus(objects)
     local center, radius = Camera.bounds(objects)
@@ -295,9 +266,8 @@ function Camera.focus(objects)
     Camera.focusOn(center, radius)
 end
 
----Points MGE's camera at a sphere from the current viewing direction. The zoom stays as it is, unless the
----sphere wouldn't fit: then the camera moves out just far enough (Camera.fitDistance). Selecting used to
----zoom to fit every time, in and out, which threw away the zoom picked with the wheel
+---Points MGE's camera at a sphere from the current direction. Keeps the zoom unless the sphere wouldn't
+---fit, then backs out just enough
 ---@param center number[]
 ---@param radius number
 function Camera.focusOn(center, radius)
@@ -322,23 +292,15 @@ function Camera.focusOn(center, radius)
     place()
 end
 
----After a select (object list, click in the world, Select All / Ctrl + A): looks at the whole
----selection when the Camera button is on, so it and its gizmo are in view. Call it only when something
----got selected, deselecting leaves the camera where it is
+---Frames the selection when camera follow is on. Call only when something got selected
 function Camera.followSelection()
     if not Camera.followMoves then return end
-    local selected = MGE.ModData.getEditSelection() -- the atmo objects on the Atmo list
+    local selected = MGE.ModData.getEditSelection()
     if #selected > 0 then Camera.focus(selected) end
 end
 
----Players list (picking players, opening the list): frames the selected players like a selection when
----camera follow is on, around their shared center (where the gizmo is). MGE's own camera for every
----player, so orbit and zoom work the same as for objects (the game's tori / uke cameras would take
----those away and only exist for two players)
----
----After a move or scale (gizmo, the Players panel's rows) `after` says where they're going: the game
----places them a few frames after the edit's reload, so their bodies now are moved by after.offset or
----scaled by after.factor around after.pivot, like Camera.focus after moving objects (keepDistance)
+---Frames the players around their shared center when camera follow is on. `after`: where an edit is
+---taking them (the game places them a few frames after the reload)
 ---@param players integer|integer[] 0-based
 ---@param after { offset: number[]?, factor: number?, pivot: number[]? }?
 function Camera.followPlayer(players, after)
@@ -365,7 +327,6 @@ function Camera.followPlayer(players, after)
         for k = 1, 3 do center[k] = pivot[k] + (center[k] - pivot[k]) * after.factor end
         radius = radius * after.factor
     end
-    -- after an edit, like moving objects: back off only when they no longer fit on screen
     Camera.focusOn(center, math.min(radius + 0.5, Camera.maxObjectRadius))
 end
 

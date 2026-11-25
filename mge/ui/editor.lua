@@ -1,19 +1,7 @@
--- Editor area under the object list: one panel per tab, picked by the window's tab row
--- (Main.applyTab -> editor.applyPanel). Each tab's rows live in their own file:
---   core:     ui/editor_core.lua      Pos, Rot, Scale, Color, Mass, Shape, Visible
---   advanced: ui/editor_advanced.lua  Friction, Bounce, Flags, Model, Ids (Reindex)
---   thrust:   ui/editor_thrust.lua    Frames, Direction, Axes (World / Object / Off)
---   generate: ui/editor_generate.lua  Align, Amount, Gap, Angle, Size, Increment, Position, Generate / To view
---   player:   ui/editor_player.lua    Pos, Rot, Scale, parts of the selected players (the Players list's Core tab)
---   jointLink: ui/editor_link.lua     the 2 linked objects (grid), Create / Update, Reset (the Joints list's Link tab)
---   joint:    ui/editor_joint.lua     Pos, Axis, Range, Strength, Velocity, Type (the Joints list's Properties tab)
---   (advanced) ui/editor_atmo.lua     Prop hits, Real hits (props in Atmo Play): the Atmo list's own rows on its
---                                     Advanced tab. Its Core, Advanced and Generate tabs are the objects' panels,
---                                     on the selected atmo objects (ModData.getEditSelection)
--- Shared row widgets are in ui/editor_rows.lua, the transform math in utils/transforms.lua.
--- Every block of rows has its own holder. Fixed blocks are built once (typed values stay), the
--- others are rebuilt when the selection or the objects change, so their placeholders / highlights
--- show current values (typed text is carried over the rebuild).
+-- Editor area: one panel per tab (Main.applyTab -> editor.applyPanel), each tab's rows in ui/editor_*.lua.
+-- The Atmo list reuses the object panels on atmo objects, plus ui/editor_atmo.lua's rows.
+-- Fixed blocks are built once; the others rebuild with the selection so placeholders show current
+-- values (typed text is carried over)
 
 local editor = {}
 local ModData = MGE.ModData
@@ -21,7 +9,7 @@ local History = MGE.History
 local Joints = MGE.Joints
 local Widgets = MGE.Widgets
 local getSelected = ModData.getSelected
--- what the panels show and edit: the selected atmo objects on the Atmo list (its Core tab is this Core)
+-- atmo objects on the Atmo list
 local getEditSelection = ModData.getEditSelection
 
 local Rows = dofile(MGE.scriptPath .. "ui/editor_rows.lua")
@@ -40,7 +28,7 @@ local inwuts = Rows.inputs
 ---@class EditorPanelModule
 ---@field fixed EditorBlock[]? built once
 ---@field blocks EditorBlock[]? rebuilt with the selection, in this order
----@field inputs { rebuilt: string[]? }? Rows.inputs lists the module fills that keep typed text over a rebuild
+---@field inputs { rebuilt: string[]? }? Rows.inputs lists that keep typed text over a rebuild
 
 local Core = dofile(MGE.scriptPath .. "ui/editor_core.lua") ---@type EditorPanelModule
 local MODULES = {
@@ -48,29 +36,23 @@ local MODULES = {
     dofile(MGE.scriptPath .. "ui/editor_advanced.lua"),
     dofile(MGE.scriptPath .. "ui/editor_thrust.lua"),
     dofile(MGE.scriptPath .. "ui/editor_generate.lua"),
-    dofile(MGE.scriptPath .. "ui/editor_player.lua"), -- the Players list's Core tab
-    dofile(MGE.scriptPath .. "ui/editor_link.lua"), -- the Joints list's Link tab
-    dofile(MGE.scriptPath .. "ui/editor_joint.lua"), -- the Joints list's Properties tab
-    dofile(MGE.scriptPath .. "ui/editor_atmo.lua"), -- the Atmo list's own rows on the Advanced tab
-    dofile(MGE.scriptPath .. "ui/editor_misc.lua"), -- the World list's panel
+    dofile(MGE.scriptPath .. "ui/editor_player.lua"),
+    dofile(MGE.scriptPath .. "ui/editor_link.lua"),
+    dofile(MGE.scriptPath .. "ui/editor_joint.lua"),
+    dofile(MGE.scriptPath .. "ui/editor_atmo.lua"),
+    dofile(MGE.scriptPath .. "ui/editor_misc.lua"),
 }
 
 local ROW_H = MGE.Widgets.ROW_H
--- panel heights, all as tall as the tallest (Generate, Widgets.PANEL_ROWS rows). The editor area in ui/main.lua fits them.
--- No Reset inputs button: the editor's fields empty themselves once applied (ui/editor_rows.lua)
+-- every panel is as tall as the tallest (Generate)
 local PANEL_H = MGE.Widgets.PANEL_ROWS * ROW_H
-local PANELS = {
-    core = { height = PANEL_H },
-    advanced = { height = PANEL_H },
-    thrust = { height = PANEL_H },
-    generate = { height = PANEL_H },
-    player = { height = PANEL_H }, -- the Players list's Core tab (TAB_SETS in ui/main.lua)
-    jointLink = { height = PANEL_H }, -- the Joints list's Link tab
-    joint = { height = PANEL_H }, -- the Joints list's Properties tab
-    misc = { height = PANEL_H }, -- the World list's panel
-}
+---@type table<string, EditorPanel> by panel id (TAB_SETS in ui/main.lua)
+local PANELS = {}
+for _, id in ipairs({ "core", "advanced", "thrust", "generate", "player", "jointLink", "joint", "misc" }) do
+    PANELS[id] = { height = PANEL_H }
+end
 
--- collected from the modules: fixed and rebuilt blocks, rebuilt block names in build order, input lists
+-- collected from the modules
 ---@type EditorBlock[]
 local FIXED = {}
 ---@type table<string, EditorBlock>
@@ -93,10 +75,8 @@ end
 local panels = {}
 ---@type table<string, UIElement> holders of the rebuilt blocks by name
 local blocks = {}
--- Only the shown panel's blocks are rebuilt (a selection change, a list switch, an edit): the others are
--- marked dirty and rebuilt when their panel is shown (editor.applyPanel). Rebuilding every panel's blocks
--- read the whole selection once per block: with thousands of atmo objects selected, switching lists or
--- selecting froze for a moment over panels nobody could see
+-- Only the shown panel's blocks rebuild; others are marked dirty until shown (rebuilding every panel
+-- froze with thousands selected)
 ---@type string? the shown panel's id, nil until the first is shown (everything is built then)
 local shownPanel = nil
 ---@type table<string, boolean> rebuilt blocks out of date, by name
@@ -105,7 +85,7 @@ local dirty = {}
 local rebuildBlocks
 
 ---Shows one editor panel, called by Main.applyTab
----@param id string "core"|"advanced"|"thrust"|"generate"|"player"|"jointLink"|"joint"
+---@param id string a PANELS id
 function editor.applyPanel(id)
     local panel = PANELS[id]
     if not panel then return end
@@ -115,8 +95,7 @@ function editor.applyPanel(id)
             if panelId == id then element:show(true) else element:hide(true) end
         end
     end
-    -- its blocks that changed while it was hidden (rebuildBlocks calls back here through reapplyTabs: the
-    -- list is empty by then)
+    -- blocks that changed while hidden (the reentrant call via reapplyTabs finds none)
     local stale = {}
     for _, name in ipairs(BLOCK_ORDER) do
         if dirty[name] and BLOCKS[name].panel == id then stale[#stale + 1] = name end
@@ -124,7 +103,7 @@ function editor.applyPanel(id)
     if #stale > 0 then rebuildBlocks(stale) end
 end
 
----Rebuilt children are visible by default, let the window re-apply which tab/panel is shown
+---Rebuilt children are shown by default: let the window re-apply which panel shows
 local function reapplyTabs()
     if MGE.Main and MGE.Main.applyTab then MGE.Main.applyTab() end
 end
@@ -136,7 +115,7 @@ local function saveTypedProperties()
     for _, key in ipairs(REBUILT_INPUTS) do
         saved[key] = {}
         for i, input in ipairs(inwuts[key] or {}) do
-            -- the field being applied (Rows.applying) comes back empty: its placeholder shows the new value
+            -- the field being applied comes back empty, showing the new value
             saved[key][i] = input ~= Rows.applying and input.textfieldstr[1] or nil
         end
     end
@@ -149,26 +128,25 @@ local function restoreTypedProperties(saved)
         for i, input in ipairs(inwuts[key] or {}) do
             local text = texts[i]
             if text and text ~= "" then
-                input.textfieldstr[1] = text
-                input.textfieldindex = #text -- cursor at the end
+                Rows.setText(input, text)
             end
         end
     end
 end
 
----Rebuilt input that has keyboard focus, as its inwuts key and index
+---Focused rebuilt input, as its Rows.inputs key and index
 ---@return string? key, integer? index
 local function findFocusedInput()
     for _, key in ipairs(REBUILT_INPUTS) do
         for i, input in ipairs(inwuts[key] or {}) do
-            -- hide() doesn't clear keyboard, a field on a hidden tab isn't focused
+            -- hide() doesn't clear keyboard
             if input.keyboard and input.displayed and not input.destroyed then return key, i end
         end
     end
     return nil, nil
 end
 
----Gives a text field keyboard focus, same as clicking it (UIElement.handleMouseDn)
+---Focuses a text field like a click does
 ---@param input UIElement
 local function focusInput(input)
     for _, v in ipairs(UIKeyboardHandler) do v.keyboard = v.permanentListener end
@@ -177,12 +155,10 @@ local function focusInput(input)
     disable_camera_movement()
 end
 
----Rebuilds the named blocks with the current selection, typed text is kept and the field that had
----focus gets it back (applying a value with Enter rebuilds the rows, you can keep trying values)
+---Rebuilds the named blocks, keeping typed text and focus (so Enter can be pressed again and again)
 ---@param names string[]
 rebuildBlocks = function(names)
     if not blocks.measured or blocks.measured.destroyed then return end
-    -- blocks of hidden panels wait until theirs is shown
     local now = {}
     for _, name in ipairs(names) do
         if shownPanel and BLOCKS[name].panel ~= shownPanel then
@@ -194,13 +170,12 @@ rebuildBlocks = function(names)
     end
     if #now == 0 then return end
     names = now
-    local selected = getEditSelection() -- read once, every row shows values of the same objects
+    local selected = getEditSelection() -- once for all rows
     local typed = saveTypedProperties()
     local focusKey, focusIndex = findFocusedInput()
     for _, name in ipairs(names) do
         Widgets.clearChildren(blocks[name])
-        -- one failing block must not stop the rest: the blocks after it would keep old rows, and
-        -- reapplyTabs below would be skipped, leaving every panel's new rows visible on top of each other
+        -- a failing block mustn't stop the rest (or reapplyTabs, leaving panels stacked)
         local ok, err = pcall(BLOCKS[name].build, blocks[name], selected)
         if not ok then MGE.say("editor panel error (" .. name .. "): " .. tostring(err)) end
     end
@@ -218,12 +193,11 @@ Rows.refreshProperties = function() rebuildBlocks(BLOCK_ORDER) end
 Rows.refreshMeasured = function() rebuildBlocks({ "measured" }) end
 MGE.Transforms.onChanged = Rows.refreshMeasured
 
----Called when the selection changes: refresh current values
 function editor.onSelectionChanged()
     Rows.refreshProperties()
 end
 
----Duplicate on the Atmo list: copies of the selected atmo objects with all their lines, new names, selected
+---Duplicate on the Atmo list: selected copies with all their lines, new names
 local function duplicateAtmo()
     local selected = ModData.getSelectedAtmo()
     if #selected == 0 then return end
@@ -235,7 +209,7 @@ local function duplicateAtmo()
         copy.id = #atmoObjs
     end
     History.commit()
-    -- a playable mod: copied props get dynamic pool objects (the reload refreshes the window)
+    -- a playable mod reloads for new pools (refreshing the window)
     if not MGE.Playable.reloadIfSplitChanged() then MGE.Main.updateWindow() end
 end
 
@@ -243,7 +217,7 @@ local function duplicate()
     if MGE.Main.listTab == "atmo" then return duplicateAtmo() end
     local selected = getSelected()
     if #selected == 0 then return end
-    -- only joints between selected objects are copied, so only those copies need low ids
+    -- only joints between selected objects are copied
     local linkedJoints = Joints.getLinked(Joints.idSet(selected))
     if not Joints.haveRoom(#linkedJoints) then return end
     local linkedIds = Joints.getObjectIds(linkedJoints)
@@ -254,17 +228,16 @@ local function duplicate()
     local ids = ModData.allocateIds(plans) -- all or nothing
     if not ids then return end
 
-    local idMap = {} -- original id -> copy id, used to copy joints between duplicated objects
+    local idMap = {} -- original id -> copy id
     for i, obj in ipairs(selected) do
         local copy = ModData.copy(obj)
         copy.id = ids[i]
-        copy.props = ModData.copy(obj.props) -- don't share props with the original
-        -- the game flag is read by id, a copy without a flag line could get a different default
-        -- (objects moved by allocateIds already have their flag written)
+        copy.props = ModData.copy(obj.props)
+        -- the game's flag is read by id: write it, or the copy may get another default
         copy.props.flag = copy.props.flag or tostring(get_obj_flag(obj.id - 1) or 0)
         table.insert(ModData.parsed.env_obj, copy)
         idMap[obj.id] = copy.id
-        obj.selected = false -- selection moves to the copies (copy keeps selected = true)
+        obj.selected = false -- selection moves to the copies
     end
     Joints.copyLinked(Joints.getLinked(idMap), idMap)
     ModData.sortObjects()
@@ -273,14 +246,14 @@ local function duplicate()
 end
 
 local function delete()
-    if MGE.Main.listTab == "atmo" then -- the atmo objects: not in the .tbm, no reload
+    if MGE.Main.listTab == "atmo" then -- not in the .tbm: no reload
         MGE.AtmoLayer.removeSelected()
         History.commit()
-        if not MGE.Playable.reloadIfSplitChanged() then MGE.Main.updateWindow() end -- a playable mod: fewer pools
+        if not MGE.Playable.reloadIfSplitChanged() then MGE.Main.updateWindow() end
         return
     end
     local deleted = {}
-    for i = #ModData.parsed.env_obj, 1, -1 do -- iterating backwards to prevent index issues when removing
+    for i = #ModData.parsed.env_obj, 1, -1 do
         local obj = ModData.parsed.env_obj[i]
         if obj.selected then
             deleted[obj.id] = true
@@ -288,20 +261,19 @@ local function delete()
             ModData.releaseId(obj.id)
         end
     end
-    Joints.removeLinkedToAny(deleted) -- a joint can't point to a missing object
+    Joints.removeLinkedToAny(deleted)
     History.commit()
     MGE.apply()
 end
 
----Asks for confirmation with Toribash's own popup (TBMenu:showConfirmationWindow) before deleting what the
----shown list has selected: objects, or atmo objects
+---Delete: asks first, then deletes the shown list's selection
 local function onDeleteClick()
     local atmo = MGE.Main.listTab == "atmo"
     local count = #getEditSelection()
     if count == 0 or (MGE.confirmOverlay and not MGE.confirmOverlay.destroyed) then return end
     local message = "Delete " .. count .. " selected " .. (atmo and "atmo " or "") .. "object" .. (count == 1 and "" or "s") ..
         "?\nUndo can bring them back."
-    MGE.confirm(message, delete) -- Enter / Continue deletes, Esc / Cancel doesn't
+    MGE.confirm(message, delete)
 end
 
 ---@param parent UIElement
@@ -316,8 +288,7 @@ end
 
 ---@param parent UIElement editor container from ui/main.lua
 function editor.create(parent)
-    dirty = {} -- every block is built below
-    -- all panels start at the top of the editor area
+    dirty = {}
     panels = {}
     for id, panel in pairs(PANELS) do
         panels[id] = parent:addChild({
@@ -326,7 +297,6 @@ function editor.create(parent)
         })
     end
     local selected = getEditSelection()
-    -- fixed blocks first (built once), then the rebuilt ones
     for _, block in ipairs(FIXED) do
         block.build(addHolder(parent, block), selected)
     end
@@ -337,13 +307,11 @@ function editor.create(parent)
         block.build(blocks[name], selected)
     end
 
-    -- Duplicate/Delete are in the list's button bar (Main.setListActions), Save in the toolbar
-    -- (ui/main.lua). Positions and visibility are applied by Main.applyTab after create
+    -- Main.applyTab sets visibility after create
 end
 
--- used by the object list's Duplicate/Delete buttons
 editor.duplicate = duplicate
-editor.deleteSelected = onDeleteClick -- asks for confirmation first
+editor.deleteSelected = onDeleteClick
 
 MGE.Editor = editor
 return editor

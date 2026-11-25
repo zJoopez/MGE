@@ -1,32 +1,24 @@
--- Gizmo math (utils/gizmo.lua): handle layout and drag results from camera rays. Only vector math,
--- no game calls, so it could be tested offline.
---
--- Drags are absolute: each frame the offset is worked out from where the handle was grabbed and where
--- the mouse ray is now, never added up from mouse deltas (no drift, no dependence on mouse speed).
---   axis:  point on the axis line closest to the mouse ray, minus the one at the grab
---   plane: mouse ray hitting the handle's plane through the gizmo center, minus the grab hit
+-- Gizmo math: handle layout and drag results from camera rays, no game calls.
+-- Drags are absolute (from the grab to the current ray, never summed deltas): no drift.
+--   axis:  closest point on the axis line to the ray, minus the one at the grab
+--   plane: ray hit on the handle's plane, minus the grab hit
 
 ---@class GizmoMath
 local GizmoMath = {}
 MGE.GizmoMath = GizmoMath
 
-local function sub(a, b) return { a[1] - b[1], a[2] - b[2], a[3] - b[3] } end
-local function add(a, b) return { a[1] + b[1], a[2] + b[2], a[3] + b[3] } end
-local function scale(a, s) return { a[1] * s, a[2] * s, a[3] * s } end
-local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
-local function length(a) return math.sqrt(dot(a, a)) end
+local V = MGE.Mat3.vec
+local sub, add, scale, dot, length, cross, normalize = V.sub, V.add, V.scale, V.dot, V.length, V.cross, V.normalize
 GizmoMath.sub, GizmoMath.add, GizmoMath.scale, GizmoMath.dot, GizmoMath.length = sub, add, scale, dot, length
+GizmoMath.cross, GizmoMath.normalize = cross, normalize
 
 GizmoMath.AXES = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }
 
--- handles turned too far from the camera can't be dragged precisely, they're hidden instead:
--- an arrow within 10 degrees of the view direction, a plane seen within 10 degrees of edge-on
+-- handles within 10 degrees of edge-on can't be dragged precisely: hidden
 local EDGE_ON_AXIS = math.cos(math.rad(10))
 local EDGE_ON_PLANE = math.sin(math.rad(10))
 
--- The gizmo keeps its size on screen: `size` (arrow length, see utils/gizmo.lua) is a share of the
--- camera distance. It's drawn on top of the world, so objects don't hide it whatever its size.
--- Handle sizes are shares of `size`
+-- Handle sizes as shares of `size` (the arrow length, which scales with camera distance)
 GizmoMath.SHAPE = {
     tipRadius = 0.072,    -- ball at an arrow's end, half a scale cube
     pickRadius = 0.08,    -- clickable around shafts and ring segments
@@ -135,39 +127,16 @@ function GizmoMath.dragOffset(handle, center, grab, o, d, step)
 end
 
 ---------------------------------------------------------------- rotate rings
--- A ring per group axis around the gizmo center. Dragging turns the selection around that axis:
---   plane:   the ring is seen face-on enough, the angle is measured exactly on its plane (the grabbed
---            point stays under the cursor, full turns are possible)
---   tangent: the ring is seen nearly edge-on, where plane hits jump around. The mouse moves along the
---            ring's tangent at the grabbed point instead, an arc length of the radius turns 1 radian
+-- A ring per group axis. Face-on enough: the angle is measured on the ring's plane (full turns work).
+-- Nearly edge-on: the mouse moves along the tangent at the grab, one radius of travel = 1 radian
 
-local function cross(a, b) return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] } end
-local function normalize(a)
-    local l = length(a)
-    if l < 1e-12 then return nil end
-    return scale(a, 1 / l)
-end
-GizmoMath.cross, GizmoMath.normalize = cross, normalize
-local atan2 = math.atan2 or math.atan -- game Lua has atan2, newer Lua takes two args in atan
+local atan2 = math.atan2 or math.atan -- 5.1 has atan2
 
 GizmoMath.RING_SEGMENTS = 64
--- |cos| between the ring's axis and the view below this: tangent drag (about 17 degrees from edge-on)
+-- |cos| between ring axis and view below this: tangent drag (~17 degrees from edge-on)
 GizmoMath.RING_PLANE_LIMIT = 0.3
 
----Rotation by t radians around the unit vector u (Rodrigues)
----@param u number[]
----@param t number
----@return number[][]
-function GizmoMath.rotationAbout(u, t)
-    local c, s = math.cos(t), math.sin(t)
-    local k = 1 - c
-    local x, y, z = u[1], u[2], u[3]
-    return {
-        { c + x * x * k, x * y * k - z * s, x * z * k + y * s },
-        { y * x * k + z * s, c + y * y * k, y * z * k - x * s },
-        { z * x * k - y * s, z * y * k + x * s, c + z * z * k },
-    }
-end
+GizmoMath.rotationAbout = MGE.Mat3.rotationAbout
 
 ---@class GizmoRing: GizmoHandle
 ---@field radius number
@@ -181,11 +150,7 @@ end
 ---@param radius number
 ---@return GizmoRing[]
 function GizmoMath.ringHandles(center, frame, radius)
-    local cols = {
-        { frame[1][1], frame[2][1], frame[3][1] },
-        { frame[1][2], frame[2][2], frame[3][2] },
-        { frame[1][3], frame[2][3], frame[3][3] },
-    }
+    local cols = MGE.Mat3.transpose(frame)
     local handles = {}
     for i = 1, 3 do
         local u, v = cols[i % 3 + 1], cols[(i + 1) % 3 + 1]
@@ -247,7 +212,7 @@ function GizmoMath.ringAngle(ring, grab, o, d, step)
         local to = hit and sub(hit, ring.center)
         if not to or length(to) < 1e-9 then return nil end
         local raw = atan2(dot(ring.normal, cross(grab.from, to)), dot(grab.from, to))
-        -- unwrapped across frames, so turns past 180 degrees keep going instead of flipping
+        -- unwrapped across frames, so turns past 180 degrees don't flip
         local delta = raw - grab.raw
         if delta > math.pi then delta = delta - 2 * math.pi elseif delta < -math.pi then delta = delta + 2 * math.pi end
         grab.raw, grab.angle = raw, grab.angle + delta
@@ -261,12 +226,8 @@ function GizmoMath.ringAngle(ring, grab, o, d, step)
 end
 
 ---------------------------------------------------------------- scale handles
--- A handle per group axis (shaft with a cube) and a uniform handle (cube) between them, off the
--- center along all three axes. The factor grows exponentially with how far the mouse moved along the
--- handle's line since the grab: every gizmo size (arrow length) of drag multiplies it by
--- SCALE_PER_SIZE, dragging back divides by it. A plain ratio (distance now / at the grab) needed
--- 100 handle lengths to take 0.01 to 1, this takes under 3, and it can't flip or reach 0.
--- The dragged handle's cube follows the cursor.
+-- A cube per group axis plus a uniform cube. The factor is exponential in the travel along the
+-- handle: each gizmo size of drag multiplies it by SCALE_PER_SIZE (never flips or reaches 0)
 
 GizmoMath.SCALE_PER_SIZE = 5
 GizmoMath.MIN_FACTOR, GizmoMath.MAX_FACTOR = 1e-3, 1e4 -- per drag

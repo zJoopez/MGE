@@ -1,20 +1,7 @@
--- Joints list's Link tab: which two objects the current joint slot (Main.jointSlot, always one) links.
--- Clicks only change a draft (Joints.draft, utils/joints.lua): a click on an object in the grid, or in
--- the world while Pick from world is on (Joints.worldPick, utils/world_select.lua), picks it, a click on a
--- picked one takes it out, at most two. Off, a world click selects the object on the Objects list. Which
--- one is first doesn't matter to the game. Nothing changes in the mod until Create (an empty slot) or
--- Update (a joint's new objects), so a stray click can't rewire a joint.
---   rows 0-6: every object, picked ones pale, static ones faint, on pages when there are more than
---             fit. Linking one above id MAX_NONSTATIC_OBJECTS reindexes it down (Joints.linkSlots)
---                                                                               (block jointLinkGrid)
---   row 7:    Pick from world (its popup is the tab's help)
---   row 8:    Reset (the saved link; Delete is in the list's bar), Create / Update: its popup says what
---             it would do. Create with nothing picked makes two default objects joined in the slot
---                                                                     (rows 7-8: block jointLinkButtons)
--- A pick only rebuilds the buttons, the grid restyles its cells in place: rebuilding it would scroll it
--- back to the top. Selecting another slot rebuilds both.
--- Like the Properties tab, a click on a joint's anchor selects that joint (it becomes the current
--- slot) and the Move gizmo drags the selected joints' anchors: those come before picking objects
+-- Joints list's Link tab: picks the current slot's two objects into a draft (grid clicks, or world
+-- clicks with Pick from world). Nothing changes until Create / Update. Rows 0-6: the object grid (paged);
+-- 7: Pick from world; 8: Reset, Create / Update. A pick restyles the grid in place (a rebuild would
+-- scroll it back)
 
 local Rows = MGE.EditorRows
 local Widgets = MGE.Widgets
@@ -23,14 +10,12 @@ local ModData = MGE.ModData
 
 local ROW_H = MGE.Widgets.ROW_H
 
----@type fun()? restyles the grid's cells from the current draft (ObjSelector.grid), set by its build
+---@type fun()? restyles the grid's cells from the draft, set by its build
 local restyleGrid = nil
--- the grid's page when there are more objects than fit: pages, not scrolling. A scrolled list shows
--- rows half out of its area and needs bars drawn over them, here those would cover the heading and
--- the Create / Reset row (objects spilled over them in a big mod: a converted map)
+-- pages, not scrolling: scrolled rows would spill over the rows around the grid
 local gridPage = 1
 
--- a click in the grid or the world changed the draft: only this tab shows it (no reload, nothing saved)
+-- the draft changed: only this tab shows it
 Joints.onDraftChanged = function()
     Rows.refreshBlocks({ "jointLinkButtons" })
     if restyleGrid then restyleGrid() end
@@ -52,7 +37,7 @@ local function pairText(a, b)
     return tostring(a or "-") .. " and " .. tostring(b or "-")
 end
 
----The selected slots, in id order: Create / Update links all of them to the current slot's draft
+---The selected slots in id order (Create / Update links all of them)
 ---@return integer[]
 local function selectedSlots()
     local slots = {}
@@ -70,7 +55,7 @@ local function anyJoint(slots)
     return false
 end
 
----What Create / Update would do with the current slot's draft, for its button's popup
+---What Create / Update would do, for its popup
 ---@param slot integer
 ---@param slots integer[] the selected slots
 ---@return string
@@ -95,10 +80,7 @@ local function statusText(slot, slots)
     return "Pick 2 objects"
 end
 
----Every object, a click picks or unpicks one. Picked ones read from the draft on every restyle (the
----draft is replaced when it's first edited, see Joints.editDraft). The same list as the Objects list
----(ui/obj_selector.lua): its columns, Main.pageSize objects a page with the pager above only when there's
----more than one page, it scrolls. Picks are kept across pages
+---The object grid: a click picks or unpicks. Paged like the Objects list; picks survive page changes
 ---@param holder UIElement
 local function buildGrid(holder)
     restyleGrid = nil
@@ -125,7 +107,7 @@ local function buildGrid(holder)
             end)
         rect.y = rowH
     end
-    -- as tall as the Objects list (Main.LIST_ROWS rows, the pager's one of them), within the block
+    -- as tall as the Objects list, within the block
     local listH = math.min(MGE.Main.LIST_ROWS * rowH, math.floor(holder.size.h / rowH) * rowH)
     rect.h = listH - rect.y
     local max = MGE.MAX_NONSTATIC_OBJECTS
@@ -141,9 +123,8 @@ local function buildGrid(holder)
     })
 end
 
----Create / Update: every selected slot gets the draft's link (Joints.commitDraft), or with nothing
----picked in an empty current slot two new default objects joined there, in front of the camera. New
----joints show the Properties tab next. Camera follow then frames the linked objects (Main.followJoints)
+---Create / Update: links the selected slots to the draft, or with nothing picked in an empty slot
+---makes two joined default objects. New joints open the Properties tab
 ---@param slot integer
 local function commit(slot)
     local slots = selectedSlots()
@@ -153,7 +134,7 @@ local function commit(slot)
     if makesPair(slot, draft) then
         if MGE.Assets.newPair(slot) then
             Joints.resetDraft()
-            MGE.Main.setTab("joint") -- next: its values
+            MGE.Main.setTab("joint")
         end
     elseif state == "incomplete" then
         MGE.say("pick 2 objects first")
@@ -161,13 +142,12 @@ local function commit(slot)
         MGE.say("" .. (#slots > 1 and "the selected joints already link" or "joint " .. slot .. " already links")
             .. " those objects")
     elseif Joints.commitDraft(slot, slots) then
-        MGE.Main.followJoints() -- camera follow frames the linked objects, like selecting the joint does
+        MGE.Main.followJoints()
         if creating then MGE.Main.setTab("joint") end
     end
 end
 
----The last two rows: Pick from world (lit while on), then Reset and Create / Update (lit when it would do
----something, its popup says what)
+---The last two rows: Pick from world (lit while on), Reset and Create / Update (lit when it'd act)
 ---@param holder UIElement
 local function buildButtons(holder)
     Rows.begin()
@@ -182,7 +162,7 @@ local function buildButtons(holder)
     local pick = buttonsAt(0, {
         { label = "Pick from world", onClick = function()
             Joints.worldPick = not Joints.worldPick
-            if not Joints.worldPick then MGE.WorldSelect.hover = nil end -- no object lit as pickable
+            if not Joints.worldPick then MGE.WorldSelect.hover = nil end
             Rows.refreshBlocks({ "jointLinkButtons" })
         end },
     })[1]
@@ -190,7 +170,6 @@ local function buildButtons(holder)
     Widgets.popupBelow(pick, "Pick the joint's 2 objects in the list, or in the\n" ..
         "world while this is lit. Click a picked one to unpick.\n" ..
         "Off: a world click selects the object on the Objects list.")
-    -- Reset on the left like the other backing-out buttons
     local buttons = buttonsAt(1, {
         { label = "Reset", onClick = function()
             Joints.worldPick = false

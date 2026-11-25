@@ -9,9 +9,8 @@ local Widgets = {}
 ---@field w number
 ---@field h number
 
--- MGE's overall size: every size and text size of the window is multiplied by it (Widgets.px), on top of
--- the game's GUI scale. The layout's proportions stay the same. 1 was small at the lowest GUI scale.
--- Settings > UI size picks it (MGE_UI_SCALE, a global: kept over the restart that applies it)
+-- MGE's own size factor on top of the game's GUI scale (Settings > UI size; a global so the restart
+-- that applies it keeps it)
 Widgets.UI_SCALE = tonumber(MGE_UI_SCALE) or 1.3
 Widgets.UI_SCALES = { 1, 1.15, 1.3, 1.5, 1.75 } -- the choices Settings offers
 
@@ -22,27 +21,21 @@ function Widgets.px(n)
     return math.floor(n * Widgets.UI_SCALE + 0.5)
 end
 
--- the font of every button and label: the plain one the number fields use (FONTS.LMEDIUM) reads better small
--- than the game's default bold comic font (FONTS.MEDIUM, what MGE used before)
+-- the number fields' plain font reads better small than the game's bold one
 Widgets.FONT = FONTS.LMEDIUM
 
--- one text size for every button and label (tabs, bars, editor rows, list cells), adapted text only shrinks
--- it to fit. TEXT_SCALE_SMALL for secondary text: input fields, hints, a row's second column
+-- text sizes (adapted text only shrinks to fit)
 Widgets.TEXT_SCALE = 0.5 * Widgets.UI_SCALE
-Widgets.TEXT_SCALE_SMALL = 0.45 * Widgets.UI_SCALE
-Widgets.TAB_TEXT_SCALE = 0.42 * Widgets.UI_SCALE -- tabs (list tabs, Mods / Rules, editor tabs)
-Widgets.BUTTON_TEXT_SCALE = 0.45 * Widgets.UI_SCALE -- buttons' text (Widgets.button's default), a bit under the labels'
-Widgets.TITLE_SCALE = 0.7 * Widgets.UI_SCALE -- the overlays' titles (Settings, Convert Map, the file picker...)
--- height of an editor row (label, inputs or buttons, "?"), the editor tabs and the reset button
-Widgets.ROW_H = Widgets.px(24)
-Widgets.PANEL_ROWS = 9 -- editor panels' height in rows, all the same (the tallest: Generate). ui/main.lua sizes the area by it
--- height of a list row (the object grid's rows, the Players list, the file picker): ScrollList.rowHeight
+Widgets.TEXT_SCALE_SMALL = 0.45 * Widgets.UI_SCALE -- inputs, hints, second columns
+Widgets.TAB_TEXT_SCALE = 0.42 * Widgets.UI_SCALE
+Widgets.BUTTON_TEXT_SCALE = 0.45 * Widgets.UI_SCALE
+Widgets.TITLE_SCALE = 0.7 * Widgets.UI_SCALE -- overlay titles
+Widgets.ROW_H = Widgets.px(24) -- editor rows and tabs
+Widgets.PANEL_ROWS = 9 -- every editor panel's height in rows (the tallest: Generate)
 Widgets.LIST_ROW_H = Widgets.px(20)
--- space between the cells of a grid-like row: the number fields' (they sit this far apart), the object grid's
--- cells, the button rows (Box / Sphere / Pill, the list's buttons, Create / Reset), the editor tabs
+-- space between cells in grids and button rows
 Widgets.GAP = 2
--- what a cell keeps free on each side of its row / column: half the gap. The number fields sit this far in
--- (TBMenu:spawnTextField2's shift 1), buttons in the editor rows do the same so they line up with them
+-- each cell's free margin: half the gap (number fields sit this far in, buttons match)
 Widgets.INSET = Widgets.GAP / 2
 
 ---A color between two others (t = 0: a, 1: b), opaque
@@ -54,13 +47,10 @@ function Widgets.mix(a, b, t)
     return { a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t, 1 }
 end
 
--- Highlight colors, between the window color and the game's lighter ones (those were far brighter than the
--- rest of the scheme). Mixed from the game's menu colors, so they follow its theme
+-- highlights mixed from the game's menu colors, so they follow its theme
 Widgets.HOVER_COLOR = Widgets.mix(TB_MENU_DEFAULT_BG_COLOR, TB_MENU_DEFAULT_LIGHTER_COLOR, 0.4)
--- a selected cell in the object / joint grid, a selected list row: lighter, still with white text
 Widgets.SELECTED_COLOR = Widgets.mix(TB_MENU_DEFAULT_BG_COLOR, TB_MENU_DEFAULT_LIGHTEST_COLOR, 0.5)
--- a toggle that's on (Box, Shown, a row label's mode), the current gizmo tool, a lit Select all: the same as a
--- selected cell, so everything chosen reads the same (a darker one was hard to tell from the buttons)
+-- toggles that are on: same as selected, so everything chosen reads alike
 Widgets.ACTIVE_COLOR = Widgets.SELECTED_COLOR
 
 ---The menu's darkest color at a share of its brightness
@@ -70,10 +60,9 @@ local function darkest(share)
     local c = TB_MENU_DEFAULT_DARKEST_COLOR
     return { c[1] * share, c[2] * share, c[3] * share, 1 }
 end
--- the top bar and the overlays' bars: well darker than the panel (0.6 read nearly black next to it)
+-- bars, darker than the panel
 Widgets.BAR_COLOR = darkest(0.8)
--- the content areas: the lists, the editor panel and its active tab, the overlays. Darker than the panel
--- around them, lighter than the bar
+-- content areas (lists, editor panel, overlays): between panel and bar
 Widgets.CONTENT_BG = darkest(0.9)
 
 ---@class WidgetStyle
@@ -81,21 +70,18 @@ Widgets.CONTENT_BG = darkest(0.9)
 ---@field hover number[]
 ---@field pressed number[]
 
----MGE's button colors, everywhere: the window's red, standing out on the dark content areas, the overlays
----and the bars. (It was the darker red, made for the red window background)
+---MGE's button colors everywhere: the window's red on the dark areas
 ---@type WidgetStyle
 Widgets.STYLE = {
     bg = TB_MENU_DEFAULT_BG_COLOR,
     hover = Widgets.HOVER_COLOR,
-    pressed = TB_MENU_DEFAULT_DARKEST_COLOR, -- every MGE button presses to the darkest color
+    pressed = TB_MENU_DEFAULT_DARKEST_COLOR,
 }
----The same style, the name the editor panels use
 Widgets.PANEL_STYLE = Widgets.STYLE
 
----Tab panel color (ui/main.lua): darkens the window, the active tab uses it too so it touches the panel
+---Tab panel color: darkens the window; the active tab uses it too
 Widgets.TAB_PANEL_COLOR = { 0, 0, 0, 0.15 }
----The tab panel color as a solid color: the window color under it, darkened the same. For parts that
----have to cover what's behind them, like list bars over rows that scroll past the list edges
+---TAB_PANEL_COLOR over the window color, solid: for parts that must cover what's behind them
 Widgets.TAB_PANEL_SOLID = {
     TB_MENU_DEFAULT_BG_COLOR[1] * (1 - Widgets.TAB_PANEL_COLOR[4]),
     TB_MENU_DEFAULT_BG_COLOR[2] * (1 - Widgets.TAB_PANEL_COLOR[4]),
@@ -151,14 +137,12 @@ function Widgets.iconButton(parent, rect, image, onClick, style)
     return btn
 end
 
--- Changing the game's graphics settings reloads its graphics (reload_graphics, the resolution_changed
--- hook): the texture ids loaded before don't show the right images any more, icons came out garbled.
--- Elements built after it were fine (a tab change), so every image element MGE makes is kept here with
--- its path and loads its image again then, like a rebuilt one. Weak keys: killed elements drop out
+-- A graphics reload (resolution_changed) invalidates loaded texture ids, garbling icons, so image
+-- elements are tracked and reload their images then. Weak keys: killed elements drop out
 ---@type table<UIElement, string>
 local trackedImages = setmetatable({}, { __mode = "k" })
 
----Keeps an element showing an image so it loads it again after the game reloads its graphics
+---Tracks an image element for reloading after a graphics reload
 ---@param element UIElement made with bgImage = image
 ---@param image string the same path
 ---@return UIElement element
@@ -167,8 +151,7 @@ function Widgets.trackImage(element, image)
     return element
 end
 
----Loads every tracked image again (after reload_graphics). The old ids aren't unloaded: after the
----reload they're not the images they were
+---Reloads every tracked image (the old ids aren't unloaded: they're no longer those images)
 function Widgets.reloadImages()
     for element, image in pairs(trackedImages) do
         if element.destroyed then
@@ -180,8 +163,7 @@ function Widgets.reloadImages()
     end
 end
 
----@type fun()[] called after a graphics reload, window size or GUI scale change, after the images reload
----(ui/main.lua: Main.fitScreen)
+---@type fun()[] called after a graphics reload, window size or GUI scale change
 Widgets.onScreenChanged = {}
 
 add_hook("resolution_changed", MGE.hookname, function()
@@ -190,27 +172,24 @@ add_hook("resolution_changed", MGE.hookname, function()
 end)
 
 ---@class WidgetRowButton
----@field label string|fun(): string text, for icon buttons the name shown when hovering (string labels)
+---@field label string|fun(): string text; for icon buttons the hover name
 ---@field icon string? image shown instead of the label
----@field wide boolean? icon buttons are square unless wide, wide ones share the width like text buttons
+---@field wide boolean? icon buttons are square unless wide
 ---@field onClick function?
----@field popupLeft boolean? the hover name goes under the button, its right edge at the button's (Widgets.popupBelowLeft)
+---@field popupLeft boolean? hover name opens to the left (Widgets.popupBelowLeft)
 
----Hover popup (TBMenu:displayPopup) under its element, right edges lined up, so it opens to the left: for
----buttons near the screen's right edge (the top bar). The game's own placement moves a popup that would
----leave the screen before it shrinks to its text: its text and background ended up apart
+---Hover popup under its element, right edges lined up (near the screen's right edge the game's own
+---placement split the popup's text from its background)
 ---@param element UIElement
 ---@param message string
 ---@return UIElement? popup nil on mobile (the game shows its own)
 function Widgets.popupBelowLeft(element, message)
     local popup = TBMenu:displayPopup(element, message) ---@type UIElement?
-    if popup then popup:moveTo(-popup.size.w, element.size.h + 4) end -- negative x: from the element's right edge
+    if popup then popup:moveTo(-popup.size.w, element.size.h + 4) end -- negative x: from the right edge
     return popup
 end
 
----Hover popup (TBMenu:displayPopup) under its element, left edges lined up: the game's own puts it on top
----of the element and pushes it back on screen, near the bottom that's above the button, covering it.
----Moved left when it would leave the screen on the right, above only when there's no room under it
+---Hover popup under its element (the game's own can cover the button), kept on screen
 ---@param element UIElement
 ---@param message string
 ---@return UIElement? popup nil on mobile (the game shows its own)
@@ -218,20 +197,18 @@ function Widgets.popupBelow(element, message)
     local popup = TBMenu:displayPopup(element, message) ---@type UIElement?
     if not popup then return nil end
     local gap, margin = 4, 10
-    -- where it goes, from the element's top left (element.pos is up to date, the popup's isn't after a move)
+    -- from the element's top left (element.pos is current, the popup's isn't after a move)
     local x, y = 0.0, element.size.h + gap ---@type number, number
     local overflow = element.pos.x + popup.size.w - (WIN_W - margin)
     if overflow > 0 then x = -overflow end
-    if element.pos.y + y + popup.size.h > WIN_H - margin then y = -(popup.size.h + gap) end -- no room under it
-    -- set as a shift from 0: toriui turns a negative one into a place left of / above the element (a
-    -- negative value set directly would count from the element's right / bottom edge)
+    if element.pos.y + y + popup.size.h > WIN_H - margin then y = -(popup.size.h + gap) end
+    -- as a shift from 0: a negative position set directly counts from the right / bottom edge
     popup:moveTo(0, 0)
     popup:moveTo(x, y, true)
     return popup
 end
 
----Esc in an overlay's text field closes the overlay (MGE.closeTopOverlay). A focused field takes every
----key first, MGE's key hook may not see the Esc then. Keeps the field's other key handlers
+---Esc in an overlay's text field closes the overlay (a focused field takes keys before MGE's hook)
 ---@param field UIElement text field inside an MGE overlay
 function Widgets.closeOnEscape(field)
     field:addKeyboardHandlers(function(key)
@@ -239,9 +216,8 @@ function Widgets.closeOnEscape(field)
     end)
 end
 
----Runs func every frame before the element draws, after anything already set to run there. An
----element has one such slot (addCustomDisplay with drawBefore) and the hover popups of icon buttons
----(TBMenu:displayPopup) use it, setting it directly would replace them
+---Runs func every frame before the element draws, chained after what's there (hover popups use the
+---same single slot)
 ---@param element UIElement
 ---@param func fun()
 function Widgets.addDrawBefore(element, func)
@@ -252,9 +228,8 @@ function Widgets.addDrawBefore(element, func)
     end, true)
 end
 
----Buttons filling the parent's width exactly: n buttons and n - 1 gaps between them.
----Entries with `icon` show that image instead of the label and are square (h wide) unless `wide`,
----the other buttons share the rest of the width equally. Icon buttons show their label on hover
+---Buttons filling the parent's width: icon buttons are square (unless wide) with their label on hover,
+---the others share the rest
 ---@param parent UIElement
 ---@param y number
 ---@param h number
@@ -279,7 +254,6 @@ function Widgets.buttonRow(parent, y, h, buttons, gap, textScale, style)
             created[i] = Widgets.iconButton(parent, rect, info.icon, info.onClick, style)
             local label = info.label
             if type(label) == "string" and label ~= "" then
-                -- name of the icon on hover, under it (popupLeft: under it, opening to the left)
                 local place = info.popupLeft and Widgets.popupBelowLeft or Widgets.popupBelow
                 place(created[i], label)
             end
@@ -291,10 +265,8 @@ function Widgets.buttonRow(parent, y, h, buttons, gap, textScale, style)
     return created
 end
 
----Removes an element and its descendants from toriui's keyboard handler list (UIKeyboardHandler).
----Text fields and toggles add themselves there on creation, but kill() only removes the one that
----has focus. UI that is rebuilt often (object list, properties panel) would keep piling up dead
----entries, and toriui walks the whole list on every key press and mouse click.
+---Removes an element and its descendants from toriui's UIKeyboardHandler. kill() only removes the
+---focused one, so rebuilt UI piled up dead entries that toriui walks on every key and click
 ---@param element UIElement
 function Widgets.releaseKeyboard(element)
     if not UIKeyboardHandler or not element then return end
@@ -322,8 +294,7 @@ function Widgets.clearChildren(element)
     element:kill(true)
 end
 
----Round icon that shows a short explanation on hover (TBMenu:displayHelpPopup), same style as
----the game's mods menu. The popup opens on the right side of the icon
+---Round "?" icon with a hover explanation (like the game's mods menu), opening to its right
 ---@param parent UIElement
 ---@param x number negative values count from the parent's right edge
 ---@param y number
@@ -338,22 +309,21 @@ function Widgets.helpIcon(parent, x, y, size, message, mark, style)
         pos = { x, y },
         size = { size, size },
         bgColor = style.bg,
-        hoverColor = style.hover, -- like every other button (it used to turn darker on hover)
+        hoverColor = style.hover,
         pressedColor = style.pressed,
         interactive = true,
         shapeType = ROUNDED,
         rounded = size,
     })
     icon:addChild({}):addAdaptedText(true, mark or "?", nil, nil, Widgets.FONT, nil, Widgets.TEXT_SCALE)
-    local popup = TBMenu:displayHelpPopup(icon, message, nil, true) -- true: our own mark above
+    local popup = TBMenu:displayHelpPopup(icon, message, nil, true) -- true: our own mark
     if popup then
         popup:moveTo(size + 5, (size - popup.size.h) / 2, true)
     end
     return icon
 end
 
----True when the screen position is on MGE's window or any other interactive UI, used to keep
----world clicks and camera zoom from reacting to clicks/scrolls meant for menus
+---True over MGE's window or any interactive UI: world clicks and zoom ignore those
 ---@param x number
 ---@param y number
 ---@return boolean
@@ -363,7 +333,7 @@ function Widgets.isMouseOverUI(x, y)
         and y >= window.pos.y and y <= window.pos.y + window.size.h then
         return true
     end
-    -- same test toriui uses for its buttons (UIElement.handleMouseDn), covers popups and other menus
+    -- toriui's own button test, covering popups and other menus
     for _, element in ipairs(UIMouseHandler or {}) do
         if not element.clickThrough and element:shouldReceiveInput()
             and x > element.pos.x and x < element.pos.x + element.size.w
@@ -374,11 +344,11 @@ function Widgets.isMouseOverUI(x, y)
     return false
 end
 
--- small centered info lines (window footer)
+-- footer info lines
 Widgets.INFO_HEIGHT = Widgets.px(18)
-local INFO_MAX_SCALE = 0.7 * Widgets.UI_SCALE -- adapted text shrinks below this only if the line doesn't fit
+local INFO_MAX_SCALE = 0.7 * Widgets.UI_SCALE
 
----Small info text, centered unless align says otherwise, replaces the element's previous text
+---Small info text (default centered), replacing the element's previous text
 ---@param element UIElement
 ---@param text string
 ---@param align UIElementTextAlign? default CENTERMID

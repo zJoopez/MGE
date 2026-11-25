@@ -1,9 +1,7 @@
--- Map converter pipeline: a map (.vmf text or Source .bsp, MapConv.parse) to static env_obj boxes for
--- MGE. Brushes are
--- filtered (triggers, sky, hints... are left out, clips are kept), each kept one becomes a box
--- (boxfit.lua), the biggest ones fit the object budget, then everything is scaled and moved so the
--- anchor ends up at the dojo center on the ground. Needs vmf.lua, bsp.lua, brush.lua, boxfit.lua, MGE.Mat3,
--- MGE.FileHandler and mod_export.lua's constants loaded first. Plan: docs/map-import-plan.md
+-- Map converter pipeline: a .vmf / .bsp map to static env_obj boxes. Brushes are filtered (triggers,
+-- sky, hints out; clips kept), fitted to boxes (boxfit.lua), the biggest kept within the budget, then
+-- scaled and moved so the anchor lands at the dojo center on the ground. Needs vmf, bsp, brush, boxfit,
+-- MGE.Mat3, MGE.FileHandler and mod_export.lua loaded first. Plan: docs/map-import-plan.md
 MGE.MapConv = MGE.MapConv or {}
 local MapConv = MGE.MapConv
 
@@ -15,13 +13,11 @@ local formatNumbers = FileHandler.formatNumbers
 ---@class MapConvOptions
 ---@field scale number Toribash units per map unit. Source: a player is 72 units, a tori about 2.5
 ---@field budget integer most boxes written, the biggest are kept
----@field objectBudget integer? in game only (ui/map_overlay.lua): how many of the budget's boxes become
----objects, the rest go to the atmo (utils/atmo_layer.lua). nil: all of them. The converter itself ignores it
----@field minSize number map units, brushes whose box is smaller on every side are left out (detail)
----@field clips boolean keep player clip brushes (the map's invisible walls, ramps over stairs), colored like
----the map geometry they cover (borrowMaterials)
----@field skyClips boolean with clips: also keep sky clips, the big lids under the open sky (mapconv/skyclips.lua)
----@field invisible boolean keep solid brushes nobody sees (only nodraw and other undrawn tool textures)
+---@field objectBudget integer? in game only: budget boxes that become objects (the rest go to the atmo)
+---@field minSize number map units, boxes smaller on every side are left out
+---@field clips boolean keep player clips (invisible walls, ramps over stairs), colored like what they cover
+---@field skyClips boolean with clips: also the big lids under the open sky
+---@field invisible boolean keep solid brushes nobody sees (undrawn tool textures only)
 ---@field ungrippable boolean flag the boxes ungrippable too
 ---@field slabError number see BoxFitOptions
 ---@field slabThickness number map units
@@ -31,20 +27,20 @@ local formatNumbers = FileHandler.formatNumbers
 ---@field anchorEntity string? without anchor: the first entity of this class is the anchor
 ---@field terrain boolean convert terrain (.bsp displacements) to slabs
 ---@field terrainTolerance number see TerrainFitOptions
----@field merge boolean join boxes that make one bigger box (merge.lua) before the budget
----@field simplify boolean also join nearly flat neighbouring slabs (Merge.flat): terrain floors, floor tiles
----@field simplifyTolerance number map units a joined slab may be thicker than its parts (bumps, tilt)
+---@field merge boolean join boxes that make one bigger box before the budget
+---@field simplify boolean also join nearly flat neighbouring slabs (floors, terrain)
+---@field simplifyTolerance number map units a joined slab may be thicker than its parts
 ---@field simplifyFill number share of a joined slab its parts must cover, 0-1
----@field dropHidden boolean leave out boxes entirely inside another box (Merge.hidden): nothing changes in game
----@field dropCovered boolean also leave out boxes COVERED_SHARE covered by other boxes together
+---@field dropHidden boolean leave out boxes entirely inside another box
+---@field dropCovered boolean also leave out boxes COVERED_SHARE covered by others together
 
 ---@type MapConvOptions
 MapConv.DEFAULTS = {
     scale = 0.035,
     budget = 200,
     minSize = 4,
-    clips = true, -- ramps over stairs, smoothed corners: much of what players actually walk on
-    skyClips = false, -- lids over the map: never what's wanted from clips
+    clips = true, -- much of what players walk on
+    skyClips = false, -- lids over the map
     invisible = false,
     ungrippable = false,
     slabError = 0.2,
@@ -56,15 +52,15 @@ MapConv.DEFAULTS = {
     merge = true,
     simplify = true,
     simplifyTolerance = 12,
-    simplifyFill = 0.75, -- edges must line up, so this only limits gaps between parts
-    dropHidden = true, -- dust2 B site and its approaches: 60 of 247 boxes, mostly stairs inside their ramp clips
-    dropCovered = false, -- 33 more there, but the uncovered 5% can be a visible ledge: check the preview
+    simplifyFill = 0.75, -- edges must line up, so this only limits gaps
+    dropHidden = true, -- dust2 B site: 60 of 247 boxes, mostly stairs inside ramp clips
+    dropCovered = false, -- the uncovered 5% can be a visible ledge
 }
 
--- budget order (MapConv.priority): the walkable top's area counts this many times extra
+-- budget order: the walkable top's area counts this many times extra
 local FLOOR_WEIGHT = 3
 
--- dropCovered: a box goes when at least this share of its inside is covered by other boxes together
+-- dropCovered: share of a box's inside other boxes must cover
 local COVERED_SHARE = 0.95
 MapConv.COVERED_SHARE = COVERED_SHARE
 
@@ -78,20 +74,19 @@ local DROP_CLASSES = {
 }
 local DROP_PREFIXES = { "trigger_", "env_", "info_", "fog_", "light", "point_" }
 
--- tool materials, by the last part of the name in upper case. Any side with one of these drops the
--- brush (sky shells and hints come with nodraw / skip on their other sides)
+-- tool materials by upper case short name. Any side with one drops the brush
 local DROP_ANY = {
     TOOLSTRIGGER = true, TOOLSSKYBOX = true, TOOLSSKYBOX2D = true, TOOLSHINT = true,
     TOOLSAREAPORTAL = true, TOOLSOCCLUDER = true, TOOLSFOG = true,
 }
--- drop the brush when all its sides are these: not solid for players
+-- all sides these: not solid for players
 local DROP_ALL = {
     TOOLSSKIP = true, TOOLSBLOCKLIGHT = true, TOOLSBLOCKBULLETS = true, TOOLSNPCCLIP = true,
     TOOLSBLOCK_LOS = true, TOOLSINVISIBLELADDER = true,
 }
 -- all sides these: an invisible wall
 local CLIP_ALL = { TOOLSPLAYERCLIP = true, TOOLSCLIP = true }
--- a side with one of these: a sky brush (a .bsp marks them itself, MapBrush.sky)
+-- a side with one: a sky brush (a .bsp marks them itself)
 local SKY_ANY = { TOOLSSKYBOX = true, TOOLSSKYBOX2D = true }
 
 
@@ -111,11 +106,10 @@ local function droppedClass(class)
     return false
 end
 
--- tool textures that are seen in the game: a brush with only these isn't invisible
+-- tool textures the game draws
 local VISIBLE_TOOLS = { TOOLSBLACK = true, TOOLSWHITE = true }
 
----Every side has a tool texture that isn't drawn (nodraw, invisible, block...): nobody sees the
----brush in the game. The map's sealing shell, roof caps, the backs of terrain walls
+---Every side has an undrawn tool texture (sealing shell, roof caps, terrain wall backs)
 ---@param brush MapBrush
 ---@return boolean
 local function invisible(brush)
@@ -126,15 +120,14 @@ local function invisible(brush)
     return true
 end
 
----What a brush is for. Trigger, sky, hint... textures drop it whatever the map's flags say (a .bsp
----can have trigger volumes marked solid, dust2 has big ones high up), an invisible solid brush is
----dropped unless options.invisible
+---What a brush is for. Trigger, sky, hint... textures drop it whatever the flags say (dust2 has solid
+---trigger volumes); invisible solids drop unless options.invisible
 ---@param brush MapBrush
 ---@param options MapConvOptions?
 ---@return "solid"|"clip"|"drop" role
 ---@return string? reason when dropped
 function MapConv.brushRole(brush, options)
-    -- not solid for players: by class, or the entity's keys (starts disabled, never solid)
+    -- not solid for players: by class or entity keys
     if droppedClass(brush.entity) or brush.nonSolid then return "drop", "entity" end
     local allDrop, allClip = true, true
     for _, side in ipairs(brush.sides) do
@@ -146,7 +139,7 @@ function MapConv.brushRole(brush, options)
     ---@type "solid"|"clip"|"drop", string?
     local role, reason
     if brush.role then
-        role, reason = brush.role, brush.reason -- the reader knew (.bsp contents flags)
+        role, reason = brush.role, brush.reason -- from .bsp contents flags
     elseif allDrop then
         role, reason = "drop", "tool"
     elseif allClip then
@@ -158,7 +151,7 @@ function MapConv.brushRole(brush, options)
     return role --[[@as "solid"|"clip"|"drop"]], reason
 end
 
--- box colors by material name: first rule whose word is in the (lower case) name
+-- colors by material: the first rule whose word is in the lower case name
 local COLOR_RULES = {
     { "sand", { 0.86, 0.76, 0.54 } }, { "dirt", { 0.62, 0.48, 0.33 } }, { "ground", { 0.62, 0.48, 0.33 } },
     { "grass", { 0.40, 0.55, 0.28 } }, { "wood", { 0.55, 0.38, 0.22 } }, { "crate", { 0.55, 0.38, 0.22 } },
@@ -167,7 +160,7 @@ local COLOR_RULES = {
     { "plaster", { 0.88, 0.82, 0.70 } }, { "wall", { 0.84, 0.76, 0.60 } },
 }
 local DEFAULT_COLOR = { 0.70, 0.70, 0.70, 1 }
-local TOOL_COLOR = { 0.35, 0.35, 0.35, 1 } -- nodraw and other tool faces, solid but never seen in the map
+local TOOL_COLOR = { 0.35, 0.35, 0.35, 1 } -- tool faces, never seen in the map
 
 ---@param material string
 ---@return number[] r g b a
@@ -211,9 +204,9 @@ end
 ---@field role "solid"|"clip"
 ---@field material string
 ---@field brushId string
----@field merged integer? how many pieces merge.lua joined into it
----@field lookMaterial string? clips and roof caps: material of the solid geometry they cover / sit on (borrowMaterials)
----@field roof boolean? an invisible (nodraw) brush kept as a roof cap (ROOF)
+---@field merged integer? pieces merged into it
+---@field lookMaterial string? clips and roof caps: the material they cover / sit on
+---@field roof boolean? an invisible brush kept as a roof cap
 
 ---Highest point of a box above its center, along world Z
 ---@param box MapBox
@@ -223,10 +216,10 @@ local function halfHeight(box)
     for k = 1, 3 do h = h + math.abs(box.frame[3][k]) * box.sides[k] / 2 end
     return h
 end
-MapConv.halfHeight = halfHeight -- the placement view puts the lowest point on the ground
+MapConv.halfHeight = halfHeight
 
----Where the map goes: the given point, else the anchor entity (inside the region, when there is one),
----else the middle of the kept boxes at their lowest point
+---Where the map goes: the given point, else the anchor entity (in the region), else the kept boxes'
+---middle at their lowest point
 ---@param map MapFile
 ---@param boxes MapConvBox[]
 ---@param options MapConvOptions
@@ -261,18 +254,18 @@ end
 
 ---@class MapConvReport
 ---@field brushes integer count in the map
----@field dropped table<string, integer> reason: entity, tool, clip, region, broken, small, budget
----@field displacements integer kept brushes with terrain on a face (converted as their plain brush)
----@field terrain integer terrain grids of a .bsp converted (or left out with the terrain option off)
+---@field dropped table<string, integer> by reason
+---@field displacements integer kept brushes with terrain on a face (converted as plain brushes)
+---@field terrain integer .bsp terrain grids converted (or left out)
 ---@field terrainSlabs integer slabs they made, before merging
----@field merged integer boxes that went into another (merge.lua)
----@field roofs integer invisible (nodraw) brushes kept as roof caps (keepRoofs)
----@field simplified integer slabs that went into another by Simplify (Merge.flat)
+---@field merged integer boxes merged into others
+---@field roofs integer invisible brushes kept as roof caps
+---@field simplified integer slabs joined by Simplify
 ---@field boxes integer written
----@field slabs integer of them, ramps (brushes)
+---@field slabs integer of them, ramps
 ---@field terrainBoxes integer of them, from terrain
----@field roughFits integer of them, boxes more than half empty
----@field belowGround integer of them, entirely under the ground (z 0), the game's floor can't be removed
+---@field roughFits integer of them, more than half empty
+---@field belowGround integer of them, entirely under the ground (z 0)
 ---@field anchor number[]
 ---@field anchorFrom string
 
@@ -281,7 +274,7 @@ end
 ---@field report MapConvReport
 
 ---@class MapConvPiece: MapConvBox
----@field at number[] middle of the brush / terrain grid it came from, what the region tests
+---@field at number[] middle of its brush / terrain grid (the region tests it)
 
 ---@param options MapConvOptions?
 ---@return MapConvOptions options with MapConv.DEFAULTS for the missing fields
@@ -314,7 +307,7 @@ local function copyReport(report)
     return copy
 end
 
----Bounds of the map's sky brushes, for sky clips (mapconv/skyclips.lua)
+---Bounds of the map's sky brushes
 ---@param map MapFile
 ---@return { min: number[], max: number[] }[]
 local function skyBounds(map)
@@ -330,7 +323,7 @@ local function skyBounds(map)
     return skies
 end
 
-local boundsMemo -- box -> { min, max } while MapConv.pieces runs: its passes ask for each piece's often
+local boundsMemo -- box -> { min, max } while MapConv.pieces runs
 
 ---World-axis bounds of a box (map units)
 ---@param box MapBox
@@ -338,36 +331,24 @@ local boundsMemo -- box -> { min, max } while MapConv.pieces runs: its passes as
 local function boundsOf(box)
     local known = boundsMemo and boundsMemo[box]
     if known then return known[1], known[2] end
-    local min, max = {}, {}
-    for k = 1, 3 do
-        local half = 0
-        for j = 1, 3 do half = half + math.abs(box.frame[k][j]) * box.sides[j] / 2 end
-        min[k], max[k] = box.center[k] - half, box.center[k] + half
-    end
+    local min, max = MapConv.Merge.aabb(box)
     if boundsMemo then boundsMemo[box] = { min, max } end
     return min, max
 end
 
 local SKY_CELL = 512 -- grid of the solids' footprints, map units
-local cellKey = MapConv.Merge.cellKey -- grid cells as numbers, not "x,y" strings
--- shared with the sky clips (mapconv/skyclips.lua, loaded after this file)
-MapConv.boundsOf = boundsOf
+local cellKey = MapConv.Merge.cellKey -- numeric grid cell keys
+MapConv.boundsOf = boundsOf -- shared with skyclips.lua
 
--- Roof caps: the tops of buildings nobody sees from the ground are nodraw brushes (dust2: 69 big flat
--- ones high up), dropped with the other invisible brushes (the sealing slab under the map, the backs
--- of terrain walls), but in Toribash the camera looks down on them: without them the roofs are gone.
--- An invisible brush is kept as a roof cap when it's
---   flat:      lower than both horizontal sides (the backs of terrain walls are upright)
---   open:      on at least `open` of `samples` x `samples` points of its footprint sky over its top
---              with nothing solid in between (stacked caps: the top one)
---   supported: a solid piece under its footprint reaches up to its bottom (within `support`) from
---              lower down: the walls a roof rests on. The sealing slab under the map has nothing
---              under it, only the ground on top, which leaves gaps where it counted as open (dust2's
---              2336 x 2624 x 288 one), and floating leftovers have nothing at all
+-- Roof caps: building tops are often nodraw (unseen from the ground), but Toribash's camera looks down
+-- on them. An invisible brush is kept as a roof cap when it's
+--   flat:      lower than both horizontal sides (terrain wall backs are upright)
+--   open:      sky over its top on at least `open` of `samples` x `samples` footprint points
+--   supported: a solid from below reaches up to its bottom (within `support`): walls under a roof.
+--              Rules out the sealing slab under the map and floating leftovers
 local ROOF = { open = 0.5, samples = 6, support = 8 }
 
----The solid pieces (not clips) by footprint cell (SKY_CELL map units): what's under, over or around a
----point, for the roof caps and the sky clips (mapconv/skyclips.lua)
+---Solid pieces (not clips) by footprint cell, for roof caps and sky clips
 ---@param pieces MapConvPiece[]
 ---@return table<number, { min: number[], max: number[] }[]> grid entries by cellKey
 function MapConv.solidsGrid(pieces)
@@ -389,7 +370,7 @@ function MapConv.solidsGrid(pieces)
 end
 
 local NO_SOLIDS = {}
----The solids whose footprint cell holds the point (x, y): test their bounds for the point itself
+---Solids in the point's cell (test their bounds for the point itself)
 ---@param grid table MapConv.solidsGrid
 ---@return { min: number[], max: number[] }[]
 function MapConv.solidsAt(grid, x, y)
@@ -430,7 +411,7 @@ local function keepRoofs(pieces, candidates, skies)
                 if clear then open = open + 1 end
             end
         end
-        -- supported: a solid overlapping its footprint, from below its bottom up to it
+        -- supported: a solid overlapping its footprint, from below up to its bottom
         local supported = false
         if open >= ROOF.open * n * n then
             local bottom = min[3]
@@ -457,13 +438,11 @@ local function keepRoofs(pieces, candidates, skies)
     return kept
 end
 
--- clips borrow the material of solid geometry within this many map units (touching walls, the stairs
--- under a ramp clip); the grid that finds it has cells this wide
+-- clips borrow the material of solids within BORROW_MARGIN map units; grid cell size
 local BORROW_MARGIN, BORROW_CELL = 8, 512
 
----Gives every clip piece the material of the solid piece it overlaps most, counting solids within
----BORROW_MARGIN (a clip along a wall touches it): clip.lookMaterial, the clip's color. Clips have only
----tool textures, but they mostly cover real geometry: stairs, rails, wall corners
+---Gives each clip (and roof cap) the material of the solid it overlaps most, within BORROW_MARGIN:
+---clips are tool textures but cover real geometry (stairs, rails, corners)
 ---@param pieces MapConvPiece[]
 local function borrowMaterials(pieces)
     local grid = {}
@@ -475,7 +454,7 @@ local function borrowMaterials(pieces)
     local clips = {}
     for _, piece in ipairs(pieces) do
         local min, max = boundsOf(piece)
-        if piece.role == "clip" or piece.roof then -- roof caps: the walls they sit on
+        if piece.role == "clip" or piece.roof then
             clips[#clips + 1] = { piece = piece, min = min, max = max }
         elseif not piece.material:upper():find("^TOOLS/") then
             local entry = { piece = piece, min = min, max = max }
@@ -495,7 +474,7 @@ local function borrowMaterials(pieces)
                 for _, solid in ipairs(grid[cellKey(x, y)] or {}) do
                     if not seen[solid] then
                         seen[solid] = true
-                        -- overlap volume, 0 as soon as one axis doesn't overlap
+                        -- overlap volume
                         local volume = 1
                         for k = 1, 3 do
                             local overlap = mmin(max[k], solid.max[k]) - mmax(min[k], solid.min[k])
@@ -514,9 +493,8 @@ local function borrowMaterials(pieces)
     end
 end
 
----Every brush and terrain slab of the map as a box in map units, before region, merging and budget.
----The slow part (brush geometry, terrain): done once per map and options, MapConv.select then picks
----from the pieces as often as needed (the map placement view does on every region change)
+---Every brush and terrain slab as a box in map units, before region, merging and budget. The slow
+---part, done once per map and options; MapConv.select picks from it repeatedly
 ---@param map MapFile
 ---@param options MapConvOptions? uses clips, terrain, terrainTolerance, slabError, slabThickness
 ---@return MapConvPiece[] pieces
@@ -530,13 +508,12 @@ function MapConv.pieces(map, options)
         return { (bounds.min[1] + bounds.max[1]) / 2, (bounds.min[2] + bounds.max[2]) / 2, (bounds.min[3] + bounds.max[3]) / 2 }
     end
 
-    -- sky brushes: sky clips are left out, roof caps kept under them
     local allSkies = skyBounds(map)
     local skies = opts.clips and not opts.skyClips and allSkies or nil
 
     ---@type MapConvPiece[]
     local pieces = {}
-    ---@type MapConvPiece[] flat invisible brushes, kept when they're roof caps (keepRoofs)
+    ---@type MapConvPiece[] flat invisible brushes (possible roof caps)
     local roofCandidates = {}
     for _, brush in ipairs(map.brushes) do
         local role, reason = MapConv.brushRole(brush, opts)
@@ -577,7 +554,7 @@ function MapConv.pieces(map, options)
         end
     end
 
-    -- terrain (.bsp displacements): slabs under each grid
+    -- .bsp displacements: slabs under each grid
     for _, terrain in ipairs(map.terrain or {}) do
         if not opts.terrain then
             drop("terrain")
@@ -603,9 +580,8 @@ function MapConv.pieces(map, options)
             end
         end
     end
-    -- roof caps before the sky clips: a clip lid over a roof isn't between it and the sky (clips aren't
-    -- in keepRoofs' solids), and the sky clip test sees the roofs as the solids they are
-    boundsMemo = {} -- the pieces don't change shape from here on
+    -- roof caps before sky clips, so the clip test sees the roofs as solids
+    boundsMemo = {} -- shapes are final from here on
     report.roofs = keepRoofs(pieces, roofCandidates, allSkies)
     report.dropped.invisible = report.dropped.invisible + #roofCandidates - report.roofs
     if skies then
@@ -618,8 +594,7 @@ function MapConv.pieces(map, options)
     return pieces, report
 end
 
----Score for the budget: the biggest surface of a box. Floors and walls make the map, small details
----go when it's full
+---Budget score: a box's biggest face area
 ---@param box MapBox
 ---@return number
 function MapConv.score(box)
@@ -628,8 +603,7 @@ function MapConv.score(box)
     return s[2] * s[3]
 end
 
----Area of the box's top that can be stood on: the face whose normal is within ~45 degrees of up (a
----floor's or ramp's top; a wall's thin top edge gives little), 0 when no face points that way
+---Standable top area: the face within ~45 degrees of up, 0 without one
 ---@param box MapBox
 ---@return number
 function MapConv.walkableArea(box)
@@ -643,17 +617,14 @@ function MapConv.walkableArea(box)
     return area
 end
 
----Budget order of a box, bigger first: MapConv.score, with its walkable top counting FLOOR_WEIGHT times
----extra, so a floor beats an equally big wall (a ceiling slab's top counts too: a lower region leaves
----those out)
+---Budget order (bigger first): score plus FLOOR_WEIGHT times the walkable top, so floors beat walls
 ---@param box MapBox
 ---@return number
 function MapConv.priority(box)
     return MapConv.score(box) + FLOOR_WEIGHT * MapConv.walkableArea(box)
 end
 
----The boxes a conversion writes: pieces in the region (by where they came from), merged, without
----the small ones, the biggest first up to the budget
+---The boxes a conversion writes: pieces in the region, merged, small ones out, biggest first up to the budget
 ---@param pieces MapConvPiece[]
 ---@param options MapConvOptions? uses region, merge, minSize, budget
 ---@param report MapConvReport? from MapConv.pieces, copied with this step's counts added
@@ -677,19 +648,19 @@ function MapConv.select(pieces, options, report)
     report.merged, report.simplified = 0, 0
     if opts.merge then boxes, report.merged = MapConv.Merge.boxes(boxes) end
     if opts.simplify then
-        -- slab thickness limit: terrain slabs and floor brushes, not crates or wall blocks
+        -- maxThickness: floors and terrain, not crates or walls
         boxes, report.simplified = MapConv.Merge.flat(boxes, {
             tolerance = opts.simplifyTolerance, fill = opts.simplifyFill, gap = 16, align = 32, maxThickness = 32,
         })
     end
-    -- after merging (a merged wall hides more), before the budget (hidden boxes would take its places)
+    -- after merging (merged walls hide more), before the budget
     if opts.dropHidden or opts.dropCovered then
         local hidden, covered
         boxes, hidden, covered = MapConv.Merge.hidden(boxes, opts.dropCovered and COVERED_SHARE or 0)
         report.dropped.hidden = report.dropped.hidden + hidden
         report.dropped.covered = report.dropped.covered + covered
     end
-    -- small ones go after merging: a row of small pieces can make one big box
+    -- small ones after merging: small pieces can merge into a big box
     local sized = {}
     for _, box in ipairs(boxes) do
         if math.max(box.sides[1], box.sides[2], box.sides[3]) < opts.minSize then
@@ -709,7 +680,7 @@ function MapConv.select(pieces, options, report)
     return kept, cut, report
 end
 
----Where the map goes in the world, see pickAnchor
+---See pickAnchor
 ---@param map MapFile
 ---@param boxes MapConvBox[] the kept ones, for the fallback
 ---@param options MapConvOptions?
@@ -719,8 +690,7 @@ function MapConv.anchorFor(map, boxes, options)
     return pickAnchor(map, boxes, MapConv.withDefaults(options))
 end
 
----A map box in the world: the anchor goes to the dojo center on the ground, turned by yaw around it
----and scaled
+---A map box in the world: the anchor at the dojo center on the ground, turned by yaw and scaled
 ---@param box MapBox
 ---@param anchor number[]
 ---@param options { scale: number, yaw: number }
@@ -736,10 +706,9 @@ function MapConv.toWorld(box, anchor, options)
     return { p[1] + origin[1], p[2] + origin[2], p[3] }, Mat3.mul(turn, box.frame), sides
 end
 
----The anchor that keeps a world point where it is (x y) when the map turns by turn (around z) or
----scales by factor around it (the placement view's Map gizmo). A map point m is at O + R (m - a) s
----(MapConv.toWorld); with R' = turn R and s' = s factor, the point P stays and the rest turns / scales
----around it when a' = a - R'^T (d - turn d factor) / s', d = P - O across. The anchor's height stays
+---The anchor keeping world point P in place (x y) when the map turns around z or scales around it.
+---m maps to O + R (m - a) s; with R' = turn R, s' = s factor: a' = a - R'^T (d - turn d factor) / s',
+---d = P - O horizontally. The height stays
 ---@param anchor number[]
 ---@param options { scale: number, yaw: number } before the change
 ---@param point number[] world
@@ -755,7 +724,7 @@ function MapConv.anchorAround(anchor, options, point, turn, factor)
     return { anchor[1] - back[1], anchor[2] - back[2], anchor[3] }
 end
 
----A world point back in map units, the inverse of MapConv.toWorld's placement
+---A world point in map units (inverse of toWorld)
 ---@param point number[]
 ---@param anchor number[]
 ---@param options { scale: number, yaw: number }
@@ -790,8 +759,7 @@ function MapConv.objects(boxes, anchor, options, report)
             end
             if box.kind == "box" and box.fitError > 0.5 then report.roughFits = report.roughFits + 1 end
         end
-        -- clips: the material borrowed from what they cover, plain grey when they touch nothing
-        -- roof caps (nodraw) the material of the walls they sit on, their own when they touch none
+        -- clips: the borrowed material, else grey; roof caps: borrowed, else their own
         local color = MapConv.colorFor(box.role == "clip" and (box.lookMaterial or "") or (box.lookMaterial or box.material))
         objects[i] = {
             kind = "env_obj",
@@ -835,8 +803,7 @@ function MapConv.convert(map, options, pieces, piecesReport)
     return { objects = objects, report = report }
 end
 
----Map to brushes and entities, by format: Source .bsp (a .bsp name or a VBSP header, errors on a
----broken one) or .vmf. From an open file (binary mode) only the parts a .bsp needs are read
+---Parses a .bsp (by name or VBSP header) or .vmf. From an open binary file, only a .bsp's needed parts are read
 ---@param source string|userdata the whole file's contents, or the open file (io.open)
 ---@param name string? file name, a .bsp never goes to the .vmf reader
 ---@return MapFile
@@ -857,7 +824,7 @@ function MapConv.parse(source, name)
     return map
 end
 
--- file types MapConv.parse reads, for file pickers and checks
+-- types MapConv.parse reads
 MapConv.EXTENSIONS = { "vmf", "bsp" }
 
 ---Summary lines for the console

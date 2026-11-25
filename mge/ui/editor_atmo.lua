@@ -1,17 +1,8 @@
--- The Atmo list's own row on its Advanced tab (the objects' Advanced panel, ui/editor_advanced.lua: Friction,
--- Bounce, Hardness and Flags first; row 4 here, where the objects have Model and Ids): how a prop (Static off) meets
--- things in Atmo Play, `prop_collide <player> <dynamic> <atmo>` (the game's atmo skips the line):
---   Collision: Player / Dynamic: it becomes real (a pool object carries it) near players / near real dynamic objects
---              (a real one collides with everything real); both off: never real, needs no pool object.
---              Atmo: flying drawn, it hits the other props (else passes through them)
--- and how a prop moves, `prop_motion <start>` (no line: the default):
---   Motion:    Active: it moves from the fight's first frame (falls, tumbles and settles under gravity, flies its
---              thrust) before anything comes near; off: it sits still until something reaches it (a player or
---              dynamic object takes it, a flying prop hits it). Default: active with a thrust, else waiting.
---              The player's Far props never starts a prop; Pause stops moving ones while they're far from everyone
--- Other atmo lines (no_depth, min_level, count, rotate, parent...) aren't edited here: kept as they are.
--- Playable (the whole mod) is on the World tab (ui/editor_misc.lua).
--- Atmo objects aren't in the .tbm: changes here are an undo step, no reload.
+-- The Atmo list's rows on its Advanced tab (where objects have Model and Ids): how props behave in
+-- Atmo Play. Collision (`prop_collide <player> <dynamic> <atmo>`): Player / Dynamic make a prop real near
+-- those (both off: never real, no pool object); Atmo: flying props hit each other. Motion
+-- (`prop_motion`): Active moves from the first frame, off waits to be reached; default: active with
+-- thrust. Undo steps without reloads
 local Rows = MGE.EditorRows
 local ModData = MGE.ModData
 local History = MGE.History
@@ -20,8 +11,8 @@ local sharedChoice = Rows.sharedChoice
 local Colliders = MGE.AtmoPlay.Colliders
 local Flight = MGE.AtmoPlay.Flight
 
----Turns one Collision toggle (1 player, 2 dynamic, 3 atmo) on or off on the selected atmo objects: one
----prop_collide line (none when all are on; the older prop_hits / prop_real lines go), one undo step
+---Sets one Collision toggle (1 player, 2 dynamic, 3 atmo) on the selected atmo objects, one undo step.
+---No line when all are on; legacy prop_hits / prop_real lines go
 ---@param which integer
 ---@param on boolean
 local function setCollision(which, on)
@@ -43,7 +34,7 @@ local function setCollision(which, on)
     Rows.afterAtmoEdit()
 end
 
----Whether an atmo object's thrust pushes (Flight.parseThrust: a zero force or step is none)
+---Whether an atmo object's thrust pushes (zero force or step: no)
 local function hasThrust(obj)
     return Flight.parseThrust(obj.props.thrust) ~= nil
 end
@@ -53,8 +44,7 @@ local function startsActive(obj)
     return Colliders.startsActive(obj.props, hasThrust(obj))
 end
 
----Turns Motion's Active on or off on the selected atmo objects: one prop_motion line (none for the default), one
----undo step
+---Sets Motion's Active on the selected atmo objects (no line for the default), one undo step
 ---@param on boolean
 local function setActive(on)
     local changed = false
@@ -71,13 +61,13 @@ local function setActive(on)
     Rows.afterAtmoEdit()
 end
 
----Collision and Motion rows, rebuilt with the selection; nothing on the Objects list (Model and Ids there)
+---Collision and Motion rows (nothing on the Objects list)
 ---@param holder UIElement
----@param selected FileParserEnvObj[] the selected atmo objects (ModData.getEditSelection on the Atmo list)
+---@param selected FileParserEnvObj[] the selected atmo objects
 local function buildAtmoRows(holder, selected)
     Rows.begin()
     if not Rows.atmoShown() then return end
-    -- each toggle lit when every selected one has it on; a click sets it for all of them (on when it wasn't lit)
+    -- lit when all selected have it on; a click sets all
     local items = {}
     for which, label in ipairs({ "Player", "Dynamic", "Atmo" }) do
         local lit = sharedChoice(selected, function(obj) return (select(which, Colliders.collision(obj.props))) end)
@@ -87,7 +77,6 @@ local function buildAtmoRows(holder, selected)
     Rows.createToggleButtonRow("Collision", holder, items,
         "Props in Atmo Play. Player / Dynamic: becomes\nreal near players / dynamic objects (both off:\n" ..
         "never real). Atmo: hits other flying props.")
-    -- Motion: Active lit when every selected one starts active
     local active = sharedChoice(selected, startsActive) == true
     Rows.createToggleButtonRow("Motion", holder, {
         { label = "Active", active = active, onClick = function() setActive(not active) end },

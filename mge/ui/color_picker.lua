@@ -1,15 +1,11 @@
--- Color picker overlay, opened by the Core tab's Color name (ui/editor_core.lua): a saturation / brightness
--- square for the hue picked on the bar next to it, an alpha bar, the old and new color side by side (over a
--- checkerboard, so alpha shows) with their numbers, and Pick from world (the old way: the next object clicked
--- gives its color), Cancel, Apply. Drag in the square or on the bars. Enter applies, Esc cancels.
--- Palette: up to PALETTE_SIZE saved colors under the numbers. + saves the new color, clicking one uses it,
--- right click removes it. Kept in MGE's config file (utils/config.lua: Config.palette)
--- Colors are r g b a with 1 for 255. The picker covers 0-255: the fields go up to 500 (brighter)
+-- Color picker overlay (Core tab's Color name): saturation / brightness square, hue and alpha bars, old
+-- and new color, a palette saved in config.cfg (+ saves, click uses, right click removes) and Pick from
+-- world. Enter applies, Esc cancels. Colors are r g b a with 1 for 255 (the fields allow brighter)
 
 ---@class ColorPickerOptions
----@field color number[] r g b a to start from (the selection's first object), 1 is 255
----@field onApply fun(color: number[]) r g b a, 1 is 255; the overlay is closed first
----@field onPickWorld fun()? Pick from world's button (none without it); the overlay is closed first
+---@field color number[] r g b a to start from, 1 is 255
+---@field onApply fun(color: number[]) runs after closing
+---@field onPickWorld fun()? Pick from world (no button without it), runs after closing
 
 local ColorPicker = {}
 MGE.ColorPicker = ColorPicker
@@ -27,7 +23,7 @@ local TEXT_H = px(22)
 local BUTTON_H = px(32)
 local SWATCH_H = px(24) -- the palette's row
 local PALETTE_SIZE = 10
-local STRIPS = 48 -- quads per gradient: smooth enough, cheap to draw every frame
+local STRIPS = 48 -- quads per gradient
 
 ---@param v number
 ---@return number
@@ -63,7 +59,7 @@ local function rgbToHsv(r, g, b)
     end
     return h, max > 0 and d / max or 0, max
 end
-ColorPicker.hsvToRgb, ColorPicker.rgbToHsv = hsvToRgb, rgbToHsv -- for the tests
+ColorPicker.hsvToRgb, ColorPicker.rgbToHsv = hsvToRgb, rgbToHsv -- tests
 
 ---@param x number
 ---@param y number
@@ -84,7 +80,23 @@ local function drawChecker(x, y, w, h, cell)
     end
 end
 
----A thin outlined frame: dark outside, light inside, visible on any color
+---A gradient as STRIPS quads: color(t) sets the color for t from 0 to 1 (left to right, or top to bottom)
+---@param vertical boolean strips stacked top to bottom
+---@param color fun(t: number)
+local function drawStrips(x, y, w, h, vertical, color)
+    for i = 0, STRIPS - 1 do
+        color((i + 0.5) / STRIPS)
+        if vertical then
+            local y1, y2 = math.floor(y + h * i / STRIPS), math.floor(y + h * (i + 1) / STRIPS)
+            draw_quad(x, y1, w, y2 - y1)
+        else
+            local x1, x2 = math.floor(x + w * i / STRIPS), math.floor(x + w * (i + 1) / STRIPS)
+            draw_quad(x1, y, x2 - x1, h)
+        end
+    end
+end
+
+---A frame visible on any color: dark outside, light inside
 local function drawMarker(x, y, w, h)
     set_color(0, 0, 0, 0.9)
     draw_quad(x - 2, y - 2, w + 4, 2); draw_quad(x - 2, y + h, w + 4, 2)
@@ -94,7 +106,7 @@ local function drawMarker(x, y, w, h)
     draw_quad(x, y, 1, h); draw_quad(x + w - 1, y, 1, h)
 end
 
----Readable text over a color drawn on the checkerboard (its gray shows through the alpha)
+---Readable text color over c on the checkerboard
 ---@param c number[] r g b a
 ---@return number[]
 local function textColor(c)
@@ -102,7 +114,7 @@ local function textColor(c)
     return light > 0.55 and { 0, 0, 0, 1 } or { 1, 1, 1, 1 }
 end
 
----Makes an element follow the mouse while pressed: onPoint(fx, fy) with the position as 0-1 of its size
+---Calls onPoint(fx, fy) (0-1 of the element's size) while the mouse is pressed on it
 ---@param element UIElement
 ---@param onPoint fun(fx: number, fy: number)
 local function addDrag(element, onPoint)
@@ -115,7 +127,7 @@ local function addDrag(element, onPoint)
 end
 
 ---@param c number[] r g b a, 1 is 255
----@return string "r g b a" 0-255, the same text for colors on the same 0-255 steps
+---@return string "r g b a" 0-255
 local function colorKey(c) return MGE.Config.colorText(c) end
 
 ---Adds a color at the end
@@ -150,7 +162,7 @@ function ColorPicker.open(options)
     end
 
     local overlay = TBMenu:spawnWindowOverlay()
-    MGE.colorOverlay = overlay -- Esc closes it, MGE.quit too (main.lua: OVERLAY_KEYS)
+    MGE.colorOverlay = overlay
     local defaultKillAction = overlay.killAction
     overlay.killAction = function()
         if defaultKillAction then defaultKillAction() end
@@ -164,7 +176,7 @@ function ColorPicker.open(options)
         close()
         options.onApply(color)
     end
-    ColorPicker.confirm = apply -- Enter (main.lua's key hook)
+    ColorPicker.confirm = apply -- Enter
 
     local w = math.min(BOX_W, WIN_W - 20)
     local innerW = w - PAD * 2
@@ -173,7 +185,7 @@ function ColorPicker.open(options)
     local box = overlay:addChild({
         pos = { (WIN_W - w) / 2, (WIN_H - boxH) / 2 },
         size = { w, boxH },
-        bgColor = Widgets.CONTENT_BG, -- like MGE's lists and editor
+        bgColor = Widgets.CONTENT_BG,
         shapeType = ROUNDED,
         rounded = 5,
         interactive = true,
@@ -181,22 +193,13 @@ function ColorPicker.open(options)
     local title = box:addChild({ pos = { PAD, 0 }, size = { innerW, TITLE_H } })
     title:addAdaptedText(true, "Color", nil, nil, Widgets.FONT, nil, Widgets.TITLE_SCALE)
 
-    -- saturation left to right, brightness bottom to top: white -> hue strips, then black with rising alpha
+    -- saturation left to right, brightness bottom to top
     local square = box:addChild({ pos = { PAD, TITLE_H }, size = { squareSize, squareSize }, interactive = true })
     square:addCustomDisplay(true, function()
         local x, y, sw, sh = square.pos.x, square.pos.y, square.size.w, square.size.h
         local hr, hg, hb = hsvToRgb(h, 1, 1)
-        for i = 0, STRIPS - 1 do
-            local t = (i + 0.5) / STRIPS
-            local x1, x2 = math.floor(x + sw * i / STRIPS), math.floor(x + sw * (i + 1) / STRIPS)
-            set_color(1 + (hr - 1) * t, 1 + (hg - 1) * t, 1 + (hb - 1) * t, 1)
-            draw_quad(x1, y, x2 - x1, sh)
-        end
-        for i = 0, STRIPS - 1 do
-            local y1, y2 = math.floor(y + sh * i / STRIPS), math.floor(y + sh * (i + 1) / STRIPS)
-            set_color(0, 0, 0, (i + 0.5) / STRIPS) -- value = 1 at the top, 0 at the bottom
-            draw_quad(x, y1, sw, y2 - y1)
-        end
+        drawStrips(x, y, sw, sh, false, function(t) set_color(1 + (hr - 1) * t, 1 + (hg - 1) * t, 1 + (hb - 1) * t, 1) end)
+        drawStrips(x, y, sw, sh, true, function(t) set_color(0, 0, 0, t) end) -- value 1 at the top
         local m = px(8)
         drawMarker(x + s * sw - m / 2, y + (1 - v) * sh - m / 2, m, m)
     end)
@@ -206,15 +209,13 @@ function ColorPicker.open(options)
         interactive = true })
     hueBar:addCustomDisplay(true, function()
         local x, y, bw, bh = hueBar.pos.x, hueBar.pos.y, hueBar.size.w, hueBar.size.h
-        for i = 0, STRIPS - 1 do
-            local y1, y2 = math.floor(y + bh * i / STRIPS), math.floor(y + bh * (i + 1) / STRIPS)
-            local r, g, b = hsvToRgb((i + 0.5) / STRIPS, 1, 1)
+        drawStrips(x, y, bw, bh, true, function(t)
+            local r, g, b = hsvToRgb(t, 1, 1)
             set_color(r, g, b, 1)
-            draw_quad(x, y1, bw, y2 - y1)
-        end
+        end)
         drawMarker(x, y + h * bh - 2, bw, 4)
     end)
-    addDrag(hueBar, function(_, fy) h = math.min(fy, 0.9999) end) -- 1 would wrap back to red at the top
+    addDrag(hueBar, function(_, fy) h = math.min(fy, 0.9999) end) -- 1 would wrap to red
 
     local alphaBar = box:addChild({ pos = { PAD + squareSize + BAR_GAP * 2 + BAR_W, TITLE_H },
         size = { BAR_W, squareSize }, interactive = true })
@@ -222,16 +223,12 @@ function ColorPicker.open(options)
         local x, y, bw, bh = alphaBar.pos.x, alphaBar.pos.y, alphaBar.size.w, alphaBar.size.h
         drawChecker(x, y, bw, bh, math.floor(bw / 2))
         local r, g, b = hsvToRgb(h, s, v)
-        for i = 0, STRIPS - 1 do
-            local y1, y2 = math.floor(y + bh * i / STRIPS), math.floor(y + bh * (i + 1) / STRIPS)
-            set_color(r, g, b, 1 - (i + 0.5) / STRIPS) -- opaque at the top
-            draw_quad(x, y1, bw, y2 - y1)
-        end
+        drawStrips(x, y, bw, bh, true, function(t) set_color(r, g, b, 1 - t) end) -- opaque at the top
         drawMarker(x, y + (1 - alpha) * bh - 2, bw, 4)
     end)
     addDrag(alphaBar, function(_, fy) alpha = 1 - fy end)
 
-    -- old | new, over a checkerboard so their alpha shows; clicking Old goes back to it
+    -- old | new over a checkerboard; clicking Old goes back to it
     local previewY = TITLE_H + squareSize + PAD
     local preview = box:addChild({ pos = { PAD, previewY }, size = { innerW, PREVIEW_H }, interactive = true })
     preview:addCustomDisplay(true, function()
@@ -243,7 +240,7 @@ function ColorPicker.open(options)
         local c = current()
         set_color(c[1], c[2], c[3], c[4])
         draw_quad(x + half, y, pw - half, ph)
-        -- x offsets are { from the left, from the right }; black text on light colors, white on dark
+        -- x offsets are { from the left, from the right }
         local pad = px(6)
         preview:uiText("Old", { pad, pw - half + pad }, nil, Widgets.FONT, LEFTMID, Widgets.TEXT_SCALE_SMALL, nil, 0,
             textColor(old))
@@ -266,7 +263,7 @@ function ColorPicker.open(options)
             n[1], n[2], n[3]), nil, nil, Widgets.FONT, CENTERMID, Widgets.TEXT_SCALE_SMALL)
     end)
 
-    -- the palette: PALETTE_SIZE slots and +, filling the row (Widgets.GAP between, like the buttons)
+    -- palette slots and +
     local colors = MGE.Config.palette
     local gap = Widgets.GAP
     local slotW = (innerW - SWATCH_H - gap * PALETTE_SIZE) / PALETTE_SIZE
@@ -310,7 +307,7 @@ function ColorPicker.open(options)
     Widgets.popupBelow(plus, "Save the new color to the palette.\nOn a color: click uses it, right click removes it.")
 
     local buttons = box:addChild({ pos = { PAD, boxH - PAD - BUTTON_H }, size = { innerW, BUTTON_H } })
-    -- Cancel on the left, like the other rows' backing-out buttons (Reset on Generate, Off on Thrust)
+    -- Cancel on the left, like other backing-out buttons
     local list = { { label = TB_MENU_LOCALIZED.BUTTONCANCEL, onClick = close } }
     if options.onPickWorld then
         list[#list + 1] = { label = "Pick from world", onClick = function()

@@ -1,9 +1,8 @@
 -- Drawn flight (docs/atmo-play-plan.md, section 7): a small rigid-body step for props no pool object carries.
--- Pure Lua, no engine calls. Steps as the game does (measured): dt 0.006, v += a dt then pos += v dt; a thrust is a
--- one-step force on its push frames. Boxes touch by their corners (box-box by separating axes), spheres by their
--- center, pills by their two end spheres; contacts are solved with impulses (normal, bounce, Coulomb friction capped
--- by the game's limit). Props meet the ground (z = 0), the static atmo and, with `collide`, each other.
--- All flights step together in atmo order: a fight, its replay and a rebuild give the same numbers.
+-- Pure Lua, stepped like the game (dt 0.006, v += a dt then pos += v dt; thrust is a one-step force).
+-- Boxes touch by corners (separating axes), spheres by center, pills by end spheres; impulses with bounce and
+-- capped Coulomb friction, against the ground, the static atmo and (collide) each other. Deterministic:
+-- all flights step together in atmo order
 
 local NS = ATMOPLAY_LOADING
 

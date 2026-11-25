@@ -83,4 +83,35 @@ function Mat3.toEulerXYZ(m)
     return atan2(m[3][2], m[2][2]), y, 0
 end
 
+---Rotation by t radians around the unit vector u (Rodrigues)
+---@param u number[]
+---@param t number
+---@return number[][]
+function Mat3.rotationAbout(u, t)
+    local c, s = math.cos(t), math.sin(t)
+    local k = 1 - c
+    local x, y, z = u[1], u[2], u[3]
+    return {
+        { c + x * x * k, x * y * k - z * s, x * z * k + y * s },
+        { y * x * k + z * s, c + y * y * k, y * z * k - x * s },
+        { z * x * k - y * s, z * y * k + x * s, c + z * z * k },
+    }
+end
+
+-- 3-vector helpers (number[3], new tables)
+local V = {}
+function V.sub(a, b) return { a[1] - b[1], a[2] - b[2], a[3] - b[3] } end
+function V.add(a, b) return { a[1] + b[1], a[2] + b[2], a[3] + b[3] } end
+function V.scale(a, s) return { a[1] * s, a[2] * s, a[3] * s } end
+function V.dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+function V.cross(a, b) return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] } end
+function V.length(a) return math.sqrt(V.dot(a, a)) end
+---@return number[]? nil for a (near) zero vector
+function V.normalize(a)
+    local l = V.length(a)
+    if l < 1e-12 then return nil end
+    return { a[1] / l, a[2] / l, a[3] / l } -- divided: the map converter's baselines are bit-exact
+end
+Mat3.vec = V
+
 MGE.Mat3 = Mat3

@@ -1,42 +1,12 @@
--- Settings overlay, opened by the toolbar's settings button (ui/main.lua):
---   Camera follow: the camera looks at the selection when selecting and moving (MGE.Camera.followMoves)
---   Max draws:      at most this many atmo shapes drawn a frame, the nearest (AtmoLayer.maxDraws)
---   Snapping:       the steps (MGE.Config) a wheel turn over a number field adds and a gizmo drag snaps
---                   to while Ctrl is held: Step, Shift step with Shift, Rotate step for Rot fields and the
---                   rings. A typed step applies when you leave the field or the overlay closes, an
---                   invalid one goes back to the current step
---   Dynamic atmo:   heading over the props' rows
---   Detail:         how drawn props fly in a playable mod (Playable.flightLevel): Low, Medium, High
---   Ghosts:         the flying props' move predictions while a turn waits (Playable.ghosts): On, Off
---   Distant:        flying props far from every player move or pause (Playable.pauseFar): Move, Pause
---   Shortcuts:      heading with a "?", hovering it lists the keyboard and mouse shortcuts
--- Every row explains itself on the "?" at its end, like the editor rows
---   UI size:        MGE's overall size (Widgets.UI_SCALE), restarts MGE to apply it
--- Saved in MGE's config file when the overlay closes (utils/config.lua), the UI size when it's picked.
--- Clicking outside the panel, Close or Esc closes it, MGE.quit closes it too (MGE.settingsOverlay).
+-- Settings overlay (toolbar's settings button). Every row explains itself on its "?". Saved to config.cfg
+-- when the overlay closes, the UI size when it's picked. A click outside, Close or Esc closes it
 if MGE.settingsOverlay and not MGE.settingsOverlay.destroyed then return end
 
 local Widgets = MGE.Widgets
 local Rows = MGE.EditorRows
 local Camera = MGE.Camera
 
----@class MgeSetting
----@field label string
----@field get fun(): boolean
----@field set fun(on: boolean)
-
----@type MgeSetting[]
-local SETTINGS = {
-    {
-        label = "Camera follow",
-        -- the camera looks at the selection, or the picked player
-        get = function() return Camera.followMoves end,
-        set = function(on) Camera.followMoves = on end,
-    },
-}
-
----@class MgeNumberSetting a typed number: applied on Enter or when the overlay closes, an invalid one
----goes back to the current value
+---@class MgeNumberSetting a typed number: applied on Enter, leaving or closing; an invalid one reverts
 ---@field label string
 ---@field get fun(): number
 ---@field set fun(value: number)
@@ -45,8 +15,7 @@ local SETTINGS = {
 ---@field max number largest value accepted
 ---@field whole boolean? rounded down to a whole number
 
--- snapping (MGE.Config): the mouse wheel over a number field (ui/editor_rows.lua) and the gizmo's Ctrl snap
--- (utils/gizmo.lua) use the same steps
+-- snap steps (MGE.Config), shared by the wheel over number fields and the gizmo's Ctrl snap
 local Config = MGE.Config
 ---@param label string
 ---@param key "wheelStep"|"wheelFineStep"|"rotateStep" field on Config
@@ -64,7 +33,6 @@ local SNAP_STEPS = {
 local SNAP_INFO = "Wheel over a number field, or Ctrl while\ndragging the gizmo. Hold Shift for the\n" ..
     "Shift step (rotation: 1 degree)."
 
--- shortcut list, shown by the "?" next to the Shortcuts heading (the toolbar used to have it)
 local SHORTCUTS = table.concat({
     "F1: show / hide window",
     "Esc: close the open prompt / popup / settings",
@@ -82,70 +50,63 @@ local SHORTCUTS = table.concat({
     "Shift + drag: box select what shows, Ctrl + Shift + drag: everything inside",
 }, "\n")
 
-local px = Widgets.px -- MGE's overall size (Widgets.UI_SCALE)
+local px = Widgets.px
 local PANEL_W = px(340)
 local PAD = px(12)
 local TITLE_H = px(44)
 local ROW_H = Widgets.ROW_H
 local ROW_GAP = px(4)
-local SETTING_H = ROW_H + ROW_GAP -- a row, its explanation is its "?" (like the editor rows)
+local SETTING_H = ROW_H + ROW_GAP
 local SECTION_H = px(26) -- section heading
-local SNAP_H = SECTION_H + #SNAP_STEPS * SETTING_H
-local DRAWS_H = SETTING_H -- Max draws
-local FLIGHT_H = SECTION_H + SETTING_H -- Dynamic atmo heading, Detail
-local GHOSTS_H = SETTING_H -- Ghosts
-local FAR_H = SETTING_H -- Distant
+local CHOICE_ROWS = 6 -- UI size, Camera follow, Max draws, Detail, Ghosts, Distant
 local SHORTCUTS_H = SECTION_H + px(4)
 local CLOSE_H = Widgets.ROW_H
 local LABEL_W = px(150)
-local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + DRAWS_H + FLIGHT_H + GHOSTS_H + FAR_H + SHORTCUTS_H + CLOSE_H +
-    PAD * 2 -- + UI size
+-- headings: Snapping, Dynamic atmo
+local panelH = TITLE_H + CHOICE_ROWS * SETTING_H + 2 * SECTION_H + #SNAP_STEPS * SETTING_H + SHORTCUTS_H + CLOSE_H +
+    PAD * 2
 
-local overlay = TBMenu:spawnWindowOverlay(true) -- true: a click on the dark background closes it
+local overlay = TBMenu:spawnWindowOverlay(true) -- true: a click on the background closes it
 MGE.settingsOverlay = overlay
 
 ---@type { step: MgeNumberSetting, input: UIElement }[] every number field
 local numberInputs = {}
 
----Value as the field shows it, 0.1 not 0.10000000000000001
 ---@param value number
----@return string
+---@return string text like "0.1" (not 0.10000000000000001)
 local function formatStep(value)
     return string.format("%g", value)
 end
 
----Applies a typed value, or puts the current one back in the field when the text isn't a valid one
+---Applies a typed value, or puts the current one back when it isn't valid
 ---@param entry { step: MgeNumberSetting, input: UIElement }
 local function applySnap(entry)
     local step, input = entry.step, entry.input
-    -- not skipped once destroyed: UIElement:kill destroys the fields before the overlay's killAction
-    -- (which applies them) runs, their text is still there
+    -- not skipped once destroyed: kill destroys fields before the killAction that applies them
     if not input.textfieldstr then return end
     local value = tonumber(input.textfieldstr[1])
     if value and step.whole then value = math.floor(value) end
     local aboveMin = value and (step.minInclusive and value >= step.min or value > step.min)
     if aboveMin and value <= step.max then step.set(value) end
-    local text = formatStep(step.get())
-    input.textfieldstr[1] = text
-    input.textfieldindex = #text
+    Rows.setText(input, formatStep(step.get()))
 end
 
 local defaultKillAction = overlay.killAction
 overlay.killAction = function()
-    for _, entry in ipairs(numberInputs) do applySnap(entry) end -- typed but not entered still counts
-    if MGE and MGE.Config then MGE.Config.save() end -- kept for the next game session
+    for _, entry in ipairs(numberInputs) do applySnap(entry) end -- typed but not entered counts too
+    if MGE and MGE.Config then MGE.Config.save() end
     if defaultKillAction then defaultKillAction() end
-    Widgets.releaseKeyboard(overlay) -- the step fields would otherwise stay in toriui's keyboard list
+    Widgets.releaseKeyboard(overlay)
     if MGE then MGE.settingsOverlay = nil end
 end
 
 local panel = overlay:addChild({
     pos = { (WIN_W - PANEL_W) / 2, (WIN_H - panelH) / 2 },
     size = { PANEL_W, panelH },
-    bgColor = Widgets.CONTENT_BG, -- like MGE's lists and editor
+    bgColor = Widgets.CONTENT_BG,
     shapeType = ROUNDED,
     rounded = 5,
-    interactive = true, -- clicks on the panel don't reach the background's close handler
+    interactive = true, -- clicks don't reach the background's close handler
 })
 
 local title = panel:addChild({
@@ -154,15 +115,13 @@ local title = panel:addChild({
 })
 title:addAdaptedText(true, "Settings", nil, nil, Widgets.FONT, nil, Widgets.TITLE_SCALE)
 
--- the "?" at a row's end, the same size and place as the editor rows' (ui/editor_rows.lua)
 local HELP_SIZE = ROW_H - px(6)
-local HELP_GAP = px(6) -- between the "?" and what's next to it
+local HELP_GAP = px(6)
 
----Row inside the panel: label on the left with its "?" at the end of the label column (rows with and
----without one line up), returns the space right of it for buttons or a field
+---A row: label with its "?" at the label column's end; returns the space right of it
 ---@param y number
 ---@param label string
----@param help string? shown when hovering the "?", none without
+---@param help string?
 ---@return UIElement content
 local function addRow(y, label, help)
     local row = panel:addChild({
@@ -184,11 +143,8 @@ local function addRow(y, label, help)
     })
 end
 
----Centered heading with a "?" right after its text (hovering it shows help). Heading and icon are
----centered together: the text is measured the way the game's help popups measure theirs. The heading
----area is one icon (and gap) narrower than the row, so its centered text sits half that left of the
----panel's center and the icon fits after it. Not moved left with moveTo: a negative x counts from the
----parent's right edge in toriui
+---Centered heading with a "?" right after its text: the heading area is one icon narrower, so text and
+---icon center together (a negative x would count from the right edge)
 ---@param y number
 ---@param text string
 ---@param help string
@@ -204,66 +160,69 @@ local function addHelpHeading(y, text, help)
         HELP_SIZE, help)
 end
 
----@type { setting: MgeSetting, on: UIElement, off: UIElement }[]
-local toggles = {}
+local y = TITLE_H
 
----On / Off buttons show each setting's current value
-local function refresh()
-    for _, t in ipairs(toggles) do
-        local on = t.setting.get()
-        for btn, value in pairs({ [t.on] = true, [t.off] = false }) do
-            if not btn.destroyed then
-                btn.bgColor = on == value and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
+---A row of choice buttons, the current value lit
+---@param label string
+---@param help string?
+---@param choices { label: string, value: any }[]
+---@param get fun(): any
+---@param set fun(value: any)
+local function addChoiceRow(label, help, choices, get, set)
+    local content = addRow(y, label, help)
+    local buttons
+    local function show()
+        local current = get()
+        for i, choice in ipairs(choices) do
+            local btn = buttons[i]
+            if btn and not btn.destroyed then
+                btn.bgColor = current == choice.value and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
             end
         end
     end
-end
-
-local y = TITLE_H
-
--- UI size: MGE's overall size (Widgets.UI_SCALE). Every size is worked out when the window is built, so a
--- new one restarts MGE: the mod stays as it is (the working copy and the atmo are kept over a restart,
--- like any /ls of MGE), the undo history starts over
-do
-    local content = addRow(y, "UI size") -- picking one restarts MGE: the mod stays, the undo history starts over
     local items = {}
-    for i, scale in ipairs(Widgets.UI_SCALES) do
-        items[i] = { label = math.floor(scale * 100 + 0.5) .. "%", onClick = function()
-            if scale == Widgets.UI_SCALE then return end
-            MGE_UI_SCALE = scale
-            MGE.Config.save() -- before the restart: the next game session starts at this size too
-            local entry = MGE.scriptPath:gsub("mge/$", "") .. "mge.lua" -- the script /ls loads
-            MGE.say("UI size " .. items[i].label .. ", restarting MGE")
-            pcall(MGE.quit)
-            -- started again on the next frame, out of this click (the window it's in is gone)
-            add_hook("draw2d", "mge_restart", function()
-                remove_hooks("mge_restart")
-                dofile(entry)
-            end)
+    for i, choice in ipairs(choices) do
+        items[i] = { label = choice.label, onClick = function()
+            set(choice.value)
+            show()
         end }
     end
-    local buttons = Widgets.buttonRow(content, 0, ROW_H, items, Widgets.GAP)
+    buttons = Widgets.buttonRow(content, 0, ROW_H, items, Widgets.GAP)
+    show()
+    y = y + SETTING_H
+end
+
+-- UI size: every size is computed when the window is built, so a new one restarts MGE (the mod and
+-- atmo survive a restart, the undo history doesn't)
+do
+    local choices = {}
     for i, scale in ipairs(Widgets.UI_SCALES) do
-        if scale == Widgets.UI_SCALE then buttons[i].bgColor = Widgets.ACTIVE_COLOR end
+        choices[i] = { label = math.floor(scale * 100 + 0.5) .. "%", value = scale }
     end
-    y = y + SETTING_H
+    addChoiceRow("UI size", nil, choices, function() return Widgets.UI_SCALE end, function(scale)
+        if scale == Widgets.UI_SCALE then return end
+        MGE_UI_SCALE = scale
+        MGE.Config.save() -- before the restart
+        local entry = MGE.scriptPath:gsub("mge/$", "") .. "mge.lua"
+        MGE.say("UI size " .. math.floor(scale * 100 + 0.5) .. "%, restarting MGE")
+        pcall(MGE.quit)
+        -- restarted next frame, outside this click (its window is gone)
+        add_hook("draw2d", "mge_restart", function()
+            remove_hooks("mge_restart")
+            dofile(entry)
+        end)
+    end)
 end
 
-for _, setting in ipairs(SETTINGS) do
-    local content = addRow(y, setting.label)
-    local created = Widgets.buttonRow(content, 0, ROW_H, {
-        { label = "On", onClick = function() setting.set(true) refresh() end },
-        { label = "Off", onClick = function() setting.set(false) refresh() end },
-    }, Widgets.GAP)
-    table.insert(toggles, { setting = setting, on = created[1], off = created[2] })
-    y = y + SETTING_H
-end
+local ON_OFF = { { label = "On", value = true }, { label = "Off", value = false } }
 
----A heading and one number field per setting, filled with the current values. With infoText the heading
----has a "?" explaining the section
----@param name string the heading
+addChoiceRow("Camera follow", nil, ON_OFF, function() return Camera.followMoves end,
+    function(on) Camera.followMoves = on end)
+
+---A heading and one number field per setting
+---@param name string
 ---@param fields MgeNumberSetting[]
----@param infoText string?
+---@param infoText string? the heading's "?"
 local function addNumberSection(name, fields, infoText)
     if infoText then
         addHelpHeading(y, name, infoText)
@@ -278,117 +237,43 @@ local function addNumberSection(name, fields, infoText)
     for _, step in ipairs(fields) do
         local content = addRow(y, step.label)
         local entry = { step = step }
-        -- keep: the wheel and leaving the field apply it, the value stays in the field
         entry.input = Rows.createInput(content, function() applySnap(entry) end, formatStep(step.get()),
             { mode = "keep", whole = step.whole })
-        Widgets.closeOnEscape(entry.input) -- Esc while typing closes too (applies it, like Close)
+        Widgets.closeOnEscape(entry.input) -- Esc while typing closes too
         table.insert(numberInputs, entry)
-        applySnap(entry) -- fills the field with the current value
+        applySnap(entry) -- fills in the current value
         y = y + SETTING_H
     end
 end
 
--- Max draws (utils/atmo_layer.lua): the nearest this many atmo shapes a frame
 do
     local AtmoLayer = MGE.AtmoLayer
-    local content = addRow(y, "Max draws", "Atmo shapes drawn a frame, nearest first.\nLower: steadier fps on big maps.")
-    local buttons, items = nil, {}
-    local function show()
-        for i, n in ipairs(AtmoLayer.DRAW_CHOICES) do
-            local btn = buttons[i]
-            if btn and not btn.destroyed then
-                btn.bgColor = AtmoLayer.maxDraws == n and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
-            end
-        end
-    end
-    for i, n in ipairs(AtmoLayer.DRAW_CHOICES) do
-        items[i] = { label = tostring(n), onClick = function() AtmoLayer.maxDraws = n show() end }
-    end
-    buttons = Widgets.buttonRow(content, 0, ROW_H, items, Widgets.GAP)
-    show()
-    y = y + DRAWS_H
+    local choices = {}
+    for i, n in ipairs(AtmoLayer.DRAW_CHOICES) do choices[i] = { label = tostring(n), value = n } end
+    addChoiceRow("Max draws", "Atmo shapes drawn a frame, nearest first.\nLower: steadier fps on big maps.", choices,
+        function() return AtmoLayer.maxDraws end, function(n) AtmoLayer.maxDraws = n end)
 end
 
-addNumberSection("Snapping", SNAP_STEPS, SNAP_INFO) -- three steps, one explanation: on the heading
--- Dynamic atmo: the props' rows. Detail (utils/playable.lua, Atmo Play's flight.lua): how props fly while no
--- object carries them, by how much work this computer can take (Atmo Play's window: Detail)
+addNumberSection("Snapping", SNAP_STEPS, SNAP_INFO)
 addHelpHeading(y, "Dynamic atmo", "Props (atmo objects with Static off)\nin a playable mod.")
 y = y + SECTION_H
 do
-    local content = addRow(y, "Detail", "How props fly:\nLow: as spheres, least work.\nMedium: real shapes.\n" ..
-        "High: real shapes that hit each other, most work.")
-    local Dynamics = MGE.AtmoPlay.Dynamics
-    local labels = { simple = "Low", shapes = "Medium", full = "High" }
-    local buttons
-    local function show()
-        for i, level in ipairs(Dynamics.LEVELS) do
-            local btn = buttons[i]
-            if btn and not btn.destroyed then
-                btn.bgColor = MGE.Playable.flightLevel == level and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
-            end
-        end
-    end
-    local items = {}
-    for i, level in ipairs(Dynamics.LEVELS) do
-        items[i] = { label = labels[level] or level, onClick = function()
-            MGE.Playable.setFlightLevel(level)
-            show()
-        end }
-    end
-    buttons = Widgets.buttonRow(content, 0, ROW_H, items, Widgets.GAP)
-    show()
-    y = y + SETTING_H
+    local LABELS = { simple = "Low", shapes = "Medium", full = "High" }
+    local choices = {}
+    for i, level in ipairs(MGE.AtmoPlay.Dynamics.LEVELS) do choices[i] = { label = LABELS[level] or level, value = level } end
+    addChoiceRow("Detail", "How props fly:\nLow: as spheres, least work.\nMedium: real shapes.\n" ..
+        "High: real shapes that hit each other, most work.", choices,
+        function() return MGE.Playable.flightLevel end, MGE.Playable.setFlightLevel)
 end
+-- ghosts run the flights ahead: as much work as playing them
+addChoiceRow("Ghosts", "Flying props' ghosts while a turn waits.\nOff saves work with many flying props.", ON_OFF,
+    function() return MGE.Playable.ghosts end, MGE.Playable.setGhosts)
+addChoiceRow("Distant", "Moving props far from every player:\nMove: keep moving. Pause: wait until\n" ..
+    "someone comes near (less work).", { { label = "Move", value = false }, { label = "Pause", value = true } },
+    function() return MGE.Playable.pauseFar end, MGE.Playable.setPauseFar)
 
--- Ghosts (utils/playable.lua, Atmo Play's Dynamics.drawGhosts): the flying props' move predictions while a turn
--- waits. They run the props' flights ahead, as much work as playing them: off for many thrust props on a slow computer
-do
-    local content = addRow(y, "Ghosts", "Flying props' ghosts while a turn waits.\n" ..
-        "Off saves work with many flying props.")
-    local buttons
-    local function show()
-        for i, on in ipairs({ true, false }) do
-            local btn = buttons[i]
-            if btn and not btn.destroyed then
-                btn.bgColor = MGE.Playable.ghosts == on and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
-            end
-        end
-    end
-    buttons = Widgets.buttonRow(content, 0, ROW_H, {
-        { label = "On", onClick = function() MGE.Playable.setGhosts(true) show() end },
-        { label = "Off", onClick = function() MGE.Playable.setGhosts(false) show() end },
-    }, Widgets.GAP)
-    show()
-    y = y + GHOSTS_H
-end
-
--- Distant (utils/playable.lua, Atmo Play's Dynamics.FLY_RANGE): moving props far from every player and dynamic
--- object pause where they are until someone comes near, less work. Neither choice starts a prop: Active off waits
-do
-    local content = addRow(y, "Distant", "Moving props far from every player:\n" ..
-        "Move: keep moving. Pause: wait until\nsomeone comes near (less work).")
-    local buttons
-    local function show()
-        for i, on in ipairs({ false, true }) do
-            local btn = buttons[i]
-            if btn and not btn.destroyed then
-                btn.bgColor = MGE.Playable.pauseFar == on and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
-            end
-        end
-    end
-    buttons = Widgets.buttonRow(content, 0, ROW_H, {
-        { label = "Move", onClick = function() MGE.Playable.setPauseFar(false) show() end },
-        { label = "Pause", onClick = function() MGE.Playable.setPauseFar(true) show() end },
-    }, Widgets.GAP)
-    show()
-    y = y + FAR_H
-end
-
--- Shortcuts heading with the "?" right after the text, hovering it lists them
 addHelpHeading(y, "Shortcuts", SHORTCUTS)
 y = y + SECTION_H
 
 Widgets.button(panel, { x = PAD, y = panelH - PAD - CLOSE_H, w = PANEL_W - PAD * 2, h = CLOSE_H }, "Close",
     function() overlay:kill() end)
-
-refresh()

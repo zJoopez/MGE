@@ -1,24 +1,10 @@
--- Gizmo in the world for the active tool (Gizmo.mode). The toolbar's Move / Rotate / Scale toggles
--- (ui/main.lua) and Alt + Q / W / E (main.lua) switch it with Gizmo.toggle:
---   none:   no tool on, clicking only selects
---   move:   arrows (one world axis) and squares (two axes) at the selection's center
---   rotate: a ring per group axis (the axes Rot shows) around the selection
---   scale:  a cube handle per group axis (the axes Scale uses) and a white one for all three
--- Keeps its size on screen (Gizmo.size of the camera distance). Drawn in draw2d on top of the world
--- like rph's, so objects never hide it (picking ignores objects too).
---
--- Built on MGE's own camera rays (WorldSelect), not on screen positions of the handles: handles are
--- picked by hitting them with the mouse ray in 3D and drags are worked out on the axis / plane / ring
--- in 3D (utils/gizmo_math.lua), so a gizmo partly off screen still works. rph's gizmo projects handles
--- to the screen and adds up mouse deltas, which breaks off screen and drifts.
---
--- Works on a GizmoTarget: the selected objects (Transforms), on the Players list the selected
--- player (utils/players.lua: Move, Rotate, Scale with the white cube only), on the Joints list the
--- selected joints' anchors (utils/joints.lua: Move only).
--- A drag only changes the live world (target.previewMove / previewRotate). Releasing applies it
--- once like the Pos / Rot / Scale rows do (target.moveBy / rotateByMatrix / scaleBy): one undo
--- step (Shift + Z takes the drag back), joints follow, editor rows refresh. Ctrl snaps to the Snapping
--- steps (MGE.Config): move and scale to wheelStep (with Shift wheelFineStep), rings to rotateStep (Shift: 1).
+-- World gizmo for the active tool (Gizmo.mode: none / move / rotate / scale), toggled from the toolbar
+-- or Alt + Q / W / E. Constant screen size, drawn in draw2d on top of the world.
+-- Handles are picked and dragged with 3D camera rays (gizmo_math.lua), so it works partly off screen
+-- and doesn't drift (unlike projecting handles and summing mouse deltas).
+-- Works on a GizmoTarget: selected objects, players (utils/players.lua) or joint anchors (Move only).
+-- Drags preview live; release applies once like the editor rows (one undo step). Ctrl snaps to the
+-- Config steps (Shift: fine steps / 1 degree)
 local GizmoMath = MGE.GizmoMath
 local WorldSelect = MGE.WorldSelect
 local ModData = MGE.ModData
@@ -30,18 +16,15 @@ local add, sub, scale, length = GizmoMath.add, GizmoMath.sub, GizmoMath.scale, G
 
 ---@class Gizmo
 local Gizmo = {
-    ---@type GizmoMode active tool, change it with Gizmo.setMode / Gizmo.toggle. Move is on at start
+    ---@type GizmoMode active tool (Gizmo.setMode / toggle)
     mode = "move",
-    ---@type fun()[] called after the tool changes: toolbar toggles (ui/main.lua), row name highlights
-    ---(ui/editor_core.lua)
+    ---@type fun()[] called after the tool changes
     modeListeners = {},
-    size = 0.10,      -- arrow length as a share of the camera distance, keeps the gizmo's size on screen
-    ---@type (fun(mode: GizmoMode): GizmoTarget?)? when set, the gizmo works on what this gives instead
-    ---of the selection (ui/map_place.lua: the region or the map being placed)
+    size = 0.10,      -- arrow length as a share of the camera distance
+    ---@type (fun(mode: GizmoMode): GizmoTarget?)? replaces the selection as target (ui/map_place.lua)
     targetOverride = nil,
-    ---@type (fun(mode: GizmoMode): GizmoTarget|false|nil)? on the Objects list, before the selection:
-    ---a target takes the gizmo, false takes it but shows none, nil leaves it to the selection
-    ---(ui/editor_generate.lua: the Generate tab's preview, Move only)
+    ---@type (fun(mode: GizmoMode): GizmoTarget|false|nil)? checked before the selection on the Objects
+    ---list: false takes the gizmo but shows none, nil leaves it to the selection (Generate preview)
     previewTarget = nil,
 }
 MGE.Gizmo = Gizmo
@@ -51,7 +34,7 @@ local MODES = { move = true, rotate = true, scale = true }
 
 local COLORS = { { 1.0, 0.25, 0.25 }, { 0.3, 0.9, 0.3 }, { 0.3, 0.5, 1.0 }, { 0.9, 0.9, 0.9 } } -- x y z, all
 local ACTIVE_COLOR = { 1.0, 0.9, 0.2 } -- hovered or dragged handle
-local OUTLINE = { 0, 0, 0, 0.55 } -- dark edge under every line, keeps it readable on any background
+local OUTLINE = { 0, 0, 0, 0.55 } -- dark edge under lines, readable on any background
 local LINE_WIDTH, ACTIVE_LINE_WIDTH, OUTLINE_EXTRA = 3, 5, 3 -- pixels
 local MIN_MARKER = 4 -- pixels, smallest tip / cube on screen
 
@@ -91,24 +74,20 @@ local drag = nil
 ---@field ringsOnly integer? only this ring of Rotate
 ---@field uniformScaleOnly boolean? Scale has only the white cube (players)
 
----The selection as a gizmo target, the Transforms the editor's rows use: objects, or on the Atmo list
----atmo objects (utils/atmo_layer.lua). Transforms works on both (an atmo object only through its lines),
----commits are one undo step. Atmo objects aren't drawn by the game: a drag shows them through
----AtmoLayer.live (their ghosts drawn where it puts them, utils/highlight.lua)
----@param objects FileParserEnvObj[] in the world, or atmo objects with a pos line
----@return GizmoTarget
--- The selection's target (its list, pivot and frame: the pivot and frame read every object's lines) is kept while the
--- selection and the data stay the same (gizmoTarget's key: one pass a frame, no tables). Built every frame, thousands
--- selected (Select all) cost ~2 ms a frame
+-- The selection's target is cached while selection and data stay the same (see gizmoTarget's key):
+-- rebuilding it every frame cost ~2 ms with thousands selected
 local cachedTarget, cachedKey = nil, nil
 
+---The selection as a gizmo target through Transforms. Atmo objects preview through AtmoLayer.live
+---@param objects FileParserEnvObj[] in the world, or atmo objects with a pos line
+---@return GizmoTarget
 local function objectTarget(objects)
     local T, AtmoLayer = MGE.Transforms, MGE.AtmoLayer
     local hasAtmo = false
     for _, obj in ipairs(objects) do
         if obj.kind == "atmo" then hasAtmo = true break end
     end
-    -- worked out once for this target; copies returned: callers may change what they get
+    -- computed once per target; returns copies (callers may change them)
     local cache = {}
     local function pivot()
         local p = cache.pivot
@@ -152,7 +131,7 @@ local function objectTarget(objects)
             AtmoLayer.live = nil
             T.moveBy(objects, offset)
         end,
-        -- the kept pivot / frame: the release doesn't work them out again over the whole selection
+        -- the kept pivot / frame: no recomputing over the whole selection on release
         rotateByMatrix = function(rotation)
             AtmoLayer.live = nil
             T.rotateByMatrix(objects, rotation, pivot())
@@ -164,26 +143,23 @@ local function objectTarget(objects)
     }
 end
 
----What the gizmo works on, nil when no gizmo is shown: the selected objects, or on the Players list
----the selected player (Move and Rotate around z only)
+---What the gizmo works on, nil when no gizmo shows
 ---@return GizmoTarget?
 local function gizmoTarget()
     local Main = MGE.Main
     if not MODES[Gizmo.mode] or not Main or not Main.window then return nil end
-    -- MGE's window hidden: no gizmo, except for an override (the map placement view hides the window)
+    -- window hidden: only an override (the placement view hides the window)
     if not Main.window.displayed and not Gizmo.targetOverride then return nil end
-    -- the gizmo draws in draw2d, on top of everything: hidden (and not grabbable) under an overlay
+    -- drawn on top of everything: none under an overlay
     if MGE.overlayOpen and MGE.overlayOpen() then return nil end
-    -- something else has the gizmo (the map placement view, ui/map_place.lua), nil: no gizmo
     if Gizmo.targetOverride then return Gizmo.targetOverride(Gizmo.mode) end
-    if Main.listTab == "misc" then return nil end -- the World list is about the whole mod, not a selection
+    if Main.listTab == "misc" then return nil end
     if Main.listTab == "joints" then
-        -- the selected joints' anchors, Move only, on both of the list's tabs
         if Gizmo.mode ~= "move" then return nil end
         return MGE.Joints.target(Main.selectedJointList())
     end
     if Main.listTab == "players" then
-        local t = MGE.Players and MGE.Players.target(Main.selectedPlayerList()) -- all selected, as a group
+        local t = MGE.Players and MGE.Players.target(Main.selectedPlayerList())
         if t and Gizmo.mode == "scale" and not t.scalable then return nil end
         return t
     end
@@ -191,14 +167,18 @@ local function gizmoTarget()
         local t = Gizmo.previewTarget(Gizmo.mode)
         if t ~= nil then return t or nil end
     end
-    -- the selected objects in the world, or on the Atmo list the selected atmo objects with a pos line (the ones drawn).
-    -- The key: the undo state (every edit commits one), the data, and the selection (count, positions hashed, first
-    -- and last); the same as last frame's: the same target
+    -- Selected objects in the world (atmo: with a pos line). Cache key: undo state (every edit commits),
+    -- data tables and a hash of the selection
     local atmo = Main.listTab == "atmo"
     local source = atmo and (ModData.parsed.atmo or {}) or ModData.parsed.env_obj
+    local function eligible(obj)
+        if not obj.selected then return false end
+        if atmo then return obj.props.pos ~= nil end
+        return get_obj_pos(obj.id - 1) ~= nil
+    end
     local count, hash, first, last = 0, 0, nil, nil
     for i, obj in ipairs(source) do
-        if obj.selected and (atmo and obj.props.pos or not atmo and get_obj_pos(obj.id - 1) ~= nil) then
+        if eligible(obj) then
             count = count + 1
             hash = (hash * 31 + i) % 2147483629
             first = first or obj
@@ -212,9 +192,7 @@ local function gizmoTarget()
     if key == cachedKey then return cachedTarget end
     local objects = {}
     for _, obj in ipairs(source) do
-        if obj.selected and (atmo and obj.props.pos or not atmo and get_obj_pos(obj.id - 1) ~= nil) then
-            objects[#objects + 1] = obj
-        end
+        if eligible(obj) then objects[#objects + 1] = obj end
     end
     cachedTarget, cachedKey = objectTarget(objects), key
     return cachedTarget
@@ -228,24 +206,17 @@ local function modeOf(handle)
     return "move"
 end
 
----Scale handle layout: group axes and where the axis cubes and the uniform cube sit (distances from
----the center). Kept from the grab while dragging, the handles then stretch by the factors
+---Scale handle layout: group axes and cube distances. Kept from the grab while dragging
 ---@param target GizmoTarget
 ---@param size number gizmo size
 ---@return { axes: number[][], tips: number[], corner: number[], size: number }
 local function scaleBase(target, size)
-    local frame = target.frame()
-    local axes = {
-        { frame[1][1], frame[2][1], frame[3][1] },
-        { frame[1][2], frame[2][2], frame[3][2] },
-        { frame[1][3], frame[2][3], frame[3][3] },
-    }
+    local axes = Mat3.transpose(target.frame())
     local corner = GizmoMath.SHAPE.uniformOffset * size
     return { axes = axes, tips = { size, size, size }, corner = { corner, corner, corner }, size = size }
 end
 
----Gizmo center (the selection's center as the file has it, moved / turned by the drag so far) and its
----handles. The size is a share of the camera distance, so the gizmo looks the same at any zoom
+---Gizmo center (pivot plus the drag so far) and handles, sized from the camera distance
 ---@param target GizmoTarget
 ---@param mode GizmoMode
 ---@return number[]? center, GizmoHandle[]? handles, number? size, number[]? viewDir
@@ -260,7 +231,7 @@ local function layout(target, mode)
     local size = dist * Gizmo.size
     local handles
     if mode == "rotate" then
-        -- rings on the group's axes, turning along while dragging
+        -- rings on the group's axes, turning with the drag
         local frame = target.frame()
         if drag and drag.rotation then frame = Mat3.mul(drag.rotation, frame) end
         handles = GizmoMath.ringHandles(center, frame, GizmoMath.SHAPE.ringRadius * size)
@@ -270,7 +241,7 @@ local function layout(target, mode)
             end
         end
     elseif mode == "scale" then
-        -- the layout from the grab, the dragged cube moved along with the cursor
+        -- the grab's layout, the dragged cube following the cursor
         local base = (drag and drag.base) or scaleBase(target, size)
         local travel = (drag and drag.travel) or 0
         local kind, index = drag and drag.handle.kind, drag and drag.handle.index
@@ -279,7 +250,7 @@ local function layout(target, mode)
             tips[k] = base.tips[k]
             if kind == "scale" and index == k then tips[k] = math.max(tips[k] + travel, 0.05 * base.size) end
             toCorner[k] = base.corner[k]
-            -- the uniform cube moves along the diagonal: travel / sqrt(3) along each axis
+            -- the uniform cube moves along the diagonal
             if kind == "uniform" then toCorner[k] = math.max(toCorner[k] + travel / math.sqrt(3), 0.05 * base.size) end
         end
         handles = GizmoMath.scaleHandles(center, base.axes, tips, toCorner, viewDir)
@@ -380,7 +351,6 @@ local function buildShape(h, size, active)
         end
         local c1, c2, c3, c4 = corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)
         addLine(shape, c1, c2); addLine(shape, c2, c3); addLine(shape, c3, c4); addLine(shape, c4, c1)
-        -- see-through fill: lines across the square
         shape.fill = {}
         for k = 1, 7 do
             local t = k / 8
@@ -420,12 +390,11 @@ local function drawShape(shape, outline)
     end
 end
 
----Works out the drag for the ray through the screen position and shows it in the world
+---Updates the drag for the ray through the screen position and previews it
 local function updateDrag(x, y)
     local o, d = WorldSelect.rayFrom(projection, x, y)
     if not d then return end
-    -- Ctrl snaps to the Snapping steps (MGE.Config): an arrow / square moves in these units, a scale handle
-    -- multiplies in them (0.5: x1, x1.5, x2...), a ring turns in degrees. Shift: the fine step, 1 degree
+    -- Ctrl snaps to the Config steps (scale factors in multiples of the step); Shift: fine step, 1 degree
     local step, turn = nil, nil ---@type number?, number?
     if get_keyboard_ctrl() ~= 0 then
         local Config = MGE.Config
@@ -437,18 +406,18 @@ local function updateDrag(x, y)
     end
     if drag.handle.kind == "ring" then
         local angle = GizmoMath.ringAngle(drag.handle, drag.grab, o, d, turn)
-        if not angle then return end -- ray unusable this frame, keep the last angle
+        if not angle then return end -- ray unusable this frame: keep the last
         drag.rotation = GizmoMath.rotationAbout(drag.handle.normal, angle)
         drag.target.previewRotate(drag.rotation)
     elseif drag.scale then
         local factors, travel = GizmoMath.scaleFactors(drag.handle, drag.grab, o, d, drag.base.size,
             step)
-        if not factors then return end -- ray parallel to the handle this frame, keep the last factors
+        if not factors then return end
         drag.scale, drag.travel = factors, travel
         drag.target.previewScale(factors, drag.baseSides)
     else
         local offset = GizmoMath.dragOffset(drag.handle, drag.center, drag.grab, o, d, step)
-        if not offset then return end -- ray parallel to the axis this frame, keep the last offset
+        if not offset then return end
         drag.offset = offset
         drag.target.previewMove(offset)
     end
@@ -459,7 +428,7 @@ function Gizmo.isDragging()
     return drag ~= nil
 end
 
----Left mouse down (from WorldSelect's hook): starts a drag when it's on a handle
+---Left mouse down (from WorldSelect's hook): starts a drag on a handle
 ---@return boolean true when a handle was grabbed, the click is used up
 function Gizmo.press(x, y)
     if drag or not projection then return false end
@@ -513,22 +482,21 @@ function Gizmo.release(x, y)
         end
         if turned then target.rotateByMatrix(done.rotation) else target.restoreLive() end
     elseif done.scale then
-        -- sizes back to the grab first: scaleBy reads them from the world
+        -- sizes back first: scaleBy reads them from the world
         target.restoreLive(done.baseSides)
         local f = done.scale
         if math.abs(f[1] - 1) > 1e-9 or math.abs(f[2] - 1) > 1e-9 or math.abs(f[3] - 1) > 1e-9 then
-            target.scaleBy(f) -- file and world, undo step, rows refresh
+            target.scaleBy(f)
         end
     elseif length(done.offset) > 1e-9 then
-        target.moveBy(done.offset) -- file and world, undo step, rows refresh
+        target.moveBy(done.offset)
     else
         target.restoreLive()
     end
     return true
 end
 
----Ends a drag without changing anything, the world goes back to the file. Not a control: used when
----world clicking is turned off or MGE quits mid drag, so the world isn't left half done
+---Ends a drag without changing anything (world back to the file): on tool change or quit
 function Gizmo.cancel()
     if not drag then return end
     local target, baseSides = drag.target, drag.baseSides
@@ -536,8 +504,7 @@ function Gizmo.cancel()
     target.restoreLive(baseSides)
 end
 
----Picks the tool. A drag in progress is cancelled. A gizmo tool turns world clicking back on, a
----gizmo can't be used without it
+---Picks the tool, cancelling a drag in progress
 ---@param mode GizmoMode
 function Gizmo.setMode(mode)
     if mode ~= "none" and not MODES[mode] then return end
@@ -547,7 +514,7 @@ function Gizmo.setMode(mode)
     for _, listener in ipairs(Gizmo.modeListeners) do listener() end
 end
 
----Turns a tool on, or off when it's the active one (back to only selecting)
+---Turns a tool on, or off when it's active
 ---@param mode GizmoMode
 function Gizmo.toggle(mode)
     Gizmo.setMode(Gizmo.mode == mode and "none" or mode)
@@ -593,17 +560,17 @@ add_hook("draw3d", HOOK_SET, function()
     end)
     if not ok then
         shapes = nil
-        if not Gizmo.errorShown then -- report once instead of every frame
+        if not Gizmo.errorShown then -- report once
             Gizmo.errorShown = true
             MGE.say("gizmo error: " .. tostring(err))
         end
     end
 end)
 
--- on top of the world: objects don't hide the gizmo
+-- draw2d: on top of the world
 add_hook("draw2d", HOOK_SET, function()
     if not shapes then return end
-    if MGE.overlayOpen and MGE.overlayOpen() then return end -- also mid drag: not over an overlay
+    if MGE.overlayOpen and MGE.overlayOpen() then return end -- also mid drag
     local ok, err = pcall(function()
         for _, shape in ipairs(shapes) do drawShape(shape, true) end
         for _, shape in ipairs(shapes) do drawShape(shape, false) end
@@ -614,7 +581,6 @@ add_hook("draw2d", HOOK_SET, function()
     end
 end)
 
--- MGE.quit removes hooks of MGE.hookname only
 table.insert(MGE.onQuit, function()
     Gizmo.cancel()
     remove_hooks(HOOK_SET)

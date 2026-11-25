@@ -1,6 +1,5 @@
--- Map converter (mapconv): reads Valve Map Format files (.vmf: Hammer's map sources, or a .bsp
--- decompiled with BSPSource) into brushes and point entities. Pure Lua, no game calls: the tests run
--- it outside the game. Plan and status: docs/map-import-plan.md
+-- Map converter: reads .vmf files (Hammer sources or decompiled .bsp) into brushes and point entities.
+-- Pure Lua (tested offline). Plan: docs/map-import-plan.md
 MGE.MapConv = MGE.MapConv or {}
 local MapConv = MGE.MapConv
 
@@ -75,8 +74,7 @@ end
 ---@field role "solid"|"clip"|"drop"? set by readers that know it (bsp.lua: contents flags)
 ---@field reason string? why a dropped brush is dropped
 ---@field sky boolean? a sky brush (bsp.lua: sky surface flags; .vmf sky brushes are found by material)
----@field nonSolid boolean? its entity isn't solid in normal play (Vmf.nonSolidEntity): dropped
----(MapConv.brushRole)
+---@field nonSolid boolean? its entity isn't solid in normal play: dropped
 
 ---@class MapEntity
 ---@field classname string
@@ -139,9 +137,8 @@ local function readSolid(node, entity)
     return brush
 end
 
----A brush entity players don't bump into in normal play (MapBrush.nonSolid): one that starts disabled
----(StartDisabled 1: CS:GO's Retakes walls, func_brush "retake.asite" on de_train) or a func_brush that's
----never solid (Solidity 1: fade and decoration brushes, de_train's A site floor piece)
+---A brush entity that isn't solid in normal play: StartDisabled 1 (Retakes walls) or a never-solid
+---func_brush (Solidity 1)
 ---@param props table<string, string>
 ---@return boolean
 function Vmf.nonSolidEntity(props)
@@ -149,8 +146,7 @@ function Vmf.nonSolidEntity(props)
     return props.classname == "func_brush" and tonumber(props.Solidity or props.solidity) == 1
 end
 
----Solids of a world or entity block. Solids hidden in the editor (hidden blocks) are still compiled
----into the map, so they count
+---Solids of a world or entity block (editor-hidden ones too: they're compiled)
 ---@param node VmfNode
 ---@param entity string
 ---@param brushes MapBrush[]

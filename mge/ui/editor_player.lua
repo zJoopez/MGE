@@ -1,16 +1,6 @@
--- Players panel (editor area on the Players list), Enter in a field applies it. Every row shows and
--- changes the selected players, like the object rows a selection (with none selected: the picked
--- player, Main.selectedPlayer, the one the list shows last):
---   Pos / Rot:  the group's center from the dojo center, and the picked player's rotation (the group
---               turns as one around its center), placeholders the current values also in mods without
---               positions. Saved as the engageplayerpos / engageplayerrot gamerules (utils/players.lua)
---   Scale:      the size compared to the default body (Players.size), a typed size scales them to it
---   Density:    the average body part density of the players, a typed value sets that average (all
---               parts of all of them scaled together, their ratios stay)
---   Strength:   the same for the average joint strength (neck 1 / knees 4 differences stay)
---   Friction / Bounce: the same for body parts and joints together
---   Model:      Reset puts them back on the default body (their player sections removed)
--- The Move / Rotate / Scale gizmos do the same in the world.
+-- Players panel: rows act on the selected players (or the picked one). Pos / Rot: the group's center
+-- and the picked player's rotation (utils/players.lua). Scale: size vs the default body. Density,
+-- Strength, Friction, Bounce: a typed average scales every part (ratios stay). Model: Reset
 local Rows = MGE.EditorRows
 local inwuts = Rows.inputs
 local readInputs = Rows.readInputs
@@ -18,14 +8,14 @@ local createInputRow = Rows.createInputRow
 
 local NOT_SET = { "-", "-", "-" }
 
----Value as a placeholder: three significant digits, small densities like 0.0001 still readable
+---Three significant digits (keeps small densities readable)
 ---@param v number
 ---@return string
 local function hint(v)
     return string.format("%.3g", v)
 end
 
----Angles as whole-degree placeholders: engageplayerrot keeps whole degrees (Players.wholeDegrees)
+---Whole-degree placeholders (engageplayerrot keeps whole degrees)
 ---@param values number[]
 ---@return string[]
 local function wholeHints(values)
@@ -34,8 +24,8 @@ local function wholeHints(values)
     return hints
 end
 
----Players the panel works on: the selected ones with the picked player first (its rotation is the
----one shown), or only the picked player when none are selected. Players not in the world left out
+---The panel's players: selected ones with the picked one first (its rotation is shown), or only the
+---picked one; players not in the world left out
 ---@return integer[]
 local function panelPlayers()
     local Main, Players = MGE.Main, MGE.Players
@@ -50,7 +40,7 @@ local function panelPlayers()
     return list
 end
 
----"player 2" or "the 3 selected players", for the help texts
+---"player 2" or "the 3 selected players"
 ---@param list integer[]
 ---@return string
 local function whom(list)
@@ -58,9 +48,8 @@ local function whom(list)
     return "the " .. #list .. " selected players"
 end
 
----Applies a typed part value to the players: as a factor of their current average (ratios between
----parts and players stay), or set on every part when that average is 0. Friction can be negative, the
----other values can't
+---Applies a typed part average: as a factor of the current one, or set everywhere when that's 0.
+---Only friction may be negative
 ---@param inputs UIElement[]
 ---@param key "density"|"strength"|"friction"|"bounce"
 ---@param list integer[] the players
@@ -76,11 +65,10 @@ local function applyTyped(inputs, key, list, current)
     end
 end
 
--- Pos / Rot / Scale names by gizmo tool, the active one lit like the Core tab's (rebuilt with the rows)
+-- Pos / Rot / Scale names, lit for the active gizmo tool
 local gizmoLabels, highlightGizmoLabels = Rows.gizmoLabels()
 
----Pos / Rot / Scale rows for the players, rebuilt when the selection, the gamerules or the mod change
----(placeholders show the current values)
+---Pos / Rot / Scale rows
 ---@param holder UIElement
 local function buildPlayer(holder)
     Rows.begin()
@@ -99,12 +87,11 @@ local function buildPlayer(holder)
     local _
     inwuts.playerPos, _, gizmoLabels.move = createInputRow("Pos", holder, function(_, i)
         if #list > 0 then Players.setShownPos(list, readInputs(inwuts.playerPos, i)) end
-    end, pos or NOT_SET, posHelp) -- numbers: shown rounded, the wheel steps from the exact center
+    end, pos or NOT_SET, posHelp)
     inwuts.playerRot, _, gizmoLabels.rotate = createInputRow("Rot", holder, function(_, i)
         if #list > 0 then Players.setShownRot(list, readInputs(inwuts.playerRot, i)) end
     end, rot and wholeHints(rot) or NOT_SET, rotHelp, nil, { whole = true, angle = true })
-    -- Scale: the size compared to the default body (Players.size), a typed size scales to it (several
-    -- players: their average, the differences stay). Rebuilt with Pos / Rot so it shows the new size
+    -- several players: their average size, differences stay
     local size = #list > 0 and Players.groupSize(list) or nil
     inwuts.playerScale, _, gizmoLabels.scale = createInputRow("Scale", holder, function()
         local typed = tonumber(inwuts.playerScale[1].textfieldstr[1])
@@ -126,8 +113,7 @@ local PART_ROWS = {
         "Average bounce of parts and joints\n(default 0.1), all scaled together." },
 }
 
----Density / Strength / Friction / Bounce rows for the players, rebuilt like Pos / Rot (placeholders
----show their averages)
+---Density / Strength / Friction / Bounce rows (placeholders: averages)
 ---@param holder UIElement
 local function buildParts(holder)
     Rows.begin()
@@ -137,12 +123,11 @@ local function buildParts(holder)
         local current = MGE.Players.groupPartAverage(list, key)
         inwuts[name] = createInputRow(row[2], holder, function()
             applyTyped(inwuts[name], key, list, current)
-        -- 3 significant digits (small densities stay readable), the wheel steps from the exact average
         end, { #list > 0 and { text = hint(current), value = current } or "-" }, row[4])
     end
 end
 
----Model row, built once: Reset puts the panel's players back on the default body
+---Model row: Reset to the default body
 ---@param holder UIElement
 local function buildModel(holder)
     Rows.begin()

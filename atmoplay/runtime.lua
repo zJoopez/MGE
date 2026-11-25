@@ -1,10 +1,7 @@
--- The in-game part (docs/atmo-play-plan.md, part 2): on every match_begin it looks at the loaded mod. A playable mod's
--- atmo is drawn, and in fights its pools follow the players (driver.lua, dynamics.lua). Replays need only the drawing:
--- the game records and replays every object change. Measured facts it relies on:
---   * /lm and open_replay run match_begin inside them, with the world already there
---   * changes made between physics steps (draw2d) are recorded under the step they affect; enter_frame's a step late
---   * the game's io.open handles lack :lines() and fail on "../" paths: files go through Files
---   * loading a 5k-object atmo takes ~0.3 s: it's loaded only when the mod changes
+-- The in-game part (docs/atmo-play-plan.md, part 2): each match_begin checks the loaded mod; a playable mod's atmo
+-- is drawn and in fights its pools follow the players (replays replay the recorded moves). Relies on: /lm and
+-- open_replay run match_begin with the world present; draw2d changes record under their step (enter_frame's a
+-- step late); the game's io.open can't do "../" (files go through Files); a 5k atmo loads in ~0.3 s (only on change)
 
 local NS = ATMOPLAY_LOADING
 
@@ -74,13 +71,8 @@ end
 
 ---------------------------------------------------------------------------------------------------- settings
 
--- atmoplay.cfg next to atmoplay.lua (not in the release zip), one "key value" a line:
---   flight shapes      Detail: simple / shapes / full
---   ghosts on          flying props' move predictions while a turn waits
---   farprops move      move, or pause flights far from every player
---   maxdraws 1000      at most this many atmo shapes drawn a frame, the nearest
---   ui on              the window open at start (off: only its launcher button)
---   uipos 10 120       where the window was dragged to
+-- atmoplay.cfg next to atmoplay.lua, "key value" lines: flight simple|shapes|full, ghosts on|off,
+-- farprops move|pause, maxdraws N, ui on|off (window open at start), uipos X Y
 Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, ghosts = true, pauseFar = false, maxDraws = 1000, ui = true,
     uiPos = nil }
 
@@ -307,8 +299,7 @@ local function leavePlayable()
     restorePlayerAtmo()
 end
 
----A mod file's whole text: compared with the last one read, so a mod changed under its name is read again (strings
----are interned: the compare is cheap)
+---A mod file's whole text, compared with the last (interned: cheap) so a changed mod is read again
 ---@return string?
 local function readRaw(name)
     local path = resolveModPath(name)
@@ -481,13 +472,13 @@ function Runtime.setGhosts(on)
     if not on and loaded and loaded.dynamics then Dynamics.dropPrediction(loaded.dynamics) end
 end
 
----Distant (far props) pause; a running mod takes it from its next fight
 ---At most this many atmo shapes drawn a frame, the nearest; from the next frame
 function Runtime.setMaxDraws(n)
     Runtime.settings.maxDraws = math.max(1, math.floor(tonumber(n) or 1000))
     Runtime.saveSettings()
 end
 
+---Distant (far props) pause; a running mod takes it from its next fight
 function Runtime.setFarProps(on)
     Runtime.settings.pauseFar = on and true or false
     Runtime.saveSettings()

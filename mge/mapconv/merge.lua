@@ -1,8 +1,6 @@
--- Map converter: joins boxes that make one bigger box, so a map's floors and walls take fewer of the
--- 256 objects. Two boxes join when they have the same axes and role, the same size and position on
--- two of their axes, and touch or overlap on the third (their union is then exactly a box). Floors laid
--- out as grids of brushes or terrain slabs (dust2) shrink a lot. Positions are compared to
--- options.step map units, so float noise from compiled maps doesn't keep neighbours apart
+-- Map converter: joins boxes whose union is exactly a box (same axes, role, and size / position on two
+-- axes, touching on the third), so floors and walls take fewer objects. Positions are compared in
+-- `step` map units to absorb compiled maps' float noise
 MGE.MapConv = MGE.MapConv or {}
 local MapConv = MGE.MapConv
 
@@ -14,16 +12,22 @@ MapConv.Merge = Merge
 ---@return number[]
 local function column(box, k) return { box.frame[1][k], box.frame[2][k], box.frame[3][k] } end
 
----Grid cell key of x, y (cell indexes), a number: cheaper than building an "x,y" string per lookup.
----Unique while |y| < 2^20 cells, far beyond any map (Source maps reach +-16384 units)
+---Numeric grid cell key (cheaper than "x,y" strings); unique while |y| < 2^20 cells
 ---@param x integer
 ---@param y integer
 ---@return number
 local function cellKey(x, y) return x * 2097152 + y end
-Merge.cellKey = cellKey -- the converter's other grids (convert.lua)
+Merge.cellKey = cellKey
 
----What mergeAlong needs of a box, worked out once per box (not per pass and axis): its center in
----its own axes and its role and axes as a key
+---@param box table
+---@return table shallow copy
+local function copyOf(box)
+    local copy = {}
+    for field, value in pairs(box) do copy[field] = value end
+    return copy
+end
+
+---A box's center in its own axes and its role / axes key, once per box
 ---@param cache table<MapBox, { c: number[], prefix: string }>
 ---@param box MapBox
 local function mergeInfo(cache, box)
@@ -54,16 +58,16 @@ local function mergeAlong(boxes, k, step, cache)
     for _, box in ipairs(boxes) do
         local info = mergeInfo(cache, box)
         local c = info.c
-        local key = info.keys[k] -- the same on every pass until the box joins (a joined one is new)
+        local key = info.keys[k] -- stable until the box joins (joined boxes are new)
         if not key then
             key = info.prefix .. "|" .. round(c[a]) .. "|" .. round(c[b]) .. "|" .. round(box.sides[a]) .. "|" .. round(box.sides[b])
             info.keys[k] = key
         end
-        -- the boxes of a row; most rows are one box, which stays as it is (no sorting or joining)
+        -- most rows are one box, left as is
         local list = groups[key]
         if not list then
             groups[key] = { box }
-            order[#order + 1] = key -- first seen order, the result doesn't depend on pairs()
+            order[#order + 1] = key -- deterministic order, not pairs()
         else
             list[#list + 1] = box
         end
@@ -74,8 +78,7 @@ local function mergeAlong(boxes, k, step, cache)
         if not current then return end
         local box = current.box
         if current.count > 1 then
-            local copy = {}
-            for field, value in pairs(box) do copy[field] = value end
+            local copy = copyOf(box)
             copy.sides = { box.sides[1], box.sides[2], box.sides[3] }
             copy.sides[k] = current.high - current.low
             copy.center = MapConv.Vec.add(box.center, MapConv.Vec.scale(column(box, k), (current.low + current.high) / 2 - current.mid))
@@ -115,15 +118,13 @@ local function mergeAlong(boxes, k, step, cache)
 end
 
 ---@class FlatMergeOptions
----@field tolerance number map units the joined box may be thicker than its thickest part (bumps, tilt)
----@field fill number share of the joined box its parts must cover, 0-1 (stops L shapes becoming rectangles)
+---@field tolerance number map units the joined box may be thicker than its thickest part
+---@field fill number share of the joined box its parts must cover (stops L shapes becoming rectangles)
 ---@field gap number map units parts may be apart and still join
----@field align number map units edges count as lined up within: what's left open is at most this deep (a
----notch, never a doorway: a lintel differs from the wall beside it by far more)
----@field maxThickness number map units: only slabs this thin or thinner join (floors, walls, terrain)
+---@field align number map units within which edges count as lined up (a notch, never a doorway)
+---@field maxThickness number only slabs this thin join (floors, walls, terrain)
 
----A slab's own axes: thin axis (its normal, pointing up or else along the first non-zero world axis)
----and the two in its plane, as frame column indexes and vectors
+---A slab's thin axis (its normal) and the two in its plane, as column indexes and the normal
 ---@param box MapBox
 ---@return integer thin, integer a, integer b column indexes
 ---@return number[] n
@@ -136,10 +137,8 @@ local function slabAxes(box)
     return thin, thin % 3 + 1, (thin + 1) % 3 + 1, n
 end
 
----What a flat piece is, it can be both: a beam (rail, curb, trim: thin both ways, long one way) and / or a
----slab (floor, wall, terrain: thin one way, wide both others). Beams get their own rule: which of
----their two thin sides counts as "the" normal is arbitrary, a rail 8 x 16 next to one 16 x 8 would face
----different ways and never join as slabs. A long narrow terrain slab is both, and joins either way
+---Classifies a flat piece as a beam (rail, curb: thin both ways, long one way) and / or a slab (floor,
+---wall: thin one way). Beams need their own rule: a beam's "normal" is arbitrary
 ---@param box MapBox
 ---@param options FlatMergeOptions
 ---@return table? piece nil when the box is neither (crates, wall blocks)
@@ -159,13 +158,11 @@ local function classify(box, options)
         piece.area = box.sides[a] * box.sides[b]
     end
     if not piece.beam and not piece.slab then return nil end
-    piece.size = piece.area or piece.length -- the order slabs grow in: biggest first
+    piece.size = piece.area or piece.length -- growth order: biggest first
     return piece
 end
 
----Ranges of a box along three axes: its center's position on each, plus and minus how far its 8
----corners reach (half of each side times how much that side points along the axis). The same as
----going through the corners, without building them (this ran millions of times)
+---A box's extent along three axes, from its center and half sides (no corner tables: runs millions of times)
 ---@param box MapBox
 ---@param axes number[][]
 ---@return number[] min, number[] max
@@ -187,11 +184,19 @@ local function ranges(box, axes)
 end
 
 
----World xy bounds of a box, for the neighbour grid
-local function xyBounds(box)
-    local min, max = ranges(box, { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } })
+---World-axis bounds of a box
+---@param box MapBox
+---@return number[] min, number[] max
+local function aabb(box)
+    local min, max = {}, {}
+    for k = 1, 3 do
+        local half = 0
+        for j = 1, 3 do half = half + math.abs(box.frame[k][j]) * box.sides[j] / 2 end
+        min[k], max[k] = box.center[k] - half, box.center[k] + half
+    end
     return min, max
 end
+Merge.aabb = aabb
 
 ---Box from ranges along axes (axes[k] is the box's column columns[k]), the rest copied from like
 local function boxFrom(like, axes, min, max, columns)
@@ -202,22 +207,19 @@ local function boxFrom(like, axes, min, max, columns)
     end
     local sides = {}
     for k = 1, 3 do sides[columns[k]] = max[k] - min[k] end
-    local box = {}
-    for field, value in pairs(like) do box[field] = value end
+    local box = copyOf(like)
     box.center, box.sides = center, sides
     return box
 end
 
----Two slabs: facing nearly the same way, touching or overlapping in their plane, lined up edge to edge
----(along one axis they reach as far as each other, or one lies within the other: a lintel over a
----doorway never reaches as far as the wall beside it, so the doorway stays open), at most
----options.tolerance thicker than the thickest, options.fill of the joined box covered
+---Joins two slabs facing the same way, touching in their plane and lined up edge to edge (or one
+---within the other: a lintel never lines up with the wall beside it, so doorways stay open), within
+---tolerance and fill
 ---@return MapBox? box, number? area covered
 local function slabJoined(a, b, options)
     local s = a.slab
     if math.abs(MapConv.Vec.dot(s.n, b.slab.n)) < 0.95 then return nil end
-    -- a's axes and ranges once per shape of a (kept on its slab table, replaced when it grows), not
-    -- once per neighbour it's tried with
+    -- a's axes and ranges once per shape (reset when it grows)
     if not s.axes then
         s.axes = { column(a.box, s.a), column(a.box, s.b), s.n }
         s.min, s.max = ranges(a.box, s.axes)
@@ -246,14 +248,12 @@ local function slabJoined(a, b, options)
     return boxFrom(a.box, axes, min, max, { s.a, s.b, s.thin }), math.min(covered, area)
 end
 
----Two beams (rails, curbs, trims) running the same way within ~14 degrees, touching or overlapping
----along their length, joined end to end: the joined cross-section at most options.tolerance bigger than
----the thicker one's and options.fill of its length covered (a rail in pieces, a kinked curb)
+---Joins two beams running the same way (within ~14 degrees) end to end, within tolerance and fill
 ---@return MapBox? box, number? length covered
 local function beamJoined(a, b, options)
     local s = a.beam
     if math.abs(MapConv.Vec.dot(s.axis, b.beam.axis)) < 0.97 then return nil end
-    if not s.axes then -- like slabJoined: once per shape of a
+    if not s.axes then -- once per shape, like slabJoined
         s.axes = { s.axis, column(a.box, s.cross[1]), column(a.box, s.cross[2]) }
         s.min, s.max = ranges(a.box, s.axes)
     end
@@ -275,18 +275,16 @@ local function beamJoined(a, b, options)
     return boxFrom(a.box, axes, min, max, columns), math.min(covered, length)
 end
 
----Joins nearly flat neighbouring pieces into bigger ones: a terrain floor's tiles (each tilted and
----lifted a little differently), a floor laid out of brushes with small steps (slabJoined), a rail or
----curb in pieces (beamJoined). Pieces of the same role join by whichever rule both fit; the joined box
----keeps the first one's axes, covers both, and is sorted out again (it can be a beam, a slab or both).
----Biggest pieces grow first, greedily, neighbours from a grid tried in a fixed order
+---Joins nearly flat neighbours (terrain tiles, stepped floors, rails in pieces) into bigger pieces.
+---Greedy, biggest first, neighbours from a grid in a fixed order; joined boxes keep the first's axes
+---and are classified again
 ---@param boxes MapConvBox[]
 ---@param options FlatMergeOptions
 ---@return MapConvBox[] boxes
 ---@return integer joined how many fewer there are
 function Merge.flat(boxes, options)
     local CELL = 256 -- neighbour grid, map units
-    -- missing options: the converter's defaults (MapConv.select passes them all)
+    -- defaults for missing options
     local given = options or {}
     options = { tolerance = 12, fill = 0.75, gap = 16, align = 32, maxThickness = 32 }
     for k, v in pairs(given) do options[k] = v end
@@ -296,11 +294,11 @@ function Merge.flat(boxes, options)
         if piece then pieces[#pieces + 1] = piece else out[#out + 1] = box end
     end
     table.sort(pieces, function(p, q) return p.size > q.size end)
-    for i, piece in ipairs(pieces) do piece.index = i end -- a fixed order: the same result on any Lua
+    for i, piece in ipairs(pieces) do piece.index = i end -- deterministic order
 
     local cells = {}
     local function place(piece)
-        local min, max = xyBounds(piece.box)
+        local min, max = aabb(piece.box)
         piece.keys = {}
         for x = math.floor((min[1] - options.gap) / CELL), math.floor((max[1] + options.gap) / CELL) do
             for y = math.floor((min[2] - options.gap) / CELL), math.floor((max[2] + options.gap) / CELL) do
@@ -332,8 +330,7 @@ function Merge.flat(boxes, options)
         return nil
     end
 
-    ---other could join piece at all: join's first checks (same role, slabs facing the same way or beams
-    ---running the same way), so only these are sorted and tried
+    ---join's cheap first checks, so only plausible candidates are sorted and tried
     local abs, dot = math.abs, MapConv.Vec.dot
     local function mayJoin(piece, other)
         if piece.box.role ~= other.box.role then return false end
@@ -345,7 +342,7 @@ function Merge.flat(boxes, options)
     local joinedCount = 0
     for _, piece in ipairs(pieces) do
         while not piece.dead do
-            -- neighbours from the grid, biggest first (not pairs() order: the same on any Lua)
+            -- grid neighbours, biggest first (deterministic)
             local seen, candidates = {}, {}
             for _, key in ipairs(piece.keys) do
                 for other in pairs(cells[key] or {}) do
@@ -364,8 +361,7 @@ function Merge.flat(boxes, options)
                     other.dead = true
                     unplace(other)
                     unplace(piece)
-                    -- the joined box is sorted out again; what its parts cover carries over for the rule
-                    -- that joined them, the other measure counts as full
+                    -- classified again; the joining rule's covered measure carries over
                     local again = classify(box, options) or {}
                     piece.box, piece.beam, piece.slab = box, again.beam, again.slab
                     piece.area, piece.length = again.area, again.length
@@ -394,7 +390,7 @@ end
 function Merge.boxes(boxes, step)
     step = step or 1
     local total = 0
-    local cache = setmetatable({}, { __mode = "k" }) -- joined boxes are new tables, the parts drop out
+    local cache = setmetatable({}, { __mode = "k" }) -- joined parts drop out
     repeat
         local pass = 0
         for k = 1, 3 do
@@ -407,25 +403,11 @@ function Merge.boxes(boxes, step)
     return boxes, total
 end
 
--- Merge.hidden: map units a box may stick out of what hides it (float noise of compiled maps), the
--- neighbour grid's cell size, and the sample points per axis for the covered share (n^3 points)
+-- Merge.hidden: how far a box may stick out of what hides it (float noise), grid cell size, and
+-- sample points per axis for the covered share (n^3 points)
 local HIDDEN_PAD, HIDDEN_CELL, COVER_SAMPLES = 1, 256, 5
 
----World-axis bounds of a box
----@param box MapBox
----@return number[] min, number[] max
-local function aabb(box)
-    local min, max = {}, {}
-    for k = 1, 3 do
-        local half = 0
-        for j = 1, 3 do half = half + math.abs(box.frame[k][j]) * box.sides[j] / 2 end
-        min[k], max[k] = box.center[k] - half, box.center[k] + half
-    end
-    return min, max
-end
-
----The point x, y, z is inside the box (its own axes), with pad to spare. Plain numbers, no tables:
----this runs for every sample point against every neighbour
+---Whether point x, y, z is inside the box (with pad). Plain numbers: runs per sample and neighbour
 ---@param box MapBox
 ---@param pad number
 ---@return boolean
@@ -453,10 +435,9 @@ end
 local CORNERS = { { -1, -1, -1 }, { -1, -1, 1 }, { -1, 1, -1 }, { -1, 1, 1 },
     { 1, -1, -1 }, { 1, -1, 1 }, { 1, 1, -1 }, { 1, 1, 1 } }
 
----Leaves out boxes nobody can see or touch: one entirely inside another box (stairs under their ramp
----clip, a trim inside a wall), and with cover above 0 also one whose inside is at least that share
----covered by the other boxes together. Smallest first, and only against boxes still kept, so of two
----identical boxes one stays, and boxes that cover each other never all go
+---Leaves out boxes inside another (stairs under a ramp clip), and with cover > 0 also boxes that share
+---covered by others together. Smallest first, against kept boxes only, so of mutually covering boxes
+---one always stays
 ---@param boxes MapConvBox[]
 ---@param cover number? 0 or nil: only boxes inside one other; e.g. 0.95: also 95% covered by several
 ---@return MapConvBox[] kept
@@ -477,7 +458,7 @@ function Merge.hidden(boxes, cover)
             end
         end
     end
-    ---Kept boxes whose bounds overlap the item's (a fixed order: the same result on any Lua)
+    ---Kept boxes whose bounds overlap the item's, in a deterministic order
     local function neighbours(item)
         local found, seen = {}, {}
         for x = math.floor(item.min[1] / HIDDEN_CELL), math.floor(item.max[1] / HIDDEN_CELL) do
@@ -538,7 +519,7 @@ function Merge.hidden(boxes, cover)
         -- covered by several: sample points spread through its inside
         if not item.dropped and cover > 0 and #others > 0 then
             local n = COVER_SAMPLES
-            local allowedOut = n ^ 3 - math.ceil(n ^ 3 * cover) -- sample points that may be uncovered
+            local allowedOut = n ^ 3 - math.ceil(n ^ 3 * cover)
             local out = 0
             for i = 1, n do
                 for j = 1, n do

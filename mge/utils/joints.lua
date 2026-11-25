@@ -1,5 +1,4 @@
--- Helpers for env_obj_joint blocks linked to selected objects.
--- There is no API to move env joints live, changes are stored in props and applied when the mod is saved.
+-- env_obj_joint helpers. Env joints have no live setters: edits go to props and show after a reload.
 
 ---@class Joints
 local Joints = {}
@@ -82,30 +81,28 @@ function Joints.haveRoom(count)
     return false
 end
 
----Copy of a joint with new ids, props are copied so edits don't affect the original
+---Copy of a joint with new ids and its own props
 ---@param joint FileParserEnvObjJoint
 ---@param id integer
 ---@param obj1 integer
 ---@param obj2 integer
 ---@return FileParserEnvObjJoint
 function Joints.copy(joint, id, obj1, obj2)
-    local props = {}
-    for k, v in pairs(joint.props) do props[k] = v end
-    return { kind = "env_obj_joint", id = id, obj1 = obj1, obj2 = obj2, props = props, lines = joint.lines }
+    return { kind = "env_obj_joint", id = id, obj1 = obj1, obj2 = obj2, props = ModData.copy(joint.props),
+        lines = joint.lines }
 end
 
 ---Copies joints linked between objects in idMap (old id -> new id) and adds them to the mod
 ---@param joints FileParserEnvObjJoint[]
 ---@param idMap table<integer, integer>
----@param jointIds integer[]? ids for the copies in order (a slot picked on the Joints list), free ones
----only; missing entries take the lowest free id
+---@param jointIds integer[]? ids for the copies in order (free ones only); missing: lowest free id
 ---@return integer count
 function Joints.copyLinked(joints, idMap, jointIds)
     local count = 0
     for _, joint in ipairs(joints) do
         local obj1, obj2 = idMap[joint.obj1], idMap[joint.obj2]
         local wanted = jointIds and jointIds[count + 1]
-        -- callers check Joints.haveRoom first, nil only guards the limit
+        -- callers check haveRoom first; nil only guards the limit
         local id = wanted and not Joints.find(wanted) and wanted or Joints.nextId()
         if obj1 and obj2 and id then
             table.insert(ModData.parsed.env_obj_joint, Joints.copy(joint, id, obj1, obj2))
@@ -115,7 +112,7 @@ function Joints.copyLinked(joints, idMap, jointIds)
     return count
 end
 
----Removes joints linked to any of the ids, used when objects are deleted
+---Removes joints linked to any of the ids (deleted objects)
 ---@param ids table<integer, boolean>
 function Joints.removeLinkedToAny(ids)
     local joints = ModData.parsed.env_obj_joint
@@ -142,8 +139,7 @@ function Joints.transformAxis(joint, fn)
     joint.props.axis = formatVector(fn(parseVector(joint.props.axis)))
 end
 
--- Joints list buttons (ui/joint_list.lua): New, Duplicate, Delete. Each is one undo step and a reload,
--- the joints stay in id order in the file
+-- Joints list buttons: each is one undo step and a reload; joints stay in id order
 
 local function sortJoints()
     table.sort(ModData.parsed.env_obj_joint, function(a, b) return (a.id or 0) < (b.id or 0) end)
@@ -177,31 +173,35 @@ function Joints.find(id)
     return nil
 end
 
+---@param obj1 FileParserEnvObj
+---@param obj2 FileParserEnvObj
+---@return number[]
+local function midpointOf(obj1, obj2)
+    local a, b = MGE.Transforms.positionOf(obj1), MGE.Transforms.positionOf(obj2)
+    return { (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, (a[3] + b[3]) / 2 }
+end
+
 ---Anchor halfway between two objects, as a pos line value
 ---@param obj1 FileParserEnvObj
 ---@param obj2 FileParserEnvObj
 ---@return string
 function Joints.midpoint(obj1, obj2)
-    local a, b = MGE.Transforms.positionOf(obj1), MGE.Transforms.positionOf(obj2)
-    return formatVector((a[1] + b[1]) / 2, (a[2] + b[2]) / 2, (a[3] + b[3]) / 2)
+    local m = midpointOf(obj1, obj2)
+    return formatVector(m[1], m[2], m[3])
 end
 
----Halfway between the two objects a joint links, as numbers: where Recenter puts its anchor and where a
----joint without a pos line (the game locks its objects together) starts from. nil when an object is gone
+---Halfway between a joint's two objects (Recenter, and the start for joints without a pos line).
+---nil when an object is gone
 ---@param joint FileParserEnvObjJoint
 ---@return number[]?
 function Joints.jointMidpoint(joint)
     local a, b = Joints.objectById(joint.obj1), Joints.objectById(joint.obj2)
     if not a or not b then return nil end
-    local p, q = MGE.Transforms.positionOf(a), MGE.Transforms.positionOf(b)
-    return { (p[1] + q[1]) / 2, (p[2] + q[2]) / 2, (p[3] + q[3]) / 2 }
+    return midpointOf(a, b)
 end
 
----The game doesn't join two static objects (the joint isn't shown and nothing moves): when a new link
----joins two, both are made dynamic (the static bit cleared, other flags kept). One static object is
----fine, the joint then holds the dynamic one to it. Call after the joints changed and before
----fitLinkedIds (dynamic objects need ids 1-MAX_NONSTATIC_OBJECTS too) and History.commit. The flag is
----read by the game when the mod loads, MGE.apply's reload applies it
+---The game doesn't join two static objects, so a new link between two makes both dynamic (static bit
+---cleared). Call before fitLinkedIds and History.commit
 ---@param obj1 integer object id
 ---@param obj2 integer object id
 local function unstaticLinked(obj1, obj2)
@@ -215,17 +215,15 @@ local function unstaticLinked(obj1, obj2)
     MGE.say("objects " .. obj1 .. " and " .. obj2 .. " made dynamic: a joint needs a dynamic object")
 end
 
----The game ignores joints to objects above the dynamic ids (mod_export.lua's id rules). A new link to
----such an object reindexes right away, like the Advanced tab's Reindex: joint-linked objects move to
----ids 1-MAX_NONSTATIC_OBJECTS, static ones up, the joints follow. Call after the joints changed and
----before History.commit, so it's the same undo step as the link. Acts on all objects, like Reindex
+---The game ignores joints to objects above id 48, so a new link to one reindexes all objects right
+---away. Call before History.commit (same undo step)
 ---@param jointId integer for the message
 ---@param obj1 integer
 ---@param obj2 integer
 local function fitLinkedIds(jointId, obj1, obj2)
     local max = MGE.MAX_NONSTATIC_OBJECTS
     if not max or (obj1 <= max and obj2 <= max) then return end
-    ModData.refreshJointIds() -- the new link counts before the reload
+    ModData.refreshJointIds()
     local moved, left = ModData.reindex()
     if left > 0 then
         MGE.say("joint " .. jointId .. ": " .. left .. " objects still above id " .. max ..
@@ -235,12 +233,10 @@ local function fitLinkedIds(jointId, obj1, obj2)
     end
 end
 
--- the visible line of every joint MGE makes (Create, New pair, Generate): shown in game, and clickable
--- from any list (utils/world_select.lua). The Properties tab can hide them
+-- new joints are visible: shown in game and clickable from any list
 Joints.NEW_VISIBLE = "1"
 
----New joint between two objects, its anchor (pos) halfway between their positions, visible. Nothing
----else is set: the game's defaults for the rest
+---New visible joint between two objects, anchored halfway; game defaults for the rest
 ---@param obj1 FileParserEnvObj
 ---@param obj2 FileParserEnvObj
 ---@param id integer? the joint id (an empty slot), default the lowest free one
@@ -264,8 +260,7 @@ function Joints.addBetween(obj1, obj2, id)
     return id
 end
 
--- Joints panel edits (ui/editor_joint.lua). Each is one undo step and a reload: env joints have no live
--- setter, the game only reads them when the mod loads
+-- Joints panel edits: each is one undo step and a reload
 
 ---Numbers in a prop value, missing ones 0 ("3.6 -3.6" for range, "0 0 1" for axis)
 ---@param value string?
@@ -282,16 +277,15 @@ function Joints.parseNumbers(value, count)
     return numbers
 end
 
----Camera follow on: looks at joints' anchors (their pos lines), keeping the distance when they fit, like
----moving objects does (Transforms.moveBy). After an anchor moved: Pos row, Move gizmo, Recenter
+---Camera follow: frames the anchors after they moved, like moving objects
 ---@param joints FileParserEnvObjJoint[]
 local function followAnchors(joints)
     local Camera = MGE.Camera
     if not Camera or not Camera.followMoves then return end
-    local target = Joints.target(joints) -- the anchors' center, joints without a pos line left out
+    local target = Joints.target(joints)
     if not target then return end
     local center = target.pivot()
-    local radius = 0.5 -- an anchor alone: a small sphere around it, the camera keeps its distance
+    local radius = 0.5
     for _, joint in ipairs(target.joints) do
         local p = Joints.parseNumbers(joint.props.pos, 3)
         local d = math.sqrt((p[1] - center[1]) ^ 2 + (p[2] - center[2]) ^ 2 + (p[3] - center[3]) ^ 2)
@@ -320,8 +314,7 @@ function Joints.setProps(joints, key, valueOf)
     return true
 end
 
----Moves joints' anchors (their pos lines, one undo step), camera follow looks at them after: the Pos row,
----the Move gizmo, Recenter. Other pos writes (linking, imports) leave the camera alone
+---Moves anchors (one undo step) and lets camera follow frame them
 ---@param joints FileParserEnvObjJoint[]
 ---@param posOf fun(joint: FileParserEnvObjJoint): string? new pos line, nil leaves that joint as it is
 ---@return boolean changed
@@ -342,15 +335,12 @@ function Joints.setComponent(joints, key, index, count, value)
     return Joints.setProps(joints, key, function(joint)
         local numbers = Joints.parseNumbers(joint.props[key], count)
         numbers[index] = value
-        local words = {}
-        for i, number in ipairs(numbers) do words[i] = MGE.FileHandler.formatNumber(number) end
-        return table.concat(words, " ")
+        return MGE.FileHandler.formatNumbers(unpack(numbers))
     end)
 end
 
--- Move gizmo on the Joints list, both tabs (utils/gizmo.lua): drags the selected joints' anchors.
--- Joints have no live position, so a drag only offsets the drawn anchors (Joints.posPreview, read by
--- Joints.anchorOf and utils/highlight.lua); the release writes the pos lines, one undo step and a reload
+-- Move gizmo on the Joints list: a drag only offsets the drawn anchors (posPreview); the release
+-- writes the pos lines
 
 ---@class JointPosPreview
 ---@field ids table<integer, boolean> joints being dragged
@@ -359,7 +349,7 @@ end
 ---@type JointPosPreview?
 Joints.posPreview = nil
 
----A joint's anchor as drawn: its pos line, moved by a gizmo drag in progress. nil without a pos line
+---A joint's anchor as drawn (pos line plus any drag), nil without a pos line
 ---@param joint FileParserEnvObjJoint
 ---@return number[]?
 function Joints.anchorOf(joint)
@@ -373,8 +363,7 @@ function Joints.anchorOf(joint)
     return p
 end
 
----Gizmo target for joints' anchors: Move only, world axes, around their average anchor. Joints
----without a pos line are left out (the game puts them itself, there's nothing to move from)
+---Gizmo target for anchors: Move only, around their average. Joints without a pos line are left out
 ---@param joints FileParserEnvObjJoint[]
 ---@return GizmoTarget?
 function Joints.target(joints)
@@ -390,12 +379,12 @@ function Joints.target(joints)
     end
     if #list == 0 then return nil end
     local n = #list
-    local pivot = { sx / n, sy / n, sz / n } -- measured when made: stays put while dragging
+    local pivot = { sx / n, sy / n, sz / n } -- fixed while dragging
     local t = { joints = list } ---@type table
     function t.pivot() return pivot end
     function t.frame() return MGE.Mat3.IDENTITY end
     function t.previewMove(offset) Joints.posPreview = { ids = ids, offset = offset } end
-    function t.previewRotate() end -- Move only (gizmo.lua shows no other tool for joints)
+    function t.previewRotate() end -- Move only
     function t.restoreLive() Joints.posPreview = nil end
     function t.moveBy(offset)
         t.restoreLive()
@@ -408,10 +397,8 @@ function Joints.target(joints)
     return t --[[@as GizmoTarget]]
 end
 
----Pos row (ui/editor_joint.lua): one axis of the anchors set to `value`, one undo step. Joints with a pos
----line move together so their center (Joints.target's pivot) gets there. A joint without one has no
----anchor (the game then locks its two objects together, a test mod showed): it starts from the
----midpoint of its objects with that axis typed, which makes it a hinge there
+---Pos row: moves the anchors so their center's axis becomes `value`. A joint without a pos line (the
+---game locks its objects) starts from its objects' midpoint, which makes it a hinge there
 ---@param joints FileParserEnvObjJoint[]
 ---@param index integer 1-3
 ---@param value number
@@ -443,12 +430,8 @@ function Joints.centerPos(joints)
     end)
 end
 
--- Link tab of the Joints list (ui/editor_link.lua): the two objects of one joint slot are picked into a
--- draft (clicks in the world, utils/world_select.lua, or in the tab's object grid). The game doesn't
--- care which end is which, so the pick is a pair: a click adds an object, a click on a picked one takes
--- it out, at most two. Nothing changes in the mod until Create (an empty slot) or Update (a joint's new
--- objects): a stray click only changes the draft. Selecting another slot or Reset drops it, the next
--- draft starts from the saved link
+-- Link tab: a slot's two objects are picked into a draft (an unordered pair: click adds, click again
+-- removes). The mod changes only on Create / Update; another slot or Reset drops the draft
 
 ---@class JointDraft
 ---@field jointId integer the slot (joint id) the draft is for
@@ -457,17 +440,15 @@ end
 
 ---@type JointDraft?
 Joints.draft = nil
----Link tab's Pick from world: while on, a click on an object in the world picks it for the draft (and the
----object under the cursor is lit). Off, a world click on an object leaves the Joints list for the Objects
----list with it selected, like from any other list: a stray click can't change the draft. Off again after
----Create / Update, Reset and leaving the Joints list
+---Pick from world: world clicks pick objects for the draft. Off, a click goes to the Objects list as
+---anywhere else. Turned off after Create / Update, Reset and leaving the list
 Joints.worldPick = false
----Set by ui/editor_link.lua: the draft changed (the tab shows it)
+---Set by ui/editor_link.lua: called when the draft changes
 ---@type fun()
 Joints.onDraftChanged = function() end
 
----The draft for a slot: the edited one, else the saved link (empty for an empty slot). Reading doesn't
----keep it (the highlight reads every frame): an undo or reload then shows the new saved link
+---The slot's draft: the edited one, else its saved link. Reading doesn't keep it (the highlight reads
+---every frame), so undo and reloads show through
 ---@param slotId integer
 ---@return JointDraft
 function Joints.draftFor(slotId)
@@ -486,7 +467,7 @@ function Joints.editDraft(slotId)
     return draft
 end
 
----Drops the draft, the slot's saved link shows again (Reset, another mod, after Create / Update)
+---Drops the draft: the saved link shows again
 function Joints.resetDraft()
     Joints.draft = nil
 end
@@ -506,7 +487,7 @@ function Joints.offerDraft(slotId, objId)
     if not Joints.objectById(objId) then return false end
     local draft = Joints.editDraft(slotId)
     if draft.obj1 == objId then
-        draft.obj1, draft.obj2 = draft.obj2, nil -- obj1 stays the one set first
+        draft.obj1, draft.obj2 = draft.obj2, nil
     elseif draft.obj2 == objId then
         draft.obj2 = nil
     elseif not draft.obj1 then
@@ -529,8 +510,8 @@ local function linksPair(joint, obj1, obj2)
     return (joint.obj1 == obj1 and joint.obj2 == obj2) or (joint.obj1 == obj2 and joint.obj2 == obj1)
 end
 
----Links every listed slot to the same two objects: a joint gets them (its anchor stays), an empty slot
----becomes a joint there (its anchor halfway between the two). One undo step for all of them
+---Links every listed slot to the two objects (joints keep their anchor, empty slots get new joints
+---anchored halfway). One undo step
 ---@param slotIds integer[]
 ---@param obj1 integer object id
 ---@param obj2 integer object id
@@ -569,8 +550,7 @@ function Joints.linkSlots(slotIds, obj1, obj2)
     return changed
 end
 
----What Create / Update would do with the current slot's draft for all the listed slots (the selection).
----The same two objects in either order are the same link
+---What Create / Update would do with the slot's draft for the listed slots
 ---@param slotId integer the current slot, its draft
 ---@param slotIds integer[]? the slots Create / Update links, default only slotId
 ---@return "incomplete"|"new"|"changed"|"unchanged" new: the current slot is empty
@@ -586,8 +566,7 @@ function Joints.draftState(slotId, slotIds)
     return Joints.find(slotId) and "changed" or "new"
 end
 
----Create / Update: links all the listed slots to the current slot's draft (Joints.linkSlots), one undo
----step, the draft is dropped after
+---Create / Update: links the listed slots to the slot's draft, then drops the draft
 ---@param slotId integer the current slot, its draft
 ---@param slotIds integer[]? the slots to link, default only slotId
 ---@return boolean done
@@ -623,7 +602,7 @@ function Joints.duplicate(ids)
     return newIds
 end
 
----Removes joints, the other joints keep their ids (free ids are reused by the next New / Duplicate)
+---Removes joints; the others keep their ids
 ---@param ids table<integer, boolean>|integer[] joint ids
 ---@return integer removed
 function Joints.remove(ids)

@@ -1,39 +1,22 @@
--- Sky clips (MapConv.SkyClips.drop, used by MapConv.pieces in convert.lua): leaves out the clips that
--- are lids over the map. Loaded after convert.lua: it shares its piece bounds (MapConv.boundsOf, memoized
--- while MapConv.pieces runs) and the solids' footprint grid (MapConv.solidsGrid / solidsAt) with the roof caps.
--- tools/mapconv_baseline.lua check shows which clips a change here drops or keeps on every map.
+-- Sky clips: leaves out clips that are lids over the map. Loaded after convert.lua (shares boundsOf and
+-- the solids grid). tools/mapconv_baseline.lua check shows what a change here drops or keeps per map
 local MapConv = MGE.MapConv
 local boundsOf = MapConv.boundsOf
 
--- Sky clips: mappers fill the open parts of the map with huge clip brushes, so players can't jump
--- onto the roofs or out of the map. In Toribash they're giant lids (dust2: up to 2650 x 3100 units,
--- office and nuke: thin 16 unit sheets 250-1150 under the sky). A clip is one when it's
---   wide:    both horizontal sides at least `width` map units (walls and pillars stay)
---   flat:     lower than it is wide (a tall block next to the sky is a wall)
+-- Mappers fill open air with huge clip brushes (giant lids in Toribash). A clip is a lid when it's
+--   wide:     both horizontal sides >= `width` (walls and pillars stay)
+--   flat:     lower than it is wide
 -- and either
---   close:    sky starts at most `gap` above its top over at least `cover` of it (blocks filling
---             the air from the roofs up to the sky, dust2's lids, inferno's roof caps)
+--   close:    sky at most `gap` above its top over >= `cover` of it
 -- or
---   floating: on at least `floating` of its footprint nothing solid (terrain too) from `clearance`
---             under it up to its top: nothing to stand on under it, it's not a floor or a ramp
---   open:     on at least `open` of its footprint sky right over it, nothing solid in between (a
---             ceiling clip under a roof stays)
+--   floating: nothing solid from `clearance` under it up to its top on >= `floating` of its footprint
+--   open:     and open sky right over >= `open` of it (ceiling clips under roofs stay)
 -- or
---   ceiling:  its top is the map's clip ceiling: at least `ceilingCount` clips (both horizontal sides
---             `ceilingWidth` or more) share that top height, at least `ceilingBelow` of the solid
---             pieces end below it, and sky is over at least `ceilingSky` of its footprint. Such a
---             clip only needs both horizontal sides `ceilingWidth` and to be lower than `ceilingTall`
---             times its longest side (an invisible wall at the map's edge from the ground up stays;
---             2 would take 10 more of Italy's blocks between roofs and ceiling, but also 8-20 tall
---             blocks on inferno, lake, anubis, stmarc that weren't looked at). Italy fills the air
---             between its roofs up to one height (z 512, 44 clips, 336 under the sky, roofs poking
---             through so neither close nor open catches them); militia, anubis, inferno, mirage...
---             have such layers too. Low shared heights (floors, water: Italy's -152, 5-15% of the
---             solids below) aren't ceilings. A solid wholly above it on `ceilingRoofed` of its
---             footprint keeps it: an indoor clip under a roof (nuke's at z 64)
--- Checked on `samples` x `samples` points of its footprint. Measured: the sheets of office and nuke
--- float on 75-100% and are open on 78-100%; dust2's ceiling clip over CT spawn is open on 47%,
--- nuke's clips under roofs on 0%, its clips lying on geometry float on 0-11%
+--   ceiling:  its top is the map's clip ceiling: >= `ceilingCount` clips (sides >= `ceilingWidth`)
+--             share that height, >= `ceilingBelow` of the solids end below it, sky over >= `ceilingSky`
+--             of it, and it's lower than `ceilingTall` times its longest side. A solid above it on
+--             `ceilingRoofed` of its footprint keeps it (indoor clips)
+-- Tested on `samples` x `samples` footprint points
 local SKY_CLIP = { width = 256, gap = 256, cover = 0.5, clearance = 72, floating = 0.5, open = 0.5, samples = 6,
     ceilingCount = 8, ceilingWidth = 128, ceilingBelow = 0.85, ceilingSky = 0.5, ceilingRoofed = 0.5,
     ceilingTall = 1 }

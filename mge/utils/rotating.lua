@@ -1,17 +1,15 @@
+-- Rot line math (degrees out, radians in): SetRotOffset composes rotations, SetRotPos turns a point
 local RotatingOld = {}
--- Function to rotate a point around the X axis
 local function rotateX(x, y, z, angle)
     local cosA, sinA = math.cos(angle), math.sin(angle)
     return x, cosA * y - sinA * z, sinA * y + cosA * z
 end
 
--- Function to rotate a point around the Y axis
 local function rotateY(x, y, z, angle)
     local cosA, sinA = math.cos(angle), math.sin(angle)
     return cosA * x + sinA * z, y, -sinA * x + cosA * z
 end
 
--- Function to rotate a point around the Z axis
 local function rotateZ(x, y, z, angle)
     local cosA, sinA = math.cos(angle), math.sin(angle)
     return cosA * x - sinA * y, sinA * x + cosA * y, z
@@ -35,9 +33,8 @@ local GIMBAL_LIMIT = 1 - 1e-7
 local function quaternionToEuler(q)
     local sinp = 2 * (q.w * q.y - q.z * q.x)
     if math.abs(sinp) >= GIMBAL_LIMIT then
-        -- gimbal lock: at pitch +-90 roll and yaw turn around the same axis, only their difference
-        -- (pitch +90) or sum (pitch -90) is defined and the roll / yaw formulas below divide noise by
-        -- noise (y 90 objects came back with random x and z). Keep roll 0 and put the turn into yaw
+        -- gimbal lock: roll and yaw share an axis and the formulas below divide noise by noise.
+        -- Keep roll 0 and put the turn into yaw
         local sign = sinp < 0 and -1 or 1
         local yaw = -2 * sign * math.atan2(q.x, q.w)
         return { 0, math.deg(sign * math.pi / 2), math.deg(yaw) }
@@ -66,25 +63,16 @@ local function quaternionMultiply(q1, q2)
 end
 
 function RotatingOld.SetRotOffset(x, y, z, ox, oy, oz)
-    -- print("SetRotOffset input: " .. x .. ", " .. y .. ", " .. z .. ", " .. ox .. ", " .. oy .. ", " .. oz)
     local currentQuat = eulerToQuaternion(x, y, z)
     local offsetQuat = eulerToQuaternion(-ox, -oy, -oz)
-    local resultQuat = quaternionMultiply(currentQuat, offsetQuat)
-
-    -- Convert the result quaternion back to Euler angles
-    return quaternionToEuler(resultQuat)
+    return quaternionToEuler(quaternionMultiply(currentQuat, offsetQuat))
 end
 
 function RotatingOld.SetRotPos(x, y, z, px, py, pz, ox, oy, oz)
-    -- Translate object to origin (relative to the center of rotation)
     local x, y, z = x - px, y - py, z - pz
-
-    -- Apply rotations in 3D space
-    x, y, z = rotateZ(x, y, z, oz) -- Rotate around Z axis
-    x, y, z = rotateY(x, y, z, oy) -- Rotate around Y axis
-    x, y, z = rotateX(x, y, z, ox) -- Rotate around X axis
-
-    -- Translate object back to its new position
+    x, y, z = rotateZ(x, y, z, oz)
+    x, y, z = rotateY(x, y, z, oy)
+    x, y, z = rotateX(x, y, z, ox)
     return { x + px, y + py, z + pz }
 end
 

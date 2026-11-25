@@ -1,37 +1,31 @@
--- Popup that browses a folder for files of one type: title, a bar with the current folder and a back
--- button, rows for subfolders and files, Cancel / confirm buttons. Folders keep things organized, so
--- there's no search or paging.
--- Used by the asset and atmo imports (ui/assets.lua), the Model row (ui/editor_advanced.lua, data/mod_assets),
--- the atmo's Shader row (ui/editor_misc.lua) and the Convert Map overlay's Map row (ui/map_overlay.lua).
--- Click a folder to open it, click a file to select it, double click or the confirm button picks it
+-- File picker popup: browses folders for files of given types (no search or paging). Click a folder to
+-- open it, a file to select it; double click or confirm picks it
 
 ---@class FilePickerOptions
 ---@field title string
 ---@field root string folder to browse, e.g. "data/mod_assets" (get_files / get_folders paths)
----@field rootLabel string? shown for the root in the folder bar, defaults to root
----@field extension string file types listed, without the dot, space separated for several: "obj", "vmf bsp"
----@field keepExtension boolean? picked paths keep the extension (asset files) or not (model names)
----@field selected string? path relative to root (as passed to onConfirm), opens in its folder selected
+---@field rootLabel string? the root's name in the folder bar, default root
+---@field extension string types without the dot, space separated: "obj", "vmf bsp"
+---@field keepExtension boolean? picked paths keep the extension
+---@field selected string? path relative to root, opened in its folder selected
 ---@field confirmLabel string?
----@field emptyText string? shown in a folder without subfolders or matching files
----@field roots { root: string, label: string }[]? several root folders to switch between (buttons in the
----folder bar), in place of root / rootLabel. The first is shown first
----@field onConfirm fun(path: string, root: string) path relative to the root it's in, "/" separated, and that
----root; the popup is closed first
+---@field emptyText string? shown in an empty folder
+---@field roots { root: string, label: string }[]? switchable roots instead of root / rootLabel
+---@field onConfirm fun(path: string, root: string) "/" separated, relative to root; runs after closing
 
 local FilePicker = {}
 MGE.FilePicker = FilePicker
 
 local ScrollList = MGE.ScrollList
 
-local px = MGE.Widgets.px -- MGE's overall size (Widgets.UI_SCALE)
+local px = MGE.Widgets.px
 local OVERLAY_W = px(420)
 local OVERLAY_H = px(460)
 local PADDING = px(10)
 local TITLE_H = px(44)
 local BUTTON_H = px(40)
 local DOUBLE_CLICK_TIME = 0.35
-local FOLDER_ICON = "../textures/menu/general/folder.tga" -- the game's own, shown in front of folder rows
+local FOLDER_ICON = "../textures/menu/general/folder.tga"
 
 ---@param path string? "" for the root
 ---@return string[]
@@ -54,9 +48,9 @@ local function listFolder(dir, extension)
     for ext in extension:lower():gmatch("%S+") do table.insert(suffixes, "%." .. ext .. "$") end
     for _, fileName in ipairs(get_files(dir, "") or {}) do
         local name = tostring(fileName):gsub("^.*[/\\]", "")
-        local listed = false
+        local lower, listed = name:lower(), false
         for _, suffix in ipairs(suffixes) do
-            if name:lower():find(suffix) then listed = true end
+            if lower:find(suffix) then listed = true break end
         end
         if listed and not name:find("^%.") then table.insert(files, name) end
     end
@@ -65,7 +59,7 @@ local function listFolder(dir, extension)
     return folders, files
 end
 
----Opens the picker, does nothing while another MGE popup is open
+---Opens the picker unless another MGE popup is open
 ---@param options FilePickerOptions
 function FilePicker.open(options)
     if MGE.pickerOverlay or MGE.saveOverlay then return end
@@ -73,14 +67,14 @@ function FilePicker.open(options)
     local rootIndex = 1
     local function root() return roots[rootIndex].root end
     local selectedPath = options.selected
-    -- start in the selected file's folder when it still exists
+    -- start in the selected file's folder if it still exists
     local startParts = split(selectedPath)
     table.remove(startParts)
     local folder = table.concat(startParts, "/")
     if folder ~= "" and not is_folder(root() .. "/" .. folder) then folder = "" end
 
     local overlay = TBMenu:spawnWindowOverlay()
-    MGE.pickerOverlay = overlay -- lets MGE.quit close it
+    MGE.pickerOverlay = overlay
     local defaultKillAction = overlay.killAction
     overlay.killAction = function()
         if defaultKillAction then defaultKillAction() end
@@ -95,13 +89,13 @@ function FilePicker.open(options)
     local box = overlay:addChild({
         pos = { (WIN_W - w) / 2, (WIN_H - h) / 2 },
         size = { w, h },
-        bgColor = MGE.Widgets.CONTENT_BG, -- like MGE's lists and editor
+        bgColor = MGE.Widgets.CONTENT_BG,
         shapeType = ROUNDED,
         rounded = 5,
         interactive = true,
     })
-    -- the overlay blocks list scrolling (UIScrollbarIgnore), allow it while the mouse is over the box,
-    -- like the game's replay comments. Checked by position: hovering a row takes the box's hover state
+    -- the overlay blocks list scrolling (UIScrollbarIgnore): allow it over the box (by position: rows
+    -- take the box's hover state)
     box:addCustomDisplay(function()
         UIScrollbarIgnore = not (MOUSE_X >= box.pos.x and MOUSE_X <= box.pos.x + box.size.w and
             MOUSE_Y >= box.pos.y and MOUSE_Y <= box.pos.y + box.size.h)
@@ -112,7 +106,7 @@ function FilePicker.open(options)
     local listY = TITLE_H + barH
     local listH = h - listY - BUTTON_H - PADDING * 2
 
-    -- redrawn on scroll: covers rows that scroll past the list edges, holds everything around the list
+    -- redrawn on scroll, covering rows scrolled past the list edges
     local toReload = box:addChild({
         pos = { 0, 0 },
         size = { w, h },
@@ -120,7 +114,7 @@ function FilePicker.open(options)
     local header = toReload:addChild({
         pos = { 0, 0 },
         size = { w, listY },
-        bgColor = MGE.Widgets.CONTENT_BG, -- like MGE's lists and editor
+        bgColor = MGE.Widgets.CONTENT_BG,
     })
     header:addChild({
         pos = { PADDING, 0 },
@@ -129,12 +123,12 @@ function FilePicker.open(options)
     local folderBar = header:addChild({
         pos = { PADDING, TITLE_H },
         size = { innerW, barH },
-        bgColor = MGE.Widgets.BAR_COLOR, -- the folder bar, darker than the panel
+        bgColor = MGE.Widgets.BAR_COLOR,
     })
     local footer = toReload:addChild({
         pos = { 0, listY + listH },
         size = { w, h - listY - listH },
-        bgColor = MGE.Widgets.CONTENT_BG, -- like MGE's lists and editor
+        bgColor = MGE.Widgets.CONTENT_BG,
     })
     local rowsHolder = box:addChild({
         pos = { PADDING, listY },
@@ -152,7 +146,7 @@ function FilePicker.open(options)
 
     local rebuild
     ---@type { path: string, time: number }?
-    local lastClick = nil -- a double click on a file confirms
+    local lastClick = nil -- for double clicks
 
     local function openFolder(path)
         folder = path
@@ -161,7 +155,7 @@ function FilePicker.open(options)
     end
 
     rebuild = function()
-        -- folder bar: back button (not at the root), the folder shown, the root switches (several roots)
+        -- folder bar: back (not at the root), the folder, root switches
         folderBar:kill(true)
         local backW = folder ~= "" and barH * 2 or 0
         if folder ~= "" then
@@ -169,7 +163,7 @@ function FilePicker.open(options)
                 local parts = split(folder)
                 table.remove(parts)
                 openFolder(table.concat(parts, "/"))
-            end, nil, MGE.Widgets.PANEL_STYLE) -- lighter than the dark folder bar
+            end, nil, MGE.Widgets.PANEL_STYLE)
         end
         local switchW = #roots > 1 and math.min(110, innerW / 4) or 0
         for i = #roots > 1 and 1 or 2, #roots do
@@ -199,13 +193,12 @@ function FilePicker.open(options)
             table.insert(items, { label = shown, path = prefix .. shown })
         end
 
-        -- kill(true) keeps the holder, kill() would leave destroyed elements in the parent's child list
+        -- kill(true) keeps the holder (kill() leaves it destroyed in its parent's child list)
         rowsHolder:kill(true)
         ---@type { row: UIElement, index: integer }?
         local selectedRow = nil
         ScrollList.create(rowsHolder, { x = 0, y = 0, w = innerW, h = listH }, items, function(row, item, index)
             if item.folder then
-                -- folder icon in front of the name, file rows keep their text at the same spot
                 local iconSize = row.size.h - 8
                 MGE.Widgets.trackImage(row:addChild({
                     pos = { 5, (row.size.h - iconSize) / 2 },
@@ -244,7 +237,6 @@ function FilePicker.open(options)
         { label = TB_MENU_LOCALIZED.BUTTONCANCEL, onClick = close },
         { label = options.confirmLabel or "OK", onClick = confirm },
     }) do
-        -- MGE's buttons (Widgets.button): the menu's colors, font and shape
         MGE.Widgets.button(footer, { x = PADDING + (i - 1) * (buttonW + PADDING), y = PADDING, w = buttonW,
             h = BUTTON_H }, info.label, info.onClick)
     end

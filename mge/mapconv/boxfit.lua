@@ -1,7 +1,5 @@
--- Map converter: one box per brush. Most map brushes are boxes (walls, floors, crates), those come out
--- exact. Other shapes get the smallest box around them, except ramps: a box around a wedge would be a
--- block in the way, so a brush with a walkable slope that fits badly becomes a thin slab under its
--- slope instead
+-- Map converter: one box per brush, exact for box brushes, else the smallest box around it. Badly
+-- fitting ramps become a thin slab under the slope instead of a blocking box
 MGE.MapConv = MGE.MapConv or {}
 local MapConv = MGE.MapConv
 
@@ -28,9 +26,7 @@ end
 ---@return number[] column k of m
 local function column(m, k) return { m[1][k], m[2][k], m[3][k] } end
 
----Same box, axes reordered and turned so the one closest to world Z is the third (pointing up) and
----the one closest to world X the first: an axis aligned brush gets rot 0 0 0, a turned wall only a Z
----angle, which reads well in the editor's Rot row
+---Reorders the axes: closest to world Z third (up), closest to X first, so aligned brushes get rot 0 0 0
 ---@param box MapBox
 local function canonicalize(box)
     local cols = { column(box.frame, 1), column(box.frame, 2), column(box.frame, 3) }
@@ -56,8 +52,7 @@ end
 ---@return MapBox
 local function boxInFrame(verts, frame)
     local min, max = { math.huge, math.huge, math.huge }, { -math.huge, -math.huge, -math.huge }
-    -- the frame's numbers in locals once (this runs for every vertex of every fit): same sums as
-    -- frame[r][k] * v[r] added up in row order
+    -- hot loop: frame in locals, same summation order
     local r1, r2, r3 = frame[1], frame[2], frame[3]
     for k = 1, 3 do
         local a, b, c = r1[k], r2[k], r3[k]
@@ -78,8 +73,7 @@ local function boxInFrame(verts, frame)
     return { center = center, frame = frame, sides = { max[1] - min[1], max[2] - min[2], max[3] - min[3] }, kind = "box" }
 end
 
----Unit vector perpendicular to a: world Z flattened onto a's plane (X for a near Z), keeps boxes
----around walls upright
+---Unit vector perpendicular to a (world Z flattened, X when a is near Z): keeps wall boxes upright
 local function perpendicularTo(a)
     local ref = math.abs(a[3]) < 0.9 and { 0, 0, 1 } or { 1, 0, 0 }
     return Vec.normalize(sub(ref, scale(a, dot(ref, a))))
@@ -100,8 +94,7 @@ local function distinctAxes(faces)
     return axes
 end
 
----Thin box under a face: the face's smallest rectangle (tried along each of its edges), thickness
----going into the brush
+---Thin box under a face: its smallest rectangle (along each edge), extending into the brush
 ---@param geometry MapGeometry
 ---@param face MapFace
 ---@param thickness number map units, less when the brush is thinner
@@ -160,9 +153,8 @@ function BoxFit.fit(geometry, options)
     end
     local best, bestVolume
     local tried = {}
-    ---column k of frame is column j of t, either way round (to 1e-12 per number: compiled brushes'
-    ---faces are often only nearly perpendicular, their frames aren't quite orthonormal, a dot product
-    ---test called those the same)
+    ---column k of frame equals column j of t either way round, to 1e-12 per number (a dot product
+    ---test misjudged compiled brushes' nearly perpendicular faces)
     local abs = math.abs
     local function sameColumn(frame, k, t, j)
         local same, flipped = true, true
@@ -221,18 +213,13 @@ end
 ---@field slabThickness number map units
 ---@field terrainTolerance number map units a patch may be bumpy and still be one slab
 
--- a patch whose slab is filled less than this by the patch itself is split (down to single cells):
--- a displacement isn't always a rectangle, the wall under a staircase (dust2) is a trapezoid with a
--- slanted edge, one slab over it sticks out over the stairs
+-- patches filling their slab less than this are split (non-rectangular displacements)
 BoxFit.terrainFill = 0.65
 
----Slabs for a terrain grid (bsp.lua's MapTerrain). A patch flat within terrainTolerance becomes one
----slab: its top on the patch's highest point, slabThickness deep behind it (more when a single cell is
----bumpier). Bumpier patches are split in four, down to single cells, and so are patches their slab
----barely covers (BoxFit.terrainFill). A slab's sides follow the world (walls upright, floors along x
----and y) unless one of the patch's edges gives a smaller one (a turned grid): a slanted edge would
----turn it (dust2's stair walls came out as diamonds). Slabs of a flat floor all get the same thickness
----and height, so merge.lua can join neighbours
+---Slabs for a terrain grid: a patch flat within terrainTolerance becomes one slab (top at its highest
+---point, slabThickness deep); bumpier or barely covered patches split in four, down to single cells.
+---Slabs follow world axes unless a patch edge fits smaller; flat floors get equal slabs so merge.lua
+---can join them
 ---@param terrain MapTerrain
 ---@param options TerrainFitOptions
 ---@return MapBox[]
@@ -277,9 +264,7 @@ function BoxFit.terrain(terrain, options)
             patch(im, i1, jm, j1)
         end
         if high - low > options.terrainTolerance and i1 - i0 >= 2 then return split() end
-        -- the slab's sides: the world's directions first, a patch edge only when its box is smaller.
-        -- A direction along or across one already tried gives the same box (its sides swapped): not
-        -- fitted again (on most grids the edges run along the world's axes)
+        -- world directions first, a patch edge only if smaller; directions already tried are skipped
         local box, boxArea
         local tried = {}
         local function try(u)

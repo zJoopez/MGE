@@ -1,11 +1,8 @@
--- The pool rule: which pool object stands in for which atmo collider each fight frame. Pure logic: Pool.step returns
--- the changes, driver.lua moves the objects. It reads only the players' centers and its own previous assignment, so
--- the same frames give the same moves. A mod names its rule in the header (rule=1), so a later rule gets a new number.
---
--- Rule 1 (stable nearest), per group (Colliders.groupKey): the colliders within `radius` of any center (distance to
--- the surface), nearest first, ties by index, as many as the group has pool objects. A pool object keeps its collider
--- while that one is still wanted; the others, in id order, take the wanted ones nobody holds, nearest first; the rest
--- park. Keeping means few moves (each one a set_obj_* call and a replay line).
+-- The pool rule: which pool object stands in for which collider each fight frame. Pure and deterministic
+-- (centers plus the previous assignment); driver.lua applies the changes. The header names the rule.
+-- Rule 1 (stable nearest), per group: colliders within `radius` of any center, nearest first (ties by
+-- index), as many as the group's pool. Objects keep still-wanted colliders; the rest take unheld ones
+-- nearest first, or park. Fewer moves means fewer set_obj_* calls and replay lines
 
 local NS = ATMOPLAY_LOADING
 
@@ -105,7 +102,7 @@ function Pool.new(objects, colliders, params, options)
         table.sort(list, function(a, b) return a.index < b.index end)
     end
     if not (options and options.grid == false) then
-        -- built once (colliders never move); x / y only: height is checked per collider anyway
+        -- built once (colliders never move); x / y only
         state.cellSize = math.max(state.radius * 2, 1)
         state.cells = {}
         for group, list in pairs(state.targets) do
@@ -243,9 +240,8 @@ end
 ---@field objects { id: integer, group: string }[] the pool objects to write, by id
 ---@field groups { group: string, colliders: integer, peak: integer, pool: integer }[] most needed first
 
----The pool a playable mod gets: the free ids split by group, one per group first (most needed first), then always to
----the group with the highest peak / (pool + 1), never more than a group has colliders. By peak demand, not by
----collider count: a group of few big floors is near the players all the time. Ties by group name
+---Splits the free ids by group: one each first (most needed first), then to the highest peak / (pool + 1),
+---capped at the group's colliders. Peak demand, not count: a few big floors are always near players
 ---@param colliders AtmoPlayCollider[]
 ---@param free integer[] free ids in the order they're handed out
 ---@param radius number the pool rule's radius

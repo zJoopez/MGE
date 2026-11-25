@@ -1,34 +1,19 @@
--- Map converter: brush geometry. A brush is the convex space inside all of its planes; this finds its
--- corners, face polygons and volume. Units are the map's own (Source: inches)
+-- Map converter: brush geometry. A brush is the convex space inside its planes; this finds its corners,
+-- faces and volume, in map units (Source: inches)
 MGE.MapConv = MGE.MapConv or {}
 local MapConv = MGE.MapConv
 
 local Brush = {}
 MapConv.Brush = Brush
 
--- small vector helpers, shared with boxfit.lua and convert.lua
-local Vec = {}
+-- vector helpers (utils/mat3.lua), shared with boxfit.lua and convert.lua
+local Vec = MGE.Mat3.vec
 MapConv.Vec = Vec
 
-function Vec.add(a, b) return { a[1] + b[1], a[2] + b[2], a[3] + b[3] } end
-function Vec.sub(a, b) return { a[1] - b[1], a[2] - b[2], a[3] - b[3] } end
-function Vec.scale(a, s) return { a[1] * s, a[2] * s, a[3] * s } end
-function Vec.dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
-function Vec.cross(a, b)
-    return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] }
-end
-function Vec.length(a) return math.sqrt(Vec.dot(a, a)) end
----@return number[]? nil for a zero vector
-function Vec.normalize(a)
-    local l = Vec.length(a)
-    if l < 1e-12 then return nil end
-    return { a[1] / l, a[2] / l, a[3] / l }
-end
-
 local sub, scale, dot, cross = Vec.sub, Vec.scale, Vec.dot, Vec.cross
-local atan2 = math.atan2 or math.atan -- newer Lua takes two arguments in atan
+local atan2 = math.atan2 or math.atan -- 5.1 has atan2
 
-local INSIDE_EPS = 0.02 -- how far outside a plane a corner may be and still count (map units)
+local INSIDE_EPS = 0.02 -- how far outside a plane a corner may be (map units)
 local SAME_EPS = 0.05 -- corners closer than this are the same corner
 
 ---@class MapPlane
@@ -36,9 +21,8 @@ local SAME_EPS = 0.05 -- corners closer than this are the same corner
 ---@field d number n . p = d on the plane, smaller inside
 ---@field material string
 
----Plane through three points the way Hammer writes them, clockwise seen from outside: then
----(p3 - p1) x (p2 - p1) points out. Brush.build tries a brush flipped when it comes out empty, so a
----file with the other winding still works
+---Plane through three points in Hammer's winding (clockwise from outside: (p3 - p1) x (p2 - p1) points
+---out). Brush.build retries flipped if a brush comes out empty
 ---@param points number[][]
 ---@return MapPlane? nil when the points are on one line
 function Brush.planeFromPoints(points)
@@ -48,9 +32,8 @@ function Brush.planeFromPoints(points)
     return { n = n, d = dot(n, p1) }
 end
 
----Corners of the brush: every three planes' crossing point (a.d (b x c) + b.d (c x a) + c.d (a x b))
----/ (a . (b x c)), none when two are parallel) that's inside all the others. Every triple of planes
----is tried, so the math is written out on numbers instead of making three vector tables per triple
+---Corners: every plane triple's crossing point (a.d (b x c) + b.d (c x a) + c.d (a x b)) / (a . (b x c))
+---that's inside all other planes. Written out on numbers: it runs for every triple
 ---@param planes MapPlane[]
 ---@return number[][] corners
 local function corners(planes)
@@ -117,9 +100,8 @@ end
 ---@field min number[] bounding box
 ---@field max number[]
 
--- polygonArea, buildFaces and volumeOf run for every brush of a map: their vector math is written out
--- on numbers (no table per step), each sum in the same order as the Vec helpers, so the results are
--- the same to the last bit
+-- polygonArea, buildFaces and volumeOf run per brush: written out on numbers, summed in the same order
+-- as the Vec helpers so results match to the last bit
 
 ---Area of a face polygon
 local function polygonArea(verts, idx)
@@ -137,8 +119,7 @@ local function polygonArea(verts, idx)
     return math.sqrt(tx * tx + ty * ty + tz * tz) / 2
 end
 
----Faces from the corners on each plane, sorted around their middle. Planes with fewer than 3 corners
----don't touch the brush (redundant sides) and are left out
+---Faces from each plane's corners, sorted around their middle; planes with < 3 corners are redundant
 ---@param planes MapPlane[]
 ---@param verts number[][]
 ---@return MapFace[]
@@ -172,7 +153,7 @@ local function buildFaces(planes, verts)
             else
                 u1, u2, u3 = u1 / l, u2 / l, u3 / l
             end
-            -- w = n x u: u to w turns counterclockwise seen from outside
+            -- w = n x u: counterclockwise from outside
             local w1, w2, w3 = n2 * u3 - n3 * u2, n3 * u1 - n1 * u3, n1 * u2 - n2 * u1
             for _, i in ipairs(idx) do
                 local v = verts[i]

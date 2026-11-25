@@ -1,14 +1,10 @@
--- Dynamic atmo props (docs/atmo-play-plan.md, sections 6-7): atmo objects whose flag lacks the static bit. A playable
--- mod with props has a second pool: dynamic objects on ids 1-48 (visible 1: they get the game's move predictions),
--- parked on a hidden platform high above the map (a dynamic body parked below z = 0 is pushed out of the ground).
---
--- Fights (once per new match frame, between physics steps):
---   * props near a player, one of the mod's own dynamic objects, or a moving carried prop (chain) are wanted,
---     ranked by tier, then by the gap LOOKAHEAD seconds ahead; each wanted one takes a free pool object of its group
---   * a carried prop is let go when unwanted, at rest and untouched; a full pool frees its least wanted one
---   * while carried, the pool object is the prop on screen (painted its color); Atmo Play draws the free ones
--- Props no object carries fly drawn (flight.lua). Replays move nothing: the pool objects are watched, takes and
--- releases kept as events by frame so a rewind rebuilds the props from them (and snapshots).
+-- Dynamic atmo props (docs/atmo-play-plan.md, sections 6-7): atmo objects without the static bit, carried by a
+-- second pool of visible dynamic objects on ids 1-48, parked on a hidden platform above the map (below z = 0
+-- they'd be pushed out of the ground).
+-- Fights, once per new match frame: props near players, the mod's dynamic objects or moving carried props are
+-- wanted (by tier, then the gap LOOKAHEAD seconds ahead) and take a free pool object of their group; carried props
+-- are released when unwanted, at rest and untouched (a full pool frees the least wanted). Uncarried props fly
+-- drawn (flight.lua). Replays move nothing: takes and releases are kept as events (and snapshots) for rewinds
 
 local NS = ATMOPLAY_LOADING
 

@@ -1,8 +1,5 @@
--- Core tab: Pos, Rot, Scale (math in utils/transforms.lua), Color, Mass, Shape, Visible, and
--- Atmo: To atmo (Objects list) / To objects (Atmo list; a separate .atmo file is World > Export).
--- Also the Atmo list's Core tab: the same rows on the selected atmo objects (ModData.getEditSelection),
--- through their lines only (an atmo object's id isn't an object's). Mass (props) and Visible ("visible 0":
--- solid, not drawn) act in Atmo Play; the game's own atmo ignores both lines
+-- Core tab: Pos, Rot, Scale, Color, Mass, Shape, Visible and To atmo / To objects. On the Atmo list the
+-- same rows edit atmo lines only; Mass and Visible act in Atmo Play (the game's atmo ignores them)
 local Rows = MGE.EditorRows
 local ModData = MGE.ModData
 local History = MGE.History
@@ -18,18 +15,16 @@ local function refreshProperties() Rows.refreshProperties() end
 
 local Transforms = MGE.Transforms
 
--- a transform field applies only itself (only = its index): the row's other fields are left as they are
+-- a transform field applies only itself (only = its index)
 local function positionSelected(only) Transforms.positionTo(readInputs(inwuts.position, only)) end
 local function angleSelected(only) Transforms.angleTo(readInputs(inwuts.angle, only)) end
 local function sizeSelected(only) Transforms.sizeTo(readInputs(inwuts.size, only)) end
 local shownPosition, groupAngles, groupExtents = Transforms.shownPosition, Transforms.groupAngles, Transforms.groupExtents
 
--- the Pos / Rot / Scale names by gizmo tool, rebuilt with the rows, the active tool's lit
+-- the Pos / Rot / Scale names, lit for the active gizmo tool
 local transformLabels, highlightTransformLabels = Rows.gizmoLabels()
 
----Pos / Rot / Scale rows: the group ends up at the typed values. Placeholders show the selection's current
----center, orientation (degrees) and size ("0.00" without a selection). Small steps: the mouse wheel. The name
----of the active gizmo tool's row is lit
+---Pos / Rot / Scale rows; placeholders show the selection's center, angles (degrees) and size
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[]
 local function buildMeasuredRows(holder, selected)
@@ -37,7 +32,6 @@ local function buildMeasuredRows(holder, selected)
     local zeros = { 0, 0, 0 }
     local any = #selected > 0
     local _
-    -- number placeholders: shown with 2 decimals, the wheel steps from the real values
     inwuts.position, _, transformLabels.move = createInputRow("Pos", holder, function(_, i) positionSelected(i) end,
         any and shownPosition(selected) or zeros,
         "Moves the selection's center to X, Y, Z.")
@@ -51,29 +45,25 @@ local function buildMeasuredRows(holder, selected)
     highlightTransformLabels()
 end
 
--- an object's color when neither its file line nor the game has one (0-255), and the placeholders
--- without a selection
+-- color without a line or live value, and placeholders without a selection (0-255)
 local COLOR_DEFAULTS = { 0, 0, 0, 255 }
 
----An object's color as the game takes it, r g b a (1 is 255): its file line (what MGE writes and
----saves), else the game's live color, else COLOR_DEFAULTS
+---An object's color r g b a (1 is 255): its line, else the live color, else COLOR_DEFAULTS
 ---@param obj FileParserEnvObj
 ---@return number[]
 local function colorUnits(obj)
     local c = {}
     for n in (obj.props.color or ""):gmatch("%S+") do c[#c + 1] = tonumber(n) end
-    if #c < 4 and obj.kind ~= "atmo" then -- an atmo object has only its line
-        -- a Color (number[] in toriui), or four numbers (pcall: not worth an error in the panel)
-        local ok, r, g, b, a = pcall(get_obj_color, obj.id - 1)
-        if ok and type(r) == "table" then r, g, b, a = r[1], r[2], r[3], r[4] end
-        if ok then c = { tonumber(r), tonumber(g), tonumber(b), tonumber(a) } end
+    if #c < 4 and obj.kind ~= "atmo" then -- atmo objects only have their line
+        local r, g, b, a = MGE.AtmoLayer.liveColor(obj.id - 1)
+        if r then c = { tonumber(r), tonumber(g), tonumber(b), tonumber(a) } end
     end
     local out = {}
     for i = 1, 4 do out[i] = c[i] or COLOR_DEFAULTS[i] / 255 end
     return out
 end
 
----An object's color as 0-255 r g b a, what the fields show
+---@return integer[] the color as 0-255 r g b a (the fields)
 ---@param obj FileParserEnvObj
 ---@return integer[]
 local function colorOf(obj)
@@ -82,7 +72,7 @@ local function colorOf(obj)
     return out
 end
 
----Gives each selected object a color (r g b a, 1 is 255): set live and written, one undo step
+---Sets each object's color (1 is 255) live and in its line, one undo step
 ---@param objects FileParserEnvObj[]
 ---@param colorFor fun(obj: FileParserEnvObj): number[]
 local function setColors(objects, colorFor)
@@ -92,11 +82,10 @@ local function setColors(objects, colorFor)
         Transforms.writeVector(v, "color", color)
     end
     History.commit()
-    refreshProperties() -- the placeholders show the new color
+    refreshProperties()
 end
 
----Sets the channels typed in the color fields (r g b a, 0-255) on the selected objects; an empty field
----keeps each object's own value of that channel
+---Sets the typed channels (0-255) on the selection; empty fields keep each object's own
 local function adjustColor()
     local selectedObjects = getSelected()
     if #selectedObjects == 0 then return end
@@ -105,7 +94,7 @@ local function adjustColor()
     setColors(selectedObjects, function(v)
         local current, color = colorOf(v), {}
         for i = 1, 4 do
-            -- 255 is the official max, the game accepts up to 500 and draws those brighter
+            -- the game accepts up to 500 (brighter)
             color[i] = math.max(0, math.min(500, typed[i] or current[i])) / 255
         end
         return color
@@ -115,13 +104,11 @@ end
 ---@type UIElement? the Color row's name button, lit while picking (rebuilt with the panel)
 local colorLabel = nil
 
----Pick from world (the color picker's button): the next object clicked in the world gives the selection
----its exact color, all four channels. The Color name or Esc cancels (MGE.closeTopOverlay)
+---Pick from world: the next clicked object gives the selection its color. Color name or Esc cancels
 local function pickFromWorld()
     MGE.WorldSelect.startPick(function(source)
         local color = colorUnits(source)
-        -- the objects selected now: the selection may have changed in the list meanwhile
-        local now = getSelected()
+        local now = getSelected() -- may have changed meanwhile
         if #now == 0 then return end
         setColors(now, function() return color end)
         MGE.say(string.format("%d objects got object %d's color", #now, source.id))
@@ -132,8 +119,7 @@ local function pickFromWorld()
     MGE.say("click an object: the selection gets its color (Esc cancels)")
 end
 
----The Color row's name: the color picker (ui/color_picker.lua), starting from the first selected object's
----color. Apply gives every selected object that color. While a pick from the world runs: cancels it
+---The Color name: opens the color picker on the first selected color (or cancels a running pick)
 local function pickColor()
     local WorldSelect = MGE.WorldSelect
     if WorldSelect.picking then
@@ -148,7 +134,7 @@ local function pickColor()
     MGE.ColorPicker.open({
         color = colorUnits(targets[1]),
         onApply = function(color)
-            local now = getSelected() -- the objects selected now
+            local now = getSelected()
             if #now == 0 then return end
             setColors(now, function() return color end)
         end,
@@ -156,8 +142,7 @@ local function pickColor()
     })
 end
 
----Color and mass rows (core panel). Placeholders show the selection's values per channel, "mixed"
----where the objects differ
+---Color and Mass rows (placeholders per channel, "mixed" where objects differ)
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[]
 local function buildCoreProps(holder, selected)
@@ -173,22 +158,20 @@ local function buildCoreProps(holder, selected)
     inwuts.color, _, colorLabel = createInputRow("Color", holder, function() adjustColor() end, colorHints,
         "RGBA 0-255 (up to 500: brighter), empty fields\nkeep each object's own. Click the name: color picker.",
         pickColor)
-    Rows.setHighlighted(colorLabel, MGE.WorldSelect.picking ~= nil) -- rebuilt while picking
+    Rows.setHighlighted(colorLabel, MGE.WorldSelect.picking ~= nil)
     inwuts.coreProps = Rows.buildPropertyRows(holder, selected, { { "Mass", "mass" } })
 end
 
--- Shape, flags and visibility. Shape and the static flag are read when the mod loads, so they're
--- saved (undo restores them the same way). Other flags and visibility are set live and saved with
--- the next save.
+-- Shape applies by reloading; visibility live
 
--- names used in mod files, indexed by get_obj_shape
+-- mod file names by get_obj_shape
 local SHAPE_FILE_NAMES = { [SHAPE.SPHERE] = "sphere", [SHAPE.BOX] = "box", [SHAPE.CAPSULE] = "cylinder" }
 
 ---@param obj FileParserEnvObj
 ---@return string
 local function getShape(obj)
     local shape = obj.props.shape and obj.props.shape:lower()
-    if shape == "capsule" then shape = "cylinder" end -- the same pill (atmos write either)
+    if shape == "capsule" then shape = "cylinder" end -- atmos write either
     return shape or obj.kind ~= "atmo" and SHAPE_FILE_NAMES[get_obj_shape(obj.id - 1)] or "box"
 end
 
@@ -205,8 +188,7 @@ local function isVisible(obj)
     return vis ~= 0
 end
 
----Shows or hides selected objects, applied live (set_obj_vis) and saved with the next save. Atmo objects:
----the line only (Rows.afterAtmoEdit)
+---Shows or hides the selection live (atmo: the line only)
 ---@param visible boolean
 local function setVisible(visible)
     local value = visible and "1" or "0"
@@ -224,14 +206,14 @@ local function setVisible(visible)
     if atmo then Rows.afterAtmoEdit() else refreshProperties() end
 end
 
----Shape and visibility rows (core panel), the selection's current values are highlighted
+---Shape and Visible rows
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[]
 local function buildLooks(holder, selected)
     createChoiceRow("Shape", holder, {
         { label = "Box", value = "box" },
         { label = "Sphere", value = "sphere" },
-        { label = "Pill", value = "cylinder" }, -- "cylinder" in mod files, round ends in game
+        { label = "Pill", value = "cylinder" },
     }, sharedChoice(selected, getShape), function(shape) Rows.setSelectedProp("shape", shape) end,
         "Sides are kept, so the size may look different.")
     createChoiceRow("Visible", holder, {
@@ -243,9 +225,7 @@ local function buildLooks(holder, selected)
 end
 
 
----Atmo row (the Core tab's last): moving between the lists. On the Objects list To atmo (the selected objects
----into the atmo), on the Atmo list To objects. Rebuilt with the list it's on (utils/atmo_layer.lua). The atmo is
----saved inside the mod; a separate .atmo file is World > Export
+---Atmo row: To atmo on the Objects list, To objects on the Atmo list
 ---@param holder UIElement
 local function buildLayerRow(holder)
     if atmoShown() then
@@ -259,11 +239,11 @@ local function buildLayerRow(holder)
     end
 end
 
----Color, Mass, Shape, Visible and the Atmo row as one block, on both lists
+---Color, Mass, Shape, Visible and Atmo as one block
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[]
 local function buildCoreRest(holder, selected)
-    buildCoreProps(holder, selected) -- starts the rows (Rows.begin)
+    buildCoreProps(holder, selected) -- calls Rows.begin
     buildLooks(holder, selected)
     buildLayerRow(holder)
 end

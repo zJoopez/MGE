@@ -1,8 +1,7 @@
--- Atmo Play drawing the atmo itself (`draw own`, the default): the plain shapes, only those on screen, from one draw3d
--- loop (the game's atmo draws every element every frame, seen or not). Static shapes are listed by x / y cell, so a
--- cell off screen skips all of its shapes. The game's atmo keeps everything else (models, random, animated, scripted,
--- parented, player lines) and the header. Props are drawn where they are now, not while carried.
--- Not drawn by anyone: "visible 0" and alpha 0.
+-- Atmo Play draws the plain atmo shapes itself, on screen only (the game's atmo draws everything every frame),
+-- binned by x / y cell so off-screen cells are skipped whole. The game's atmo keeps the rest (models, random,
+-- animated, scripted, parented, player lines) and the header. Props are drawn where they are, not while carried.
+-- "visible 0" and alpha 0 aren't drawn
 
 local NS = ATMOPLAY_LOADING
 
@@ -56,8 +55,7 @@ local function gameReason(e, parents)
     return nil
 end
 
----Splits an atmo: the plain shapes Atmo Play draws, and the lines the game's atmo keeps (the header and the other
----entities as they were). Props are always Atmo Play's (they move)
+---Splits an atmo into the plain shapes Atmo Play draws (props always: they move) and the lines the game keeps
 ---@param atmoLines string[]
 ---@param props table<integer, any>? the props by atmo index
 ---@return { items: AtmoPlayDrawItem[], gameLines: string[], own: integer, game: integer, hidden: integer }
@@ -73,17 +71,22 @@ function Drawer.split(atmoLines, props)
     for index, e in ipairs(entities) do
         local p = e.props
         local isProp = props ~= nil and props[index] ~= nil
-        local alpha = colorOf(p.color)[4]
-        if (p.visible and p.visible:match("^0")) or (alpha <= 0 and not gameReason(e, parents)) then
+        local colorLine = p.color or "" -- one table per color line: drawing sets the color only when it changes
+        local color = colors[colorLine]
+        if not color then
+            color = colorOf(p.color)
+            colors[colorLine] = color
+        end
+        local reason = gameReason(e, parents)
+        if (p.visible and p.visible:match("^0")) or (color[4] <= 0 and not reason) then
             hidden = hidden + 1
-        elseif not isProp and (gameReason(e, parents) or not p.pos) then
+        elseif not isProp and (reason or not p.pos) then
             game = game + 1
             for _, line in ipairs(e.lines) do gameLines[#gameLines + 1] = line end
         else
             own = own + 1
-            local word = tostring(p.shape or "box"):match("^%s*(%a+)") or "box"
-            local shape = (word == "sphere") and "sphere" or ((word == "cylinder" or word == "capsule") and "capsule")
-                or "box"
+            local shape = Colliders.shapeOf(p.shape) or "box" -- the game draws pills as capsules
+            if shape == "cylinder" then shape = "capsule" end
             local s = numbers(p.sides)
             local size = { s[1] or 1, s[2] or 1, s[3] or 1 }
             local radius = Colliders.radius(shape, { math.abs(size[1]), math.abs(size[2]), math.abs(size[3]) })
@@ -94,12 +97,6 @@ function Drawer.split(atmoLines, props)
                 rots[rotLine] = rot
             end
             local pos = numbers(p.pos)
-            local colorLine = p.color or "" -- one table per color line: drawing sets the color only when it changes
-            local color = colors[colorLine]
-            if not color then
-                color = colorOf(p.color)
-                colors[colorLine] = color
-            end
             items[#items + 1] = {
                 index = index, shape = shape, pos = { pos[1] or 0, pos[2] or 0, pos[3] or 0 }, size = size, rot = rot,
                 color = color, noDepth = p.no_depth ~= nil and p.no_depth:match("^1") ~= nil or nil,
@@ -238,12 +235,12 @@ local visible, cellOrder = {}, {}
 local function nearer(a, b) return a.dist < b.dist end
 local function cellNearer(a, b) return a.near < b.near end
 
--- orderNearest's lists: a bucket sort by distance (no comparisons: table.sort of thousands was most of a frame)
+-- orderNearest's buckets: sorting thousands with table.sort was most of a frame
 local BUCKETS = 256
 local bucketCount, bucketEnd, bucketOf, ordered, boundary = {}, {}, {}, {}, {}
 
----visible[1..n] near to far by buckets of distance (nearly sorted: the game keeps the first ones it's sent when it
----caps draws), exactly sorted around the most-th, so visible[1..most] are exactly the nearest most
+---visible[1..n] near to far by distance buckets, exactly sorted in the bucket holding the most-th, so
+---visible[1..most] are exactly the nearest most
 local function orderNearest(n, most)
     if n < 2 then return end
     local sqrt, lo, hi = math.sqrt, math.huge, 0
@@ -286,10 +283,8 @@ local function orderNearest(n, most)
     for k = 1, m do visible[first + k - 1] = boundary[k] end
 end
 
----draw3d: the shapes on screen, nearest the camera first, at most maxDraws (if the game caps draws, the near ones
----make it; the GPU skips what they hide). Cells are visited nearest first; once maxDraws are in hand, the farthest
----of those is a threshold: cells and shapes past it are skipped (the same shapes as ordering every one on screen).
----Props where they are, not while carried (their object shows them)
+---draw3d: on-screen shapes nearest first, at most maxDraws. Cells go nearest first; once maxDraws are found,
+---the farthest of them is a threshold past which cells and shapes are skipped (same result, less work)
 ---@param view table? Drawer.measureView's (nil: unordered, the first maxDraws)
 ---@param level integer the game's graphics level (0-2)
 ---@param maxDraws integer? nil or 0: all
