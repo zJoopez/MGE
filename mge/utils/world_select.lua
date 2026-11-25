@@ -45,6 +45,16 @@ local sub, add, scale, dot, cross, length, normalize = V.sub, V.add, V.scale, V.
 
 -- measuring offsets as shares of the camera distance: far first (less rounding), closer if off screen
 local MEASURE_SHARES = { 0.25, 0.05 }
+-- depths along the view axis to measure at: past the game's near clip (~5 units)
+local MEASURE_MIN_DEPTH = 10
+
+---@param dist number eye to look-at point
+---@return number[] depths to try, nearest usable first
+local function measureDepths(dist)
+    if dist >= MEASURE_MIN_DEPTH then return { dist, MEASURE_MIN_DEPTH } end
+    return { MEASURE_MIN_DEPTH, MEASURE_MIN_DEPTH * 3 }
+end
+WorldSelect.measureDepths = measureDepths -- Atmo Play's drawer has its own copy
 
 ---Screen position of target + dir * e, nil off screen (get_screen_pos, draw3d only)
 ---@return number? x, number? y
@@ -83,26 +93,30 @@ function WorldSelect.measureProjectionNow()
     local right = normalize(cross(forward, { 0, 0, 1 })) or { 1, 0, 0 } -- straight down: any right works
     local up = cross(right, forward)
 
-    -- screen offset = M * (sideways / depth). get_screen_pos rounds to pixels, so measure pairs on both
-    -- sides far out: their average is the center, their difference M, with ~10x less rounding (close
-    -- points made the gizmo shake)
-    for _, share in ipairs(MEASURE_SHARES) do
-        local e = dist * share
-        local rx1, ry1 = screenAt(target, right, e)
-        local rx2, ry2 = screenAt(target, right, -e)
-        local ux1, uy1 = screenAt(target, up, e)
-        local ux2, uy2 = screenAt(target, up, -e)
-        if rx1 and rx2 and ux1 and ux2 then
-            local k = dist / (2 * e) -- 1 / (sideways / depth) between the pair's points
-            local m11, m21 = (rx1 - rx2) * k, (ry1 - ry2) * k
-            local m12, m22 = (ux1 - ux2) * k, (uy1 - uy2) * k
-            local det = m11 * m22 - m12 * m21
-            if math.abs(det) < 1e-9 then return nil end
-            -- the target sits halfway between each pair (same depth: right and up are across the view)
-            local cx = (rx1 + rx2 + ux1 + ux2) / 4
-            local cy = (ry1 + ry2 + uy1 + uy2) / 4
-            return { eye = eye, forward = forward, right = right, up = up, cx = cx, cy = cy,
-                m11 = m11, m12 = m12, m21 = m21, m22 = m22, det = det }
+    -- screen offset = M * (sideways / depth), the same at any depth along the view axis. get_screen_pos
+    -- rounds to pixels, so measure pairs on both sides far out: their average is the center, their
+    -- difference M, with ~10x less rounding (close points made the gizmo shake). Measured at least
+    -- MEASURE_MIN_DEPTH out: free camera's look-at point is close to the eye, inside the near clip
+    for _, depth in ipairs(measureDepths(dist)) do
+        local anchor = { eye[1] + forward[1] * depth, eye[2] + forward[2] * depth, eye[3] + forward[3] * depth }
+        for _, share in ipairs(MEASURE_SHARES) do
+            local e = depth * share
+            local rx1, ry1 = screenAt(anchor, right, e)
+            local rx2, ry2 = screenAt(anchor, right, -e)
+            local ux1, uy1 = screenAt(anchor, up, e)
+            local ux2, uy2 = screenAt(anchor, up, -e)
+            if rx1 and rx2 and ux1 and ux2 then
+                local k = depth / (2 * e) -- 1 / (sideways / depth) between the pair's points
+                local m11, m21 = (rx1 - rx2) * k, (ry1 - ry2) * k
+                local m12, m22 = (ux1 - ux2) * k, (uy1 - uy2) * k
+                local det = m11 * m22 - m12 * m21
+                if math.abs(det) < 1e-9 then return nil end
+                -- the anchor sits halfway between each pair (same depth: right and up are across the view)
+                local cx = (rx1 + rx2 + ux1 + ux2) / 4
+                local cy = (ry1 + ry2 + uy1 + uy2) / 4
+                return { eye = eye, forward = forward, right = right, up = up, cx = cx, cy = cy,
+                    m11 = m11, m12 = m12, m21 = m21, m22 = m22, det = det }
+            end
         end
     end
     return nil
@@ -216,8 +230,6 @@ WorldSelect.hitSphere, WorldSelect.hitBox, WorldSelect.hitCapsule = hitSphere, h
 ---@field hit fun(origin: number[], dir: number[]): number? distance along the ray, nil when missed
 ---@field obj FileParserEnvObj?
 
----@param id integer 0-based object id
----@return WorldSelectShape?
 ---A ray-test shape. Sphere: sx radius; pill: sx radius, sy straight length along axes[3]; box: full sides
 ---@param kind "sphere"|"pill"|"box"
 ---@param center number[]
@@ -240,6 +252,8 @@ end
 local SHAPE_KIND = { [SHAPE.SPHERE] = "sphere", [SHAPE.CAPSULE] = "pill" }
 local GHOST_KIND = { sphere = "sphere", cylinder = "pill" }
 
+---@param id integer 0-based object id
+---@return WorldSelectShape?
 local function objectShape(id)
     local x, y, z = get_obj_pos(id)
     if x == nil then return nil end

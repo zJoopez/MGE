@@ -503,7 +503,7 @@ table.insert(MGE.onQuit, function() AtmoLayer.setObjectsSeeThrough(false) end)
 function AtmoLayer.exportAtmo()
     local Atmo = MGE.Atmo
     if Atmo.contentCount() == 0 then
-        MGE.say("the atmo is empty: To atmo (Objects > Core) or New add to it")
+        MGE.say("the atmo is empty: To atmo (Objects > Advanced) or New add to it")
         return
     end
     MGE.askExportName("Export atmo (atmospheres/" .. Atmo.prefix .. MGE.EXPORT_PREFIX .. "<name>)",

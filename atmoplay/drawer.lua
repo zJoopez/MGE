@@ -159,7 +159,8 @@ local function screenAt(target, dir, e)
     return x, y
 end
 
-local MEASURE_SHARES = { 0.25, 0.05 } -- of the target's distance, farthest first (MGE's world_select.lua)
+local MEASURE_SHARES = { 0.25, 0.05 } -- of the measuring depth, farthest first (MGE's world_select.lua)
+local MEASURE_MIN_DEPTH = 10 -- past the game's near clip (~5 units)
 
 ---This frame's camera: eye, axes and the screen mapping, measured with get_screen_pos around its target. nil: draw
 ---everything
@@ -175,20 +176,25 @@ function Drawer.measureView()
     if not forward then return nil end
     local right = normalize(cross(forward, { 0, 0, 1 })) or { 1, 0, 0 }
     local up = cross(right, forward)
-    for _, share in ipairs(MEASURE_SHARES) do
-        local e = dist * share
-        local rx1, ry1 = screenAt(target, right, e)
-        local rx2, ry2 = screenAt(target, right, -e)
-        local ux1, uy1 = screenAt(target, up, e)
-        local ux2, uy2 = screenAt(target, up, -e)
-        if rx1 and rx2 and ux1 and ux2 then
-            local k = dist / (2 * e)
-            local m11, m21 = (rx1 - rx2) * k, (ry1 - ry2) * k
-            local m12, m22 = (ux1 - ux2) * k, (uy1 - uy2) * k
-            if math.abs(m11 * m22 - m12 * m21) < 1e-9 then return nil end
-            return { eye = eye, forward = forward, right = right, up = up, cx = (rx1 + rx2 + ux1 + ux2) / 4,
-                cy = (ry1 + ry2 + uy1 + uy2) / 4, m11 = m11, m12 = m12, m21 = m21, m22 = m22,
-                w = rawget(_G, "WIN_W") or 1920, h = rawget(_G, "WIN_H") or 1080 }
+    -- at least MEASURE_MIN_DEPTH out: free camera's look-at point is close to the eye, inside the near clip
+    local depths = dist >= MEASURE_MIN_DEPTH and { dist, MEASURE_MIN_DEPTH } or { MEASURE_MIN_DEPTH, MEASURE_MIN_DEPTH * 3 }
+    for _, depth in ipairs(depths) do
+        local anchor = { eye[1] + forward[1] * depth, eye[2] + forward[2] * depth, eye[3] + forward[3] * depth }
+        for _, share in ipairs(MEASURE_SHARES) do
+            local e = depth * share
+            local rx1, ry1 = screenAt(anchor, right, e)
+            local rx2, ry2 = screenAt(anchor, right, -e)
+            local ux1, uy1 = screenAt(anchor, up, e)
+            local ux2, uy2 = screenAt(anchor, up, -e)
+            if rx1 and rx2 and ux1 and ux2 then
+                local k = depth / (2 * e)
+                local m11, m21 = (rx1 - rx2) * k, (ry1 - ry2) * k
+                local m12, m22 = (ux1 - ux2) * k, (uy1 - uy2) * k
+                if math.abs(m11 * m22 - m12 * m21) < 1e-9 then return nil end
+                return { eye = eye, forward = forward, right = right, up = up, cx = (rx1 + rx2 + ux1 + ux2) / 4,
+                    cy = (ry1 + ry2 + uy1 + uy2) / 4, m11 = m11, m12 = m12, m21 = m21, m22 = m22,
+                    w = rawget(_G, "WIN_W") or 1920, h = rawget(_G, "WIN_H") or 1080 }
+            end
         end
     end
     return nil

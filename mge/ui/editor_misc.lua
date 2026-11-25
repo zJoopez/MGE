@@ -155,22 +155,6 @@ local function resetAll()
     end
 end
 
----Mod row: Reset all
----@param holder UIElement
-local function buildModRow(holder)
-    Rows.begin()
-    createToggleButtonRow("Mod", holder, {
-        { label = "Reset all", active = false, onClick = resetAll },
-    }, "Loads the classic mod (/lm classic): a fresh start.\nAsks first when there are unsaved changes.")
-end
-
----Credits on the panel's last row
----@param holder UIElement
-local function buildCredits(holder)
-    local line = holder:addChild({ pos = { 0, 0 }, size = { holder.size.w, holder.size.h } })
-    line:addAdaptedText("Project Mod Group Editor by joopez", nil, nil, Widgets.FONT, CENTERMID, Widgets.TEXT_SCALE_SMALL)
-end
-
 ---Atmo row: Playable / Default (rebuilt by the switch, undo and opening a mod)
 ---@param holder UIElement
 local function buildPlayableRow(holder)
@@ -194,12 +178,28 @@ local function buildExportRow(holder)
     }, "Copies without Atmo Play, named exp_<name>.\nAtmo: an .atmo file. Mod: the mod without it.")
 end
 
+---Mod row: Reset all
+---@param holder UIElement
+local function buildModRow(holder)
+    Rows.begin()
+    createToggleButtonRow("Mod", holder, {
+        { label = "Reset all", active = false, onClick = resetAll },
+    }, "Loads the classic mod (/lm classic): a fresh start.\nAsks first when there are unsaved changes.")
+end
+
+---Credits on the panel's last row
+---@param holder UIElement
+local function buildCredits(holder)
+    local line = holder:addChild({ pos = { 0, 0 }, size = { holder.size.w, holder.size.h } })
+    line:addAdaptedText("Project Mod Group Editor by joopez", nil, nil, Widgets.FONT, CENTERMID, Widgets.TEXT_SCALE_SMALL)
+end
+
 ---@type EditorPanelModule
 return {
     fixed = {
         { build = buildMapRow, panel = "misc", row = 3, rows = 1 },
-        { build = buildModRow, panel = "misc", row = 4, rows = 1 },
-        { build = buildExportRow, panel = "misc", row = 6, rows = 1 },
+        { build = buildExportRow, panel = "misc", row = 4, rows = 1 },
+        { build = buildModRow, panel = "misc", row = 6, rows = 1 },
         { build = buildCredits, panel = "misc", row = 8, rows = 1 },
     },
     blocks = {

@@ -1,5 +1,5 @@
--- Advanced tab: Friction, Bounce, Hardness, Flags, Model, Ids (Reindex). On the Atmo list, the first
--- four edit atmo lines; ui/editor_atmo.lua's rows replace Model and Ids
+-- Advanced tab: Friction, Bounce, Hardness, Flags, Model, Ids (Reindex), Atmo (To atmo / To objects).
+-- On the Atmo list, the first four edit atmo lines; ui/editor_atmo.lua's rows replace Model and Ids
 local Rows = MGE.EditorRows
 local ModData = MGE.ModData
 local History = MGE.History
@@ -115,7 +115,7 @@ end
 ---@return string|false model path in mod_assets, false without a model
 local function getModel(obj)
     if obj.props.use_model ~= "1" then return false end
-    return ModData.fromModelName(obj.props.model_name, MGE.modPath) or obj.props.model_name or false
+    return ModData.fromModelName(obj.props.model_name) or obj.props.model_name or false
 end
 
 ---Sets model_name / use_model on the selection (reloads)
@@ -187,6 +187,21 @@ local function buildIdRow(holder)
         "Acts on all objects, joints follow.")
 end
 
+---Atmo row: To atmo on the Objects list, To objects on the Atmo list
+---@param holder UIElement
+local function buildLayerRow(holder)
+    Rows.begin()
+    if atmoShown() then
+        createToggleButtonRow("Atmo", holder, {
+            { label = "To objects", active = false, onClick = function() MGE.AtmoLayer.toObjects() end },
+        }, "To objects: back into the game (free ids allowing).\nSave keeps the atmo inside the mod.")
+    else
+        createToggleButtonRow("Atmo", holder, {
+            { label = "To atmo", active = false, onClick = function() MGE.AtmoLayer.toAtmo() end },
+        }, "Moves the selection to the atmo: drawn only, no\ncollisions, ids freed. Objects with joints stay.")
+    end
+end
+
 ---@type EditorPanelModule
 return {
     blocks = {
@@ -195,6 +210,7 @@ return {
         -- objects only; ui/editor_atmo.lua uses rows 4-5
         { name = "model", build = buildModel, panel = "advanced", row = 4, rows = 1 },
         { name = "ids", build = buildIdRow, panel = "advanced", row = 5, rows = 1 },
+        { name = "layer", build = buildLayerRow, panel = "advanced", row = 6, rows = 1 },
     },
     inputs = { rebuilt = { "advancedProps" } },
 }

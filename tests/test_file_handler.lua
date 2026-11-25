@@ -188,3 +188,13 @@ T.test("ensureVersion: a mod without a version line gets the modmaker's", functi
     T.ok(not FileHandler.ensureVersion(r), "a mod's own version is kept")
     T.eq(count(FileHandler.modText(r), "version"), 1, "one version line")
 end)
+
+T.test("model_name: one ../ from mod_assets/<mod name>/, whatever the mod's folder", function()
+    local ModData = MGE.ModData
+    T.eq(ModData.toModelName("Noki/PinTori"), "../Noki/PinTori", "as Bowling_Noki.tbm writes it")
+    T.eq(ModData.fromModelName("../Noki/PinTori"), "Noki/PinTori", "read")
+    T.eq(ModData.fromModelName("../../Noki/PinUke"), "Noki/PinUke", "older MGE's extra ../ skipped")
+    T.eq(ModData.fromModelName("../../../events/sakura"), "events/sakura", "above mod_assets skipped")
+    T.eq(ModData.fromModelName("env_obj1"), nil, "the mod's own folder: unknown")
+    T.eq(ModData.fromModelName(""), nil, "empty")
+end)

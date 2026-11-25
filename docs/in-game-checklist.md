@@ -117,6 +117,16 @@ a bare name with no file at that path.
 - [ ] Placement view: Rotate in Region mode switches to Map, and the preview shows the whole Budget + Atmo.
 - [ ] Converting still works after `mapconv/skyclips.lua` was split out (it loads with the converter).
 
+### Beta changes (2026-11-26)
+- [ ] To atmo / To objects is the last row of Objects > Advanced and Atmo > Advanced (under Ids / Motion);
+      Core ends with Visible.
+- [ ] World > Core: Map, Export, Atmo (Playable / Default), Reset all, credits on the last row.
+- [ ] Free camera with the look-at point close to the eye: the gizmo and click-select still hit the right
+      object, and Atmo Play still draws (measured 10+ units out, past the near clip).
+- [ ] A model object in a mod from a subfolder (`/lm Fun/...`): the model shows, Save writes `../<path>`,
+      and an older MGE save with `../../` loads with the model repaired.
+- [ ] The working copy's name in other case (`MGE-Work`) is refused as a mod name.
+
 ## Reference mods
 
 - `data/mod/mge_tests/joint_nopos.tbm`: joints without `pos`. The game locks the objects together.

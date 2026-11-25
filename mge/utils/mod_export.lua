@@ -307,74 +307,40 @@ function ModData.refreshJointIds()
     ModData.jointIds = getJointIds(ModData.parsed.env_obj_joint)
 end
 
--- model_name is relative to mod_assets/<the mod file's folders>/<mod name>/, as the game's own mods use
--- it: mod/owo.tbm's ../Noki/PinTori is mod_assets/Noki/PinTori.obj
+-- model_name is relative to mod_assets/<mod name>/ whatever folder the mod file is in: ../Noki/PinTori is
+-- mod_assets/Noki/PinTori.obj (Bowling_Noki.tbm, and the game's modmaker writes the same into modmaker/)
 
----@param path string? "" for the root
----@return string[]
-local function splitPath(path)
-    local parts = {}
-    for part in tostring(path or ""):gmatch("[^/\\]+") do table.insert(parts, part) end
-    return parts
-end
+local SELF = "\0self" -- the mod's own asset folder, whose name fromModelName doesn't know
 
----model_name for a model, for a mod file at modPath (default: one in data/mod itself, which is how
----MGE's data keeps them)
 ---@param model string path in mod_assets without .obj, e.g. "Noki/PinTori"
----@param modPath string? relative to data/mod
----@return string
-function ModData.toModelName(model, modPath)
-    return string.rep("../", math.max(#splitPath(modPath), 1)) .. model
-end
-
----The data as a file at path needs it: a copy with model_name lines rewritten for a subfolder.
----The data itself isn't changed
----@param path string
----@return FileParserResult
-function ModData.parsedFor(path)
-    if #splitPath(path) <= 1 then return ModData.parsed end
-    local copy = ModData.copy(ModData.parsed)
-    copy.env_obj = {}
-    for i, obj in ipairs(ModData.parsed.env_obj) do
-        local model = obj.props.use_model == "1" and ModData.fromModelName(obj.props.model_name, "mod.tbm")
-        if model then
-            local o = ModData.copy(obj)
-            o.props = ModData.copy(obj.props)
-            o.props.model_name = ModData.toModelName(model, path)
-            copy.env_obj[i] = o
-        else
-            copy.env_obj[i] = obj
-        end
-    end
-    return copy
+---@return string model_name
+function ModData.toModelName(model)
+    return "../" .. model
 end
 
 ---@param modelName string?
----@param modPath string? relative to data/mod, e.g. "Fun/HoleInTheWall/holeinthewall6.tbm"
----@return string? the mod_assets path (without .obj) it points to, nil outside mod_assets
-function ModData.fromModelName(modelName, modPath)
+---@return string? the mod_assets path (without .obj) it points to; nil for one in the mod's own folder.
+---".." above mod_assets is skipped (older MGE versions wrote ../../ for mods in subfolders)
+function ModData.fromModelName(modelName)
     if not modelName or modelName == "" then return nil end
-    -- the mod's model folder: its folders, then one named like the mod
-    local parts = splitPath(modPath)
-    if #parts > 0 then parts[#parts] = parts[#parts]:gsub("%.tbm$", "") else parts = { "mod" } end
-    for _, part in ipairs(splitPath(modelName)) do
+    local parts = { SELF }
+    for part in modelName:gmatch("[^/\\]+") do
         if part == ".." then
-            if #parts == 0 then return nil end
-            table.remove(parts)
+            if #parts > 0 then table.remove(parts) end
         elseif part ~= "." then
             table.insert(parts, part)
         end
     end
+    if parts[1] == SELF or #parts == 0 then return nil end
     return table.concat(parts, "/")
 end
 
----Rewrites model_names as relative to data/mod (the data's convention) for a mod loaded from a
----subfolder. Writes convert back (parsedFor)
-local function rebaseModels()
-    if not tostring(MGE.modPath or ""):find("[/\\]") then return end
+---Repairs model_names that climb above mod_assets (MGE wrote ../../ for mods in subfolders): one ../ is right
+local function repairModels()
     for _, obj in ipairs(ModData.parsed.env_obj) do
-        if obj.props.use_model == "1" then
-            local model = ModData.fromModelName(obj.props.model_name, MGE.modPath)
+        local name = obj.props.model_name
+        if obj.props.use_model == "1" and name and name:match("^%.%./%.%./") then
+            local model = ModData.fromModelName(name)
             if model then obj.props.model_name = ModData.toModelName(model) end
         end
     end
@@ -409,7 +375,7 @@ function ModData.reloadObjects()
         local rules = get_game_rules and get_game_rules() or {} -- offline tests have no game
         local count = math.max(tonumber(rules.numplayers) or 2, 1)
         FileHandler.splitSharedPlayers(ModData.parsed, count)
-        rebaseModels()
+        repairModels()
         ModData.jointIds = getJointIds(ModData.parsed.env_obj_joint)
     elseif tostring(MGE.modName or ""):match("%.tbm$") then
         MGE.say("Mod not found") -- built-in classic has no .tbm: nothing to say

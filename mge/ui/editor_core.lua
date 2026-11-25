@@ -1,4 +1,4 @@
--- Core tab: Pos, Rot, Scale, Color, Mass, Shape, Visible and To atmo / To objects. On the Atmo list the
+-- Core tab: Pos, Rot, Scale, Color, Mass, Shape, Visible. On the Atmo list the
 -- same rows edit atmo lines only; Mass and Visible act in Atmo Play (the game's atmo ignores them)
 local Rows = MGE.EditorRows
 local ModData = MGE.ModData
@@ -224,35 +224,19 @@ local function buildLooks(holder, selected)
             or "Hidden objects still collide.")
 end
 
-
----Atmo row: To atmo on the Objects list, To objects on the Atmo list
----@param holder UIElement
-local function buildLayerRow(holder)
-    if atmoShown() then
-        Rows.createToggleButtonRow("Atmo", holder, {
-            { label = "To objects", active = false, onClick = function() MGE.AtmoLayer.toObjects() end },
-        }, "To objects: back into the game (free ids allowing).\nSave keeps the atmo inside the mod.")
-    else
-        Rows.createToggleButtonRow("Atmo", holder, {
-            { label = "To atmo", active = false, onClick = function() MGE.AtmoLayer.toAtmo() end },
-        }, "Moves the selection to the atmo: drawn only, no\ncollisions, ids freed. Objects with joints stay.")
-    end
-end
-
----Color, Mass, Shape, Visible and Atmo as one block
+---Color, Mass, Shape and Visible as one block
 ---@param holder UIElement
 ---@param selected FileParserEnvObj[]
 local function buildCoreRest(holder, selected)
     buildCoreProps(holder, selected) -- calls Rows.begin
     buildLooks(holder, selected)
-    buildLayerRow(holder)
 end
 
 ---@type EditorPanelModule
 return {
     blocks = {
         { name = "measured", build = buildMeasuredRows, panel = "core", row = 0, rows = 3 },
-        { name = "coreProps", build = buildCoreRest, panel = "core", row = 3, rows = 5 },
+        { name = "coreProps", build = buildCoreRest, panel = "core", row = 3, rows = 4 },
     },
     inputs = { rebuilt = { "position", "angle", "size", "color", "coreProps" } },
 }

@@ -21,11 +21,11 @@ The window has five lists, each with its own tabs.
 
 | List | Tabs |
 |---|---|
-| **Objects** | **Core**: position, rotation, scale, color, mass, shape, visibility, To atmo. **Advanced**: friction, bounce, hardness, flags, model, reindexing ids. **Thrust**: frames, direction, axes. **Generate**: rows, rings and grids of new objects, each piece turned with Rot or the Rotate gizmo. |
+| **Objects** | **Core**: position, rotation, scale, color, mass, shape, visibility. **Advanced**: friction, bounce, hardness, flags, model, reindexing ids, To atmo. **Thrust**: frames, direction, axes. **Generate**: rows, rings and grids of new objects, each piece turned with Rot or the Rotate gizmo. |
 | **Atmo** | **Core**: as on Objects, with To objects. **Advanced**: friction, bounce, hardness, flags (as on Objects, for Atmo Play), depth, graphics levels, kept lines. **Generate**: as on Objects. |
 | **Joints** | **Link**: the two objects a joint connects, picked in the list or, with Pick from world on, in the world. **Properties**: position, axis, range, strength, velocity, type. |
 | **Players** | Start position, rotation, scale and body parts of each player. |
-| **World** | The mod's name (where Save writes), its message, the atmo's shader, map import, Reset all (loads the classic mod), Atmo: Playable / Default (a playable atmo mod, or the atmo only drawn), Export (Atmo, Mod). |
+| **World** | The mod's name (where Save writes), its message, the atmo's shader, map import, Export (Atmo, Mod), Atmo: Playable / Default (a playable atmo mod, or the atmo only drawn), Reset all (loads the classic mod). |
 
 - Number fields apply what you type when you leave them (click elsewhere) or press Enter, then show the
   new value as their placeholder. Esc while typing drops it. The Generate tab's fields keep their text:
@@ -69,7 +69,7 @@ the mod.
   the Atmo list. Below Flags are what only atmos have: **Depth** (drawn on top), **Graphics** (the graphics
   levels it shows at) and, when there are any, the lines MGE keeps without editing them. The **Generate** tab works as on Objects, and its pieces
   go to the atmo (no joints field there: atmos have none).
-- **To atmo** (Objects → Core) moves the selected objects into the atmo and frees their ids. **To
+- **To atmo** (Objects → Advanced) moves the selected objects into the atmo and frees their ids. **To
   objects** moves atmo objects back while there are free ids. Objects joined by a joint stay.
 - **Saving:** Save keeps the atmo **inside the mod**, as `#@` comment lines the game skips (one file to
   share), and opening the mod reads it back. **Atmo Play** draws it when the mod is loaded (a playable mod: also

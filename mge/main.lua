@@ -237,7 +237,7 @@ end
 ---@return boolean
 local function isSaveOutput(path)
     local name = tostring(path):gsub("^.*[/\\]", "")
-    return name == (MGE.workPath:gsub("^.*[/\\]", ""))
+    return name:lower() == (MGE.workPath:gsub("^.*[/\\]", "")):lower()
 end
 
 ---@param path string under data/mod
@@ -251,7 +251,7 @@ end
 function MGE.apply()
     local spelling = MGE.modName == MGE.workSpellings[1] and MGE.workSpellings[2] or MGE.workSpellings[1]
     MGE.syncGamerules()
-    local parsed = ModData.parsedFor(MGE.workPath) -- model paths relative to modmaker/
+    local parsed = ModData.parsed
     if MGE.Playable.isOn() then
         writeText(MGE.workPath, MGE.Playable.workingText(parsed)) -- carries the pool, MGE moves it in fights
     else
@@ -326,7 +326,7 @@ function MGE.checkModName(name)
     if name:find("[^%w%-_ ]") or not name:find("[%w]") then
         return false, "letters, digits, spaces, dashes and underscores only"
     end
-    if (name .. ".tbm"):lower() == (MGE.workPath:gsub("^.*[/\\]", "")):lower() then
+    if isSaveOutput(name .. ".tbm") then
         return false, name .. " is MGE's working copy, pick another name"
     end
     return true, nil
@@ -384,7 +384,7 @@ end
 ---@param path string
 local function writeMod(path)
     MGE.syncGamerules()
-    local parsed = ModData.parsedFor(path)
+    local parsed = ModData.parsed
     local text, plan
     if parsed.playable then
         text, plan = MGE.Playable.text(parsed, Atmo.currentText()) -- mod, pool and atmo in one file
@@ -427,7 +427,7 @@ function MGE.exportCleanMod()
         function(name)
             local path = pathOf(name)
             MGE.syncGamerules()
-            if FileHandler.WriteMod(ModData.parsedFor(path), MGE.modFolder .. path) then
+            if FileHandler.WriteMod(ModData.parsed, MGE.modFolder .. path) then
                 MGE.say("exported " .. path .. ": the mod without its atmo" ..
                     (MGE.Playable.isOn() and " (static objects are in the atmo, not here)" or ""))
             else
