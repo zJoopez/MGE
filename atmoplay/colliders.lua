@@ -32,7 +32,6 @@ local Mat3 = NS.Mat3
 ---@field thrust string? props only: the thrust line (dynamics.lua flies it, flight.lua)
 ---@field startMode integer? props only: prop_motion's start, 1 active from frame 0 (falls, tumbles, flies its
 ---thrust), 0 waits until reached; nil: the default (active with thrust, else waits; Colliders.startsActive)
----@field alwaysMove boolean? props only: never paused by far props (prop_motion's always)
 ---@field noHits boolean? props only: "prop_hits 0", it flies through the other props (still hits the static atmo)
 ---@field noPlayer boolean? props only: doesn't become real near players (Colliders.collision)
 ---@field noDynamic boolean? props only: doesn't become real near real dynamic objects (the mod's own, carried props)
@@ -67,20 +66,17 @@ local SKIP_KEYS = {
 ---still count: prop_real 0 (neither player nor dynamic), prop_hits 0 (no atmo)
 ---@param p table<string, string> the entity's lines
 ---@return boolean player, boolean dynamic, boolean atmo
----A prop's motion line, `prop_motion <start> <always>` (the game's atmo skips it):
----start 1: active from the fight's first frame, any prop: it falls, tumbles and settles under gravity (and flies its
----thrust) before anything comes near; 0: it waits, still, until something reaches it (taken by a player or a dynamic
----object, or hit by a flying prop). No start: the default, active with a thrust, else waiting (Colliders.startsActive).
----always 1: it keeps moving far from every player even when the player lets far props pause (Atmo Play's window);
----0 / none: it may pause there
+---A prop's motion line, `prop_motion <start>` (the game's atmo skips it): 1, active from the fight's first frame, any
+---prop: it falls, tumbles and settles under gravity (and flies its thrust) before anything comes near; 0, it waits,
+---still, until something reaches it (taken by a player or a dynamic object, or hit by a flying prop). No line: the
+---default, active with a thrust, else waiting (Colliders.startsActive). The player's Far props: Pause pauses every
+---prop far from them, active or not (an "always" second number, never pausing, was dropped: user, 2026-11-25)
 ---@param p table<string, string>
----@return boolean? start nil: not set (the default), boolean always
+---@return boolean? start nil: not set (the default)
 function Colliders.motion(p)
-    local n = {}
-    for v in tostring(p.prop_motion or ""):gmatch("%S+") do n[#n + 1] = tonumber(v) end
-    local start = nil
-    if n[1] ~= nil then start = n[1] ~= 0 end
-    return start, n[2] ~= nil and n[2] ~= 0
+    local first = tonumber(tostring(p.prop_motion or ""):match("%S+") or "")
+    if first == nil then return nil end
+    return first ~= 0
 end
 
 ---Whether a prop is active from frame 0: its prop_motion start, else whether it has a thrust (one that pushes)
@@ -279,7 +275,7 @@ function Colliders.build(lines)
             end
             local list = dynamic and props or colliders
             local player, real, atmo = Colliders.collision(p)
-            local start, always = Colliders.motion(p)
+            local start = Colliders.motion(p)
             list[#list + 1] = {
                 index = index,
                 name = entity.name,
@@ -301,7 +297,7 @@ function Colliders.build(lines)
                 noReal = dynamic and not player and not real or nil,
                 color = dynamic and p.color and numbers(p.color) or nil,
                 startMode = (dynamic and start ~= nil) and (start and 1 or 0) or nil,
-                alwaysMove = dynamic and always or nil,
+
             }
         end
     end

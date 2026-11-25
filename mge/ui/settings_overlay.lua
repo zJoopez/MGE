@@ -358,11 +358,11 @@ do
 end
 
 -- Far props (utils/playable.lua, Atmo Play's Dynamics.FLY_RANGE): flying props far from every player and dynamic
--- object pause where they are until someone comes near, less work; props whose Motion is Always fly anyway
+-- object pause where they are until someone comes near, less work
 do
     local content = addRow(y, "Far props", "Flying props far from every player:\n" ..
         "Move: all of them fly.\nPause: those far away wait where they are\nuntil someone comes near: less work.\n" ..
-        "Props set to Motion: Always fly anyway.\nFrom the next fight. Atmo Play: its window's Far props")
+        "From the next fight. Atmo Play: its window's Far props")
     local buttons
     local function show()
         for i, on in ipairs({ false, true }) do

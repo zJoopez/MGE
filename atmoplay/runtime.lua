@@ -89,7 +89,7 @@ end
 --   ghosts on          the flying props' move predictions while a turn waits (Dynamics.drawGhosts): off saves
 --                      their work (the prediction runs the props' flights ahead, as much as playing them)
 --   farprops move      flying props far from every player: move (all fly) or pause (they wait where they are until
---                      someone comes near, less work; props the map maker marked "always" fly anyway)
+--                      someone comes near, less work)
 --   ui on              Atmo Play's window (ui.lua) open when it starts (off: only its small launcher button)
 --   uipos 10 120       where the window was dragged to (screen pixels)
 Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, draw = "own", ghosts = true, pauseFar = false, ui = true,
@@ -609,10 +609,18 @@ Runtime.dev = {
 
 ---------------------------------------------------------------------------------------------------- start / quit
 
-function Runtime.start()
+---The atmo that's the player's (what Quit gives back): handed on by a restart (atmoplay.lua)
+---@return string?
+function Runtime.playerAtmo()
+    return state.playerAtmo
+end
+
+---@param playerAtmo string? a restart's: the player's atmo the old one had (one picked this session isn't in
+---atmo.cfg: read from there, a restart and then Quit gave the start's atmo back instead of the player's pick)
+function Runtime.start(playerAtmo)
     remove_hooks(Runtime.HOOKS)
     Runtime.loadSettings()
-    state.playerAtmo = defaultAtmo() -- a restart quits first, which gives the player's atmo back
+    state.playerAtmo = playerAtmo or defaultAtmo() -- a restart quits first, which gives the player's atmo back
     wrapAtmoLoading()
 
     add_hook("match_begin", Runtime.HOOKS, onMatchBegin)

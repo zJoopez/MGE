@@ -4,12 +4,11 @@
 --   Collision: Player / Dynamic: it becomes real (a pool object carries it) near players / near real dynamic objects
 --              (a real one collides with everything real); both off: never real, needs no pool object.
 --              Atmo: flying drawn, it hits the other props (else passes through them)
--- and how a prop moves, `prop_motion <start> <always>` (no line: the defaults):
+-- and how a prop moves, `prop_motion <start>` (no line: the default):
 --   Motion:    Active: it moves from the fight's first frame (falls, tumbles and settles under gravity, flies its
 --              thrust) before anything comes near; off: it sits still until something reaches it (a player or
 --              dynamic object takes it, a flying prop hits it). Default: active with a thrust, else waiting.
---              Always: it keeps flying far from every player when the player lets far props pause (Atmo Play's
---              window, MGE's Settings > Far props)
+--              The player's Far props: Pause still pauses it far from everyone (their choice, for their computer)
 -- Other atmo lines (no_depth, min_level, count, rotate, parent...) aren't edited here: kept as they are.
 -- Playable (the whole mod) is on the World tab (ui/editor_misc.lua).
 -- Atmo objects aren't in the .tbm: changes here are an undo step, no reload.
@@ -54,19 +53,14 @@ local function startsActive(obj)
     return Colliders.startsActive(obj.props, hasThrust(obj))
 end
 
----Turns one Motion toggle (1 active, 2 always) on or off on the selected atmo objects: one prop_motion line (none
----when both are the defaults), one undo step
----@param which integer
+---Turns Motion's Active on or off on the selected atmo objects: one prop_motion line (none for the default), one
+---undo step
 ---@param on boolean
-local function setMotion(which, on)
+local function setActive(on)
     local changed = false
     for _, obj in ipairs(ModData.getSelectedAtmo()) do
-        local start, always = startsActive(obj), select(2, Colliders.motion(obj.props))
-        if which == 1 then start = on else always = on end
-        local line = nil -- the defaults: no line
-        if start ~= hasThrust(obj) or always then
-            line = string.format("%d %d", start and 1 or 0, always and 1 or 0)
-        end
+        local line = nil -- the default: no line
+        if on ~= hasThrust(obj) then line = on and "1" or "0" end
         if obj.props.prop_motion ~= line then
             obj.props.prop_motion = line
             changed = true
@@ -94,15 +88,13 @@ local function buildAtmoRows(holder, selected)
         "Props (Static off) in Atmo Play. Player / Dynamic:\nbecomes real near players / real dynamic objects\n" ..
         "(real, it collides with everything real). Both off:\nnever real, needs no pool object. Atmo: flying\n" ..
         "drawn, it hits other props. Overlapping ones\nnever push each other apart.")
-    -- Motion: Active lit when every selected one starts active, Always when every one always moves
+    -- Motion: Active lit when every selected one starts active
     local active = sharedChoice(selected, startsActive) == true
-    local always = sharedChoice(selected, function(obj) return (select(2, Colliders.motion(obj.props))) end) == true
     Rows.createToggleButtonRow("Motion", holder, {
-        { label = "Active", active = active, onClick = function() setMotion(1, not active) end },
-        { label = "Always", active = always, onClick = function() setMotion(2, not always) end },
+        { label = "Active", active = active, onClick = function() setActive(not active) end },
     }, "Props in Atmo Play. Active: moves from the first\nframe (falls, tumbles, flies its thrust) before\n" ..
         "anything comes near. Off: still until a player,\na dynamic object or a flying prop reaches it.\n" ..
-        "Default: on with thrust. Always: keeps moving\nfar from every player when far props pause.")
+        "Default: on with thrust. The player's Far props\n(Pause) still pauses it far from everyone.")
 end
 
 ---@type EditorPanelModule

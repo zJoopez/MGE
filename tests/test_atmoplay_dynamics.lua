@@ -1457,7 +1457,11 @@ env_obj crate
     s.events[#s.events + 1] = { frame = 120, kind = "take" }
     T.eq(Dynamics.predict(s, 10), pr, "a take: kept (the taken prop's ghost is the game's)")
     s.flightStarts = (s.flightStarts or 0) + 1 -- a prop let go flying: a flight the prediction doesn't have
-    T.ok(Dynamics.predict(s, 10) ~= pr, "a release that flies: a new prediction")
+    -- no time budget: the new one is built in one call (with it, a slow call still showed the old one: a flaky test)
+    Dynamics.PREDICT_MS = math.huge
+    local renewed = Dynamics.predict(s, 10)
+    Dynamics.PREDICT_MS = budget
+    T.ok(renewed ~= pr, "a release that flies: a new prediction")
 end)
 
 T.test("ghosts: a prediction carried over turns goes on exactly, its old poses dropped", function()
@@ -1713,11 +1717,10 @@ env_obj right
     Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS = cap, budget
 end)
 
-T.test("motion: prop_motion read (start, always); no line: active with thrust, else waiting; may pause", function()
-    T.eq(table.concat({ tostring(Colliders.motion({})), tostring(select(2, Colliders.motion({}))) }, " "), "nil false",
-        "no line: start not set")
-    local start, always = Colliders.motion({ prop_motion = "0 1" })
-    T.ok(start == false and always == true, "0 1: waits, always moves")
+T.test("motion: prop_motion read; no line: active with thrust, else waiting", function()
+    T.eq(Colliders.motion({}), nil, "no line: start not set")
+    T.eq(Colliders.motion({ prop_motion = "0" }), false, "0: waits")
+    T.eq(Colliders.motion({ prop_motion = "1 1" }), true, "1 (an old second number ignored): active")
     T.eq(Colliders.startsActive({}, true), true, "default with thrust: active")
     T.eq(Colliders.startsActive({}, false), false, "default without: waits")
     T.eq(Colliders.startsActive({ prop_motion = "1 0" }, false), true, "start 1 without thrust: active")
@@ -1778,8 +1781,8 @@ env_obj rocket
     T.ok(rocket.dormant and rocket.flight == nil, "rewound before the take: waiting")
 end)
 
----Two thrust props far apart, the players at one; the far one may pause, `always` says whether it does
-local function farSetup(always)
+---Two thrust props far apart, the players at one; the far one may pause (`active`: it's marked Active too)
+local function farSetup(active)
     stubEngine()
     local _, _, props = Colliders.build(T.lines([[
 env_obj near
@@ -1794,7 +1797,7 @@ env_obj far
    sides 0.4 0.4 0.4
    flag 0
    thrust 1 0 0 3
-   prop_motion 1 ]] .. (always and 1 or 0)))
+]] .. (active and "\n   prop_motion 1" or "")))
     local s = Dynamics.new({}, props, { dradius = 2, fromFrame = 0, gravity = { 0, 0, -9.82 }, pauseFar = true })
     world.players = { { 0, 0, 1 }, { 1, 0, 1 } }
     return s
@@ -1812,7 +1815,7 @@ local function runFar(s, frames, replay)
     return poses
 end
 
-T.test("far props: one far from every player pauses, one near flies, one marked always flies anyway", function()
+T.test("far props: one far from every player pauses (marked Active too), one near flies", function()
     local s = farSetup(false)
     Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
     local poses = runFar(s, 60)
@@ -1822,7 +1825,7 @@ T.test("far props: one far from every player pauses, one near flies, one marked 
     local a = farSetup(true)
     Dynamics.matchBegin(a, { replay_mode = 0, match_frame = 0 })
     local poses2 = runFar(a, 60)
-    T.ok(poses2[60][2] ~= 5, "marked always: it flew far from everyone")
+    T.eq(poses2[60][2], 5, "marked Active: Pause pauses it all the same (the player's choice)")
     -- the player's option off: nothing pauses
     local off = farSetup(false)
     Dynamics.setPauseFar(off, false)
@@ -1870,4 +1873,52 @@ T.test("far props: a paused one gets no ghost (the prediction wouldn't pause it)
     local pr = Dynamics.predict(s, 20)
     T.eq(#pr.list, 1, "one ghost")
     T.eq(pr.list[1].of, s.props[1], "the near one's")
+end)
+
+T.test("rest: a dropped tower settles on itself and rests; a rewind through it rests the same frames", function()
+    stubEngine()
+    -- four Active boxes dropped as a tower (light and gripping as the user's test2), on Full, no pool objects (still
+    -- props listed all the same: the next one lands on them). Gravity -9.82: at -30 a falling stack still sinks into
+    -- itself (the solver's rounds don't hold it; see docs/atmo-play-plan.md)
+    local text = {}
+    for i = 1, 4 do
+        text[#text + 1] = ("env_obj b%d\n   shape box\n   pos %.2f 0 %.2f\n   sides 0.5 0.5 0.5\n" ..
+            "   flag 0\n   mass 0.0001\n   friction 10000\n   prop_motion 1"):format(i, (i % 2) * 0.02, 0.3 + (i - 1) * 0.7)
+    end
+    local colliders, _, props = Colliders.build(T.lines(table.concat(text, "\n")))
+    local s = Dynamics.new({}, props, { dradius = 2, fromFrame = 0, statics = colliders, gravity = { 0, 0, -9.82 },
+        level = "full" })
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local poses, restedAt = {}, {}
+    for f = 1, 600 do
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        local row = {}
+        for i, p in ipairs(s.props) do
+            row[#row + 1] = p.pos[1] row[#row + 1] = p.pos[2] row[#row + 1] = p.pos[3]
+            if not p.flight and not restedAt[i] then restedAt[i] = f end
+        end
+        poses[f] = row
+    end
+    local flying = 0
+    for _, p in ipairs(s.props) do if p.flight then flying = flying + 1 end end
+    T.eq(flying, 0, "all at rest by frame 600")
+    -- they met: box 2 sat on box 1 for a while (a resting prop is woken and held, not passed through)
+    local sat = false
+    for f = 1, 600 do if poses[f][6] > 0.6 and poses[f][6] < 0.9 and math.abs(poses[f][3] - 0.25) < 0.05 then sat = true end end
+    T.ok(sat, "box 2 rested on box 1 at some point")
+    -- a rewind to frame 70 (mid-fall: anchors in the snapshot) and on again: the same poses, the same rest frames
+    Dynamics.rebuild(s, 70)
+    local worst = 0
+    for f = 71, 600 do
+        Dynamics.draw(s, { replay_mode = 0, match_frame = f })
+        local k = 0
+        for _, p in ipairs(s.props) do
+            for c = 1, 3 do
+                k = k + 1
+                worst = math.max(worst, math.abs(p.pos[c] - poses[f][k]))
+            end
+        end
+    end
+    T.near(worst, 0, 1e-9, "rewound and played on: the same poses every frame")
 end)

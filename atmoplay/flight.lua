@@ -29,6 +29,7 @@ local NS = ATMOPLAY_LOADING -- the namespace the loader gives (Atmo Play's ATMOP
 ---@field ang number[] angular velocity, rad/s, world axes
 ---@field frame integer the frame its prop's pos is at
 ---@field still integer frames in a row at rest on something
+---@field ax number? the rest anchor (pos at its last restless frame; ay, az), u1-u3 / w1-w3 its rows 1-2 (nil: no rows)
 ---@field rows number[][] its rotation (local to world) while it flies
 
 ---@class AtmoPlayFlightWorld
@@ -58,6 +59,13 @@ local Flight = {
     REST_SPEED = 0.05,
     REST_SPIN = 0.1,
     REST_FRAMES = 10, -- this many frames at rest on something: the flight ends
+    -- at rest also when it went nowhere since its last restless frame (the anchor): within REST_DRIFT and REST_TURN
+    -- (its rows 1-2) over REST_FRAMES, ~0.17 u/s and ~0.5 rad/s on average, touching something. Piles jitter and creep
+    -- (neighbors pushing each other, ~0.04 u/s, spin above REST_SPIN): user's modmaker/test2, 360 boxes, gravity -30,
+    -- Full: 132 never rested by frame 600 (~7 ms a frame for good); with these 7. Tried: REST_SPEED's own drift
+    -- (0.003 / 0.006) left 132, 0.006 / 0.018 left 78
+    REST_DRIFT = 0.01,
+    REST_TURN = 0.03,
     LOWEST = -100, -- below this the flight ends (under the ground: fell through)
     CELL = 8,
     MAX_CELLS = 64, -- a collider over more cells than this goes in `big`
@@ -1113,10 +1121,33 @@ function Flight.step(w, bodies, frame, opts)
         end
         local speed = sqrt(v[1] * v[1] + v[2] * v[2] + v[3] * v[3])
         local spin = sqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3])
-        if fl.touching and speed < Flight.REST_SPEED and spin < Flight.REST_SPIN and not prop.thrust then
+        local p, m = prop.pos, fl.rows
+        local calm = false
+        if fl.touching and not prop.thrust then
+            calm = speed < Flight.REST_SPEED and spin < Flight.REST_SPIN
+            if not calm and fl.ax then
+                -- or it went nowhere since the anchor (jittering in a pile)
+                local dx, dy, dz = p[1] - fl.ax, p[2] - fl.ay, p[3] - fl.az
+                calm = dx * dx + dy * dy + dz * dz <= Flight.REST_DRIFT * Flight.REST_DRIFT
+                if calm and m and fl.u1 then
+                    local r1, r2 = m[1], m[2]
+                    local t1, t2, t3 = r1[1] - fl.u1, r1[2] - fl.u2, r1[3] - fl.u3
+                    local t4, t5, t6 = r2[1] - fl.w1, r2[2] - fl.w2, r2[3] - fl.w3
+                    calm = t1 * t1 + t2 * t2 + t3 * t3 + t4 * t4 + t5 * t5 + t6 * t6 <= Flight.REST_TURN * Flight.REST_TURN
+                end
+            end
+        end
+        if calm then
             fl.still = fl.still + 1
         else
             fl.still = 0
+            -- the anchor: here, now (kept in snapshots and shadows: rewinds and ghosts rest at the same frames)
+            fl.ax, fl.ay, fl.az = p[1], p[2], p[3]
+            if m then
+                fl.u1, fl.u2, fl.u3, fl.w1, fl.w2, fl.w3 = m[1][1], m[1][2], m[1][3], m[2][1], m[2][2], m[2][3]
+            else
+                fl.u1 = nil
+            end
         end
         if fl.still >= Flight.REST_FRAMES or prop.pos[3] < Flight.LOWEST then prop.flight = nil end
     end
@@ -1169,7 +1200,8 @@ local function shadowOf(pr, prop)
         local m = fl.rows
         sh.flight = { vel = { fl.vel[1], fl.vel[2], fl.vel[3] }, ang = { fl.ang[1], fl.ang[2], fl.ang[3] },
             frame = fl.frame, still = fl.still, rows = m and { { m[1][1], m[1][2], m[1][3] }, { m[2][1], m[2][2], m[2][3] },
-                { m[3][1], m[3][2], m[3][3] } } or nil }
+                { m[3][1], m[3][2], m[3][3] } } or nil,
+            ax = fl.ax, ay = fl.ay, az = fl.az, u1 = fl.u1, u2 = fl.u2, u3 = fl.u3, w1 = fl.w1, w2 = fl.w2, w3 = fl.w3 }
     end
     pr.shadows[prop] = sh
     return sh

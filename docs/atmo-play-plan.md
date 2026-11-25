@@ -917,8 +917,7 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     by fast props (no sweep); flying props never hit carried ones or players (they become real near them).
   - **Motion and far props (2026-11-25, user: "on many cases we'd want to keep thrust regardless so should be
     toggle"; "dynamics could have physics toggle to decide whether they can start active without proximity").**
-    Per prop, `prop_motion <start> <always>` (MGE: Atmo list > Advanced > Motion, Active / Always; no line:
-    the defaults). start 1 (Active): ANY prop flies from frame 0, so plain dynamic atmo falls, tumbles and
+    Per prop, `prop_motion <start>` (MGE: Atmo list > Advanced > Motion, Active; no line: the default). start 1 (Active): ANY prop flies from frame 0, so plain dynamic atmo falls, tumbles and
     settles under gravity before anything comes near (its flight ends at rest like a woken one's; user: "allow
     dynamics atmos tumble and fall before activator gets near"). start 0: it sits still until reached: taken
     (fights, replays' observed takes and rebuilds' take events alike) or woken by a flying prop; a thrust one
@@ -927,12 +926,29 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     hit each other: on Low / Medium a stack set Active falls through itself. The player's option, **Far props** (Atmo Play's window and atmoplay.cfg
     `farprops move|pause`, MGE's Settings > Far props, config `propPauseFar`; from the next match_begin):
     with Pause, flights farther than FLY_RANGE = 30 from every sampled point aren't stepped (they keep their
-    flight and go on later), unless `always` is 1. The points are body part 0 of each player and the mod's
+    flight and go on later), every prop alike. The points are body part 0 of each player and the mod's
     own dynamic objects, sampled in enter_frame every physics frame in fights and replays alike
     (Dynamics.sample; fly() steps frame f with the samples of f, or the nearest of the 60 before): the same
     state in both, so a replay pauses the same props at the same frames (test: a fight drawn every third
     frame equals its replay, the player walking up to a paused prop). Paused props get no ghost (the
     prediction doesn't pause them). Not checked in game yet.
+    **Always dropped (2026-11-25, user: "far props doesn't override active ... if it's just for thrust wouldn't
+    active toggle be good enough").** A second number, `always`, kept a prop moving under Pause; the user's
+    modmaker/test2 had it on all 360 boxes, so Pause did nothing there. Far props is the player's choice for
+    their computer: it now pauses every prop far from them. An old `prop_motion 1 1` reads as Active.
+  - **Piles and performance (2026-11-25, user: modmaker/test2 "quite ass"; 360 Active boxes 0.5 big, mass
+    0.0001, friction 10000, gravity -30, in a 220-unit line from the spawn).** Offline (tools-like bench, Lua
+    5.1, frames 1-600): Low and Medium rest every box by frame ~300 (they don't hit each other: each ring
+    falls flat). Full piled them and 132 never rested (~7-11 ms a frame on): piles jitter and creep (median
+    ~0.04 u/s, spin above REST_SPIN), each restless frame reset the count. Now a flight also counts a calm
+    frame when it's within REST_DRIFT = 0.01 / REST_TURN = 0.03 (rows 1-2) of its anchor (its pose at its
+    last restless frame; kept in snapshots, SNAP 39, and prediction shadows: rewinds and ghosts rest at the
+    same frames): 7 left at frame 600. Tried 0.003 / 0.006 (REST_SPEED's own drift): 132; 0.006 / 0.018: 78.
+    With Pause (now that it applies): Full 0.2-2 ms a frame, Medium under 1.
+    Also found: props whose group had no pool object weren't listed in the grid, so once at rest the flying
+    ones passed through them (a dropped tower fell through itself): every prop is listed now. Still open: at
+    gravity -30 a falling stack sinks into itself (box 2 ends 0.16 above box 1, not 0.5): the 8 solver rounds
+    don't hold a heavy stack; at -9.82 it holds.
 
 ## Still open (checked during Phases 1-2, in game)
 

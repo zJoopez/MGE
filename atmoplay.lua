@@ -15,8 +15,17 @@
 ---@field Runtime AtmoPlayRuntime
 ---@field quit fun()
 
--- a /ls while it runs restarts it (also picks up changed code): the old one puts the player's things back
-if ATMOPLAY and ATMOPLAY.quit then pcall(ATMOPLAY.quit) end
+-- a /ls while it runs restarts it (also picks up changed code): the old one puts the player's things back and
+-- hands on the player's atmo (one picked this session isn't in atmo.cfg)
+local playerAtmo = nil
+if ATMOPLAY then
+    local runtime = ATMOPLAY.Runtime
+    if runtime and runtime.playerAtmo then
+        local ok, name = pcall(runtime.playerAtmo)
+        if ok then playerAtmo = name end
+    end
+    if ATMOPLAY.quit then pcall(ATMOPLAY.quit) end
+end
 
 -- the folder this file is in, under data/script ("atmoplay/" released, "mge/" with MGE, "mgeDev/"); the
 -- modules are in its atmoplay/ subfolder
@@ -69,7 +78,7 @@ function ATMOPLAY.quit()
     ATMOPLAY = nil
 end
 
-local started, startErr = pcall(ATMOPLAY.Runtime.start)
+local started, startErr = pcall(ATMOPLAY.Runtime.start, playerAtmo)
 if not started then
     echo("^04[Atmo Play] ^07couldn't start: " .. tostring(startErr))
     ATMOPLAY.quit()

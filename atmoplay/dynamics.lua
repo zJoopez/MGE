@@ -127,7 +127,7 @@ local Dynamics = {
     -- don't turn; shapes, their real shapes; full, real shapes that hit each other and the still props they meet
     LEVELS = { "simple", "shapes", "full" },
     -- far props (the player's option, Atmo Play's window): flying props this far from every player and the mod's own
-    -- dynamic objects pause where they are (no step) unless their prop_motion says always. Decided by where those were
+    -- dynamic objects pause where they are (no step), every prop alike. Decided by where those were
     -- at the very frame stepped (sampled each physics frame in fights and replays alike: the same pauses)
     FLY_RANGE = 30,
     DEFAULT_LEVEL = "shapes",
@@ -394,7 +394,10 @@ function Dynamics.new(objects, props, params)
         -- listed (in the grid: found by players, flights and replays) when its group has pool objects, or when it never
         -- becomes real ("prop_real 0": no pool object needed, still woken by flying props)
         local carriable = s.groups[prop.group] ~= nil and not prop.noReal
-        if carriable or prop.noReal then
+        -- every prop is listed (the grid: flying props find the still ones they run into and wake them). Only carriable
+        -- and never-real ones were: a prop whose group had no pool object (no ids left, a mod without a dynamic pool)
+        -- flew drawn but, once at rest, was passed through by the others (a dropped tower fell through itself)
+        do
             -- the mass its object will have: the game's, read from a pool object of its group (written with the
             -- prop's mass line, or none: the game's default for an object without one, which a drawn flight
             -- can't guess; Flight.MASS was 1, a 0.1 New object flew 10 times further than its drawn copy)
@@ -581,9 +584,10 @@ local function stillNear(s, prop, reach)
 end
 
 -- A snapshot: { props = the props kept, data = their numbers, SNAP each }: flags (1 pos is the home table, 2 rot is,
--- 4 flying, 8 its flight has rows), pos 3, rot 9 (r0 r1 r2 r4 r5 r6 r8 r9 r10), vel 3, ang 3, the flight's frame and
--- still, rows 9. Numbers in one list: a table or two a snapshot for the GC, not seven a prop
-local SNAP = 31
+-- 4 flying, 8 its flight has rows, 16 a rest anchor, 32 the anchor has rows), pos 3, rot 9 (r0 r1 r2 r4 r5 r6 r8 r9
+-- r10), vel 3, ang 3, the flight's frame and still, rows 9, then (31-39) the rest anchor: pos 3, rows 1-2 (Flight's
+-- ax..w3). Numbers in one list: a table or two a snapshot for the GC, not seven a prop
+local SNAP = 39
 local ROT_KEYS = { "r0", "r1", "r2", "r4", "r5", "r6", "r8", "r9", "r10" }
 
 local function hasFlag(flags, bit) return math.floor(flags / bit) % 2 == 1 end
@@ -600,6 +604,7 @@ local function snapshot(s)
             local fl, p, r = prop.flight, prop.pos, prop.rot
             local m = fl and fl.rows
             data[o + 1] = (p == prop.home.pos and 1 or 0) + (r == prop.home.rot and 2 or 0) + (fl and 4 or 0) + (m and 8 or 0)
+                + (fl and fl.ax and 16 or 0) + (fl and fl.ax and fl.u1 and 32 or 0)
             data[o + 2], data[o + 3], data[o + 4] = p[1], p[2], p[3]
             for i = 1, 9 do data[o + 4 + i] = r[ROT_KEYS[i]] or 0 end
             if fl then
@@ -611,6 +616,13 @@ local function snapshot(s)
                     data[o + 22], data[o + 23], data[o + 24] = m[1][1], m[1][2], m[1][3]
                     data[o + 25], data[o + 26], data[o + 27] = m[2][1], m[2][2], m[2][3]
                     data[o + 28], data[o + 29], data[o + 30] = m[3][1], m[3][2], m[3][3]
+                end
+                if fl.ax then
+                    data[o + 31], data[o + 32], data[o + 33] = fl.ax, fl.ay, fl.az
+                    if fl.u1 then
+                        data[o + 34], data[o + 35], data[o + 36] = fl.u1, fl.u2, fl.u3
+                        data[o + 37], data[o + 38], data[o + 39] = fl.w1, fl.w2, fl.w3
+                    end
                 end
             end
         end
@@ -643,8 +655,15 @@ local function restoreSnapshot(s, snap)
                 rows = { { d[o + 22], d[o + 23], d[o + 24] }, { d[o + 25], d[o + 26], d[o + 27] },
                     { d[o + 28], d[o + 29], d[o + 30] } }
             end
-            prop.flight = { vel = { d[o + 14], d[o + 15], d[o + 16] }, ang = { d[o + 17], d[o + 18], d[o + 19] },
+            local fl = { vel = { d[o + 14], d[o + 15], d[o + 16] }, ang = { d[o + 17], d[o + 18], d[o + 19] },
                 frame = d[o + 20], still = d[o + 21], rows = rows }
+            if hasFlag(flags, 16) then
+                fl.ax, fl.ay, fl.az = d[o + 31], d[o + 32], d[o + 33]
+                if hasFlag(flags, 32) then
+                    fl.u1, fl.u2, fl.u3, fl.w1, fl.w2, fl.w3 = d[o + 34], d[o + 35], d[o + 36], d[o + 37], d[o + 38], d[o + 39]
+                end
+            end
+            prop.flight = fl
             prop.flying = true
             s.flying[#s.flying + 1] = prop
         end
@@ -654,10 +673,9 @@ end
 ---Every flight stepped together, one frame at a time, from the sim's frame to `frame` (flight.lua: the same steps
 ---in a fight, its replay and a rebuild give the same numbers). Their copies follow; those that came to rest, fell
 ---or are carried now leave the list
----Whether a flying prop moves with far props paused: marked always, or within FLY_RANGE of a sampled point
+---Whether a flying prop moves with far props paused: within FLY_RANGE of a sampled point
 ---@param near number[][] Dynamics.sampleAt's points
 local function movesNear(prop, near)
-    if prop.alwaysMove then return true end
     local r2 = Dynamics.FLY_RANGE * Dynamics.FLY_RANGE
     local p = prop.pos
     for k = 1, #near do
@@ -722,7 +740,7 @@ local function fly(s, frame)
         end
         s.flightOpts.neighbors = (#s.grouped - listedFlying - carried > 0) and s.neighborsFn or nil
         -- far props pause (the player's option): those far from every sampled player / dynamic object at this frame
-        -- aren't stepped (they keep their flight and go on when someone comes near), unless they always move
+        -- aren't stepped (they keep their flight and go on when someone comes near)
         local stepList = list
         local near = s.pauseFar and Dynamics.sampleAt(s, s.simFrame) or nil
         if near then

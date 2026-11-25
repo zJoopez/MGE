@@ -18,6 +18,7 @@ local UI = {
     window = nil, ---@type UIElement?
     launcher = nil, ---@type UIElement?
     pos = nil, ---@type number[]? where it was dragged to (kept while the game runs)
+    dragging = false, ---@type boolean the bar held: the camera's mouse movement is off until it's let go
 }
 
 ---Where the window (and its launcher) goes: where it was dragged to this session, else atmoplay.cfg's, else the
@@ -37,8 +38,11 @@ end
 ---MGE's colors (mge/ui/widgets.lua), mixed from the game's menu colors so they follow its theme
 local function colors()
     local d = TB_MENU_DEFAULT_DARKEST_COLOR
+    local b = TB_MENU_DEFAULT_BG_COLOR
     return {
-        bg = TB_MENU_DEFAULT_BG_COLOR,
+        bg = b, -- the buttons
+        panel = { b[1] * 0.85, b[2] * 0.85, b[3] * 0.85, 1 }, -- the window behind them: darker, as MGE's tab panels
+        -- (Widgets.TAB_PANEL_SOLID), else the buttons didn't stand out from it
         hover = mix(TB_MENU_DEFAULT_BG_COLOR, TB_MENU_DEFAULT_LIGHTER_COLOR, 0.4),
         active = mix(TB_MENU_DEFAULT_BG_COLOR, TB_MENU_DEFAULT_LIGHTEST_COLOR, 0.5),
         pressed = d,
@@ -100,7 +104,7 @@ local function build()
         globalid = TB_MENU_HUB_GLOBALID,
         pos = { pos[1], pos[2] },
         size = { UI.W, h },
-        bgColor = c.bg,
+        bgColor = c.panel,
     })
     UI.window, UI.lit, UI.colors = window, {}, c
 
@@ -117,9 +121,11 @@ local function build()
     title:addAdaptedText(true, "Atmo Play", nil, nil, FONTS.LMEDIUM, LEFTMID, 0.7)
     bar:addMouseHandlers(function(_, x, y)
         disable_mouse_camera_movement()
+        UI.dragging = true -- UI.close gives the camera's mouse movement back if it's killed mid-drag (a /ls)
         bar.pressedPos.x, bar.pressedPos.y = x - window.pos.x, y - window.pos.y
     end, function()
         enable_mouse_camera_movement()
+        UI.dragging = false
         if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end -- a drag ended: kept in atmoplay.cfg
     end, function(x, y)
         if bar.hoverState == BTN_DN then
@@ -130,6 +136,7 @@ local function build()
         end
     end, nil, function()
         enable_mouse_camera_movement()
+        UI.dragging = false
         if UI.pos then NS.Runtime.setWindowPos(UI.pos[1], UI.pos[2]) end -- kept in atmoplay.cfg
     end)
     TBMenu:spawnCloseButton(bar, { x = -UI.BAR_H, y = 0, w = UI.BAR_H, h = UI.BAR_H }, function() run(Runtime.setWindow, false) end,
@@ -220,6 +227,10 @@ end
 
 ---Atmo Play stopping: the window and the launcher go
 function UI.close()
+    if UI.dragging then -- killed mid-drag: its mouse-up never comes
+        UI.dragging = false
+        pcall(enable_mouse_camera_movement)
+    end
     for _, e in ipairs({ UI.window, UI.launcher }) do
         if alive(e) then pcall(function() e:kill() end) end
     end
