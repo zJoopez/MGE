@@ -11,6 +11,7 @@
 --                             3 full (Atmo Play's Dynamics.LEVELS)
 --   propGhosts 1              the flying props' move predictions while a turn waits (Playable.ghosts)
 --   propPauseFar 0            flying props far from every player pause (Playable.pauseFar, Atmo Play's far props)
+--   maxDraws 1000             atmo shapes drawn a frame, the nearest (AtmoLayer.maxDraws)
 --   palette 255 128 0 255     one line a color, r g b a 0-255
 --
 -- Read when MGE starts (Config.load, before the window is built: the UI size is needed then), put on the
@@ -50,8 +51,8 @@ Config.ENTRIES = {
         get = function() return MGE.Transforms.inPlace end, set = function(v) MGE.Transforms.inPlace = v end },
     { key = "rotateStep", kind = "number", min = 1e-6, max = 180,
         get = function() return Config.rotateStep end, set = function(v) Config.rotateStep = v --[[@as number]] end },
-    { key = "maxAtmo", kind = "number", min = 0, max = 100000, whole = true,
-        get = function() return MGE.AtmoLayer.maxAtmo end, set = function(v) MGE.AtmoLayer.maxAtmo = v end },
+    { key = "maxDraws", kind = "number", min = 1, max = 100000, whole = true,
+        get = function() return MGE.AtmoLayer.maxDraws end, set = function(v) MGE.AtmoLayer.maxDraws = v end },
     { key = "wheelStep", kind = "number", min = 1e-6, max = 1000,
         get = function() return Config.wheelStep end, set = function(v) Config.wheelStep = v --[[@as number]] end },
     { key = "wheelFineStep", kind = "number", min = 1e-6, max = 1000,

@@ -84,10 +84,9 @@ the mod.
   top of the one you're editing. Your default atmo setting isn't changed.
 - **Players tab:** atmo objects remain visible as translucent ghosts, like on the Objects tab.
 - **Drawing:** the game draws only so many shapes per frame, and how many depends on its graphics settings.
-  MGE draws every atmo object: in color on the Atmo list, as faint ghosts on the Objects list. The atmo
-  holds 256 by default, which leaves room for the mod's 256 objects and 256 more shapes (outlines, the
-  Generate preview, which is always drawn first). **Settings → Max atmo objects** raises it. Above 256
-  you may need lower graphics settings to see them all. On the Atmo list the selected atmo objects show in
+  MGE draws the atmo objects on screen, nearest first: in color on the Atmo list, as faint ghosts on the
+  Objects list. **Settings → Max draws** (default 1000) caps how many a frame; lower keeps big maps' fps
+  steady. On the Atmo list the selected atmo objects show in
   the highlight color (no extra shape each), so every selected one shows however many there are.
 - **Convert map** has two budgets: **Budget** is how many boxes become objects (up to the free ids),
   **Atmo** is how many more go to the atmo (the smaller boxes). Budget 0 puts every box in the atmo and

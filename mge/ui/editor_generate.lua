@@ -65,7 +65,7 @@ end
 ---@return string limit what limits it, for the note
 local function maxGenerate(atmo, perPair)
     local ModData = MGE.ModData
-    if atmo then return MGE.AtmoLayer.room(), "room in the atmo" end
+    if atmo then return MGE.AtmoLayer.MAX_GENERATE, "at most " .. MGE.AtmoLayer.MAX_GENERATE .. " at once" end
     local free = ModData.freeCount()
     if perPair > 0 then
         local dynamicRoom = math.max(0, MGE.MAX_NONSTATIC_OBJECTS - dynamicCount())
@@ -75,10 +75,10 @@ local function maxGenerate(atmo, perPair)
 end
 
 ---What the limits depend on, for the preview's key: the preview is planned again when they change (an
----import, a delete, Max atmo objects), so it never shows something Generate wouldn't add
+---import, a delete), so it never shows something Generate wouldn't add
 ---@return string
 local function limitsKey()
-    return MGE.AtmoLayer.room() .. "," .. MGE.ModData.freeCount() .. "," .. dynamicCount()
+    return MGE.ModData.freeCount() .. "," .. dynamicCount()
 end
 
 ---@return number[] sides of the default object (ui/assets.lua), what empty Size fields use
@@ -182,7 +182,7 @@ local function planFromFields(factors, turn)
     local most, limit = maxGenerate(atmo, amount >= 2 and math.max(perPair, 0) or 0)
     if most == 0 then
         if atmo then
-            note = "no room in the atmo (Settings > Max atmo objects)"
+            note = "no pieces"
         elseif MGE.ModData.freeCount() > 0 then
             note = "no free dynamic ids 1-" .. MGE.MAX_NONSTATIC_OBJECTS .. " for joined pieces: Joints 0, or Reindex (Advanced)"
         else
@@ -537,7 +537,7 @@ end
 local function buildAmount(holder)
     Rows.begin()
     amountForAtmo = forAtmo()
-    local pieces = (amountForAtmo and "Pieces in the shape, as many as the atmo has room\nfor (Settings > Max atmo objects)"
+    local pieces = (amountForAtmo and "Pieces in the shape, at most " .. MGE.AtmoLayer.MAX_GENERATE
         or "Pieces in the shape, as many as there are free ids\n(joined ones: free dynamic ids 1-" .. MGE.MAX_NONSTATIC_OBJECTS .. ")") ..
         ". 1, or values that\ncan't make a shape: one default object"
     if amountForAtmo then

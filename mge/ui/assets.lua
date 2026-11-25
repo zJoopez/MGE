@@ -239,10 +239,6 @@ local function importObjects(parser, keepTab, inView, jointIds, atmoExcess)
         local free = ModData.freeCount()
         if type(atmoExcess) == "number" then free = math.max(0, math.min(free, atmoExcess)) end
         local over = #parser.env_obj - free
-        if over > MGE.AtmoLayer.room() then
-            MGE.say("no atmo room: " .. over .. " needed, " .. MGE.AtmoLayer.room() .. " free (Settings > Max atmo objects)")
-            return false
-        end
         for _ = 1, over do table.insert(excess, 1, table.remove(parser.env_obj)) end
     end
     local plans = {}
@@ -442,11 +438,6 @@ local lastAtmo = nil
 ---@return boolean added
 local function addAtmo(objects, inView)
     if #objects == 0 then return false end
-    local room = MGE.AtmoLayer.room()
-    if #objects > room then
-        MGE.say("" .. #objects .. " atmo objects, room for " .. room .. " (Settings > Max atmo objects)")
-        return false
-    end
     if inView then placeInView({ env_obj = objects, env_obj_joint = {}, ignores = {} }) end
     local layer = ModData.parsed.atmo
     for _, obj in ipairs(layer) do obj.selected = nil end

@@ -1,14 +1,14 @@
 -- Settings overlay, opened by the toolbar's settings button (ui/main.lua):
 --   Camera follow: the camera looks at the selection when selecting and moving (MGE.Camera.followMoves)
+--   Max draws:      at most this many atmo shapes drawn a frame, the nearest (AtmoLayer.maxDraws)
 --   Snapping:       the steps (MGE.Config) a wheel turn over a number field adds and a gizmo drag snaps
 --                   to while Ctrl is held: Step, Shift step with Shift, Rotate step for Rot fields and the
 --                   rings. A typed step applies when you leave the field or the overlay closes, an
 --                   invalid one goes back to the current step
---   Atmo objects:   the atmo's size (AtmoLayer.maxAtmo), every one is drawn: the game's graphics
---                   settings set how many shapes it draws a frame. Typed like the steps
---   Prop flight:    how drawn props fly in a playable mod (Playable.flightLevel): Simple, Shapes, Full
---   Prop ghosts:    the flying props' move predictions while a turn waits (Playable.ghosts): On, Off
---   Far props:      flying props far from every player move or pause (Playable.pauseFar): Move, Pause
+--   Dynamic atmo:   heading over the props' rows
+--   Detail:         how drawn props fly in a playable mod (Playable.flightLevel): Low, Medium, High
+--   Ghosts:         the flying props' move predictions while a turn waits (Playable.ghosts): On, Off
+--   Distant:        flying props far from every player move or pause (Playable.pauseFar): Move, Pause
 --   Shortcuts:      heading with a "?", hovering it lists the keyboard and mouse shortcuts
 -- Every row explains itself on the "?" at its end, like the editor rows
 --   UI size:        MGE's overall size (Widgets.UI_SCALE), restarts MGE to apply it
@@ -64,18 +64,6 @@ local SNAP_STEPS = {
 local SNAP_INFO = "Wheel over a number field, or Ctrl while\ndragging the gizmo. Hold Shift for the\n" ..
     "Shift step (rotation: 1 degree)."
 
--- atmo objects (utils/atmo_layer.lua): the atmo's size. MGE draws every one, the game draws only so
--- many shapes a frame, how many depends on its graphics settings (lowest: 10 000)
-local AtmoLayer = MGE.AtmoLayer
----@type MgeNumberSetting[]
-local ATMO_FIELDS = {
-    { label = "Max atmo objects", min = 0, minInclusive = true, max = 100000, whole = true,
-        get = function() return AtmoLayer.maxAtmo end, set = function(v) AtmoLayer.maxAtmo = v end },
-}
-local ATMO_INFO = "How many objects the atmo holds. MGE draws every one,\n" ..
-    "but the game draws only so many shapes a frame:\nlower graphics settings draw more. Above 256 you may\n" ..
-    "need lower graphics to see them all."
-
 -- shortcut list, shown by the "?" next to the Shortcuts heading (the toolbar used to have it)
 local SHORTCUTS = table.concat({
     "F1: show / hide window",
@@ -103,14 +91,14 @@ local ROW_GAP = px(4)
 local SETTING_H = ROW_H + ROW_GAP -- a row, its explanation is its "?" (like the editor rows)
 local SECTION_H = px(26) -- section heading
 local SNAP_H = SECTION_H + #SNAP_STEPS * SETTING_H
-local ATMO_H = SECTION_H + #ATMO_FIELDS * SETTING_H
-local FLIGHT_H = SETTING_H -- Prop flight
-local GHOSTS_H = SETTING_H -- Prop ghosts
-local FAR_H = SETTING_H -- Far props
+local DRAWS_H = SETTING_H -- Max draws
+local FLIGHT_H = SECTION_H + SETTING_H -- Dynamic atmo heading, Detail
+local GHOSTS_H = SETTING_H -- Ghosts
+local FAR_H = SETTING_H -- Distant
 local SHORTCUTS_H = SECTION_H + px(4)
 local CLOSE_H = Widgets.ROW_H
 local LABEL_W = px(150)
-local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + ATMO_H + FLIGHT_H + GHOSTS_H + FAR_H + SHORTCUTS_H + CLOSE_H +
+local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + DRAWS_H + FLIGHT_H + GHOSTS_H + FAR_H + SHORTCUTS_H + CLOSE_H +
     PAD * 2 -- + UI size
 
 local overlay = TBMenu:spawnWindowOverlay(true) -- true: a click on the dark background closes it
@@ -300,17 +288,37 @@ local function addNumberSection(name, fields, infoText)
     end
 end
 
-addNumberSection("Snapping", SNAP_STEPS, SNAP_INFO) -- three steps, one explanation: on the heading
-addNumberSection("Atmo objects", ATMO_FIELDS, ATMO_INFO)
-
--- Prop flight (utils/playable.lua, Atmo Play's flight.lua): how props fly while no object carries them, by how
--- much work this computer can take. Atmo Play keeps its own (its window's Detail)
+-- Max draws (utils/atmo_layer.lua): the nearest this many atmo shapes a frame
 do
-    local content = addRow(y, "Prop flight", "How props fly in a playable mod:\n" ..
-        "Simple: as spheres, least work.\nShapes: real shapes.\n" ..
-        "Full: real shapes that hit each other, most work.")
+    local AtmoLayer = MGE.AtmoLayer
+    local content = addRow(y, "Max draws", "Atmo shapes drawn a frame, nearest first.\nLower: steadier fps on big maps.")
+    local buttons, items = nil, {}
+    local function show()
+        for i, n in ipairs(AtmoLayer.DRAW_CHOICES) do
+            local btn = buttons[i]
+            if btn and not btn.destroyed then
+                btn.bgColor = AtmoLayer.maxDraws == n and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
+            end
+        end
+    end
+    for i, n in ipairs(AtmoLayer.DRAW_CHOICES) do
+        items[i] = { label = tostring(n), onClick = function() AtmoLayer.maxDraws = n show() end }
+    end
+    buttons = Widgets.buttonRow(content, 0, ROW_H, items, Widgets.GAP)
+    show()
+    y = y + DRAWS_H
+end
+
+addNumberSection("Snapping", SNAP_STEPS, SNAP_INFO) -- three steps, one explanation: on the heading
+-- Dynamic atmo: the props' rows. Detail (utils/playable.lua, Atmo Play's flight.lua): how props fly while no
+-- object carries them, by how much work this computer can take (Atmo Play's window: Detail)
+addHelpHeading(y, "Dynamic atmo", "Props (atmo objects with Static off)\nin a playable mod.")
+y = y + SECTION_H
+do
+    local content = addRow(y, "Detail", "How props fly:\nLow: as spheres, least work.\nMedium: real shapes.\n" ..
+        "High: real shapes that hit each other, most work.")
     local Dynamics = MGE.AtmoPlay.Dynamics
-    local labels = { simple = "Simple", shapes = "Shapes", full = "Full" }
+    local labels = { simple = "Low", shapes = "Medium", full = "High" }
     local buttons
     local function show()
         for i, level in ipairs(Dynamics.LEVELS) do
@@ -329,13 +337,13 @@ do
     end
     buttons = Widgets.buttonRow(content, 0, ROW_H, items, Widgets.GAP)
     show()
-    y = y + FLIGHT_H
+    y = y + SETTING_H
 end
 
--- Prop ghosts (utils/playable.lua, Atmo Play's Dynamics.drawGhosts): the flying props' move predictions while a turn
+-- Ghosts (utils/playable.lua, Atmo Play's Dynamics.drawGhosts): the flying props' move predictions while a turn
 -- waits. They run the props' flights ahead, as much work as playing them: off for many thrust props on a slow computer
 do
-    local content = addRow(y, "Prop ghosts", "Flying props' ghosts while a turn waits.\n" ..
+    local content = addRow(y, "Ghosts", "Flying props' ghosts while a turn waits.\n" ..
         "Off saves work with many flying props.")
     local buttons
     local function show()
@@ -354,10 +362,10 @@ do
     y = y + GHOSTS_H
 end
 
--- Far props (utils/playable.lua, Atmo Play's Dynamics.FLY_RANGE): moving props far from every player and dynamic
+-- Distant (utils/playable.lua, Atmo Play's Dynamics.FLY_RANGE): moving props far from every player and dynamic
 -- object pause where they are until someone comes near, less work. Neither choice starts a prop: Active off waits
 do
-    local content = addRow(y, "Far props", "Moving props far from every player:\n" ..
+    local content = addRow(y, "Distant", "Moving props far from every player:\n" ..
         "Move: keep moving. Pause: wait until\nsomeone comes near (less work).")
     local buttons
     local function show()

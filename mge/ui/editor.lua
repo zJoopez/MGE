@@ -227,10 +227,6 @@ end
 local function duplicateAtmo()
     local selected = ModData.getSelectedAtmo()
     if #selected == 0 then return end
-    if #selected > MGE.AtmoLayer.room() then
-        MGE.say("no room for " .. #selected .. " more atmo objects (Settings > Max atmo objects)")
-        return
-    end
     local atmoObjs = ModData.parsed.atmo
     for _, obj in ipairs(selected) do
         local copy = { kind = "atmo", props = ModData.copy(obj.props), lines = obj.lines, selected = true }

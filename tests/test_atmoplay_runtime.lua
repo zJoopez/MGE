@@ -624,3 +624,23 @@ run("far props: Move by default, Pause saved and read back, silently", function(
     T.eq(Runtime.settings.pauseFar, true, "read back")
     T.eq(#game.said, said, "nothing said")
 end)
+
+run("max draws: 1000 by default, a limit saved, read back and passed to the drawer", function(game)
+    local Runtime = startRuntime()
+    T.eq(Runtime.settings.maxDraws, 1000, "1000 by default")
+    Runtime.setMaxDraws(500)
+    T.ok((game.files[Runtime.settingsPath()] or ""):find("maxdraws 500", 1, true) ~= nil, "kept in atmoplay.cfg")
+    Runtime.settings.maxDraws = 1000
+    Runtime.start()
+    T.eq(Runtime.settings.maxDraws, 500, "read back")
+    local Drawer, seen = ATMOPLAY.Drawer, nil
+    local original = Drawer.draw
+    Drawer.draw = function(_, _, _, maxDraws) seen = maxDraws return 0 end
+    local ok, err = pcall(function()
+        game.lm("arena.tbm")
+        game.fire("draw3d")
+    end)
+    Drawer.draw = original
+    assert(ok, err)
+    T.eq(seen, 500, "the drawer gets it")
+end)

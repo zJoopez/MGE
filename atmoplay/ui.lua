@@ -1,4 +1,4 @@
--- Atmo Play's window, in MGE's look: Detail, Ghosts, Far props and Quit through the runtime's silent setters, the
+-- Atmo Play's window, in MGE's look: Detail, Ghosts, Distant, Max draws and Quit through the runtime's silent setters, the
 -- current choices lit. Nothing is redrawn per frame. The cross hides it behind a small "AP" button. Only atmoplay.lua
 -- loads this file (MGE has its own window)
 local NS = ATMOPLAY_LOADING
@@ -92,7 +92,7 @@ local function build()
     local c = colors()
     local Runtime = NS.Runtime
     local settings = Runtime.settings
-    local rows = 3 -- detail, ghosts, far props; then quit
+    local rows = 4 -- detail, ghosts, far props, max draws; then quit
     local h = UI.BAR_H + UI.PAD + rows * (UI.ROW_H + UI.GAP) + UI.PAD + UI.ROW_H + UI.PAD
     local pos = UI.position()
     local window = UIElement.new({
@@ -153,10 +153,17 @@ local function build()
         { "Off", Runtime.setGhosts, false, function() return not settings.ghosts end },
     }, c)
     y = y + UI.ROW_H + UI.GAP
-    choiceRow(content, y, "Far props", {
+    choiceRow(content, y, "Distant", {
         { "Move", Runtime.setFarProps, false, function() return not settings.pauseFar end },
         { "Pause", Runtime.setFarProps, true, function() return settings.pauseFar end },
     }, c)
+    y = y + UI.ROW_H + UI.GAP
+    -- the nearest this many atmo shapes a frame: steadier fps on big maps
+    local draws = {}
+    for i, n in ipairs({ 5000, 1000, 500, 250 }) do
+        draws[i] = { tostring(n), Runtime.setMaxDraws, n, function() return settings.maxDraws == n end }
+    end
+    choiceRow(content, y, "Max draws", draws, c)
     y = y + UI.ROW_H + UI.GAP + UI.PAD
     button(content, 0, y, content.size.w, UI.ROW_H, "Quit Atmo Play", function() run(Runtime.stop) end, c)
 

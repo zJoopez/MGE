@@ -15,10 +15,7 @@ local Highlight = {
     fillAlpha = 0.25,
     previewColor = { 1.0, 0.6, 0.0 },
     previewAlpha = 0.2,
-    -- the highlights' share of the shapes the game draws a frame: 256 objects, 256 atmo objects, 256
-    -- highlights (256 x 3). The Generate preview never needs any of it: it adds at most as many pieces as
-    -- its list has room for (free ids, the atmo's room), so it fits in that list's share. A bigger atmo
-    -- (Settings > Max atmo objects) goes past it on purpose: lower graphics settings draw more a frame
+    -- the selection highlights' share of the shapes the game draws a frame
     drawRoom = 256,
     ---@type (fun(): HighlightBox[]?, number[][]?)? set by the Generate tab, boxes and joint anchors to draw this frame
     preview = nil,
@@ -209,9 +206,7 @@ local function ghostOnScreen(x, y, z, r)
     return onScreen(ghostProbe)
 end
 
----Atmo objects (utils/atmo_layer.lua): not in the game, MGE draws them, every one. The atmo's size
----(AtmoLayer.maxAtmo, 256) has its own share of the shapes the game draws a frame: 256 objects, 256
----atmo objects and 256 for the highlights (Highlight.drawRoom)
+---Atmo objects (utils/atmo_layer.lua): not in the game, MGE draws them, at most AtmoLayer.maxDraws a frame
 --- full false (Objects list): translucent ghosts in AtmoLayer.color
 --- full true (the Atmo list): in their own color, the selected ones in the highlight color instead, where a
 ---   gizmo drag has them (AtmoLayer.liveGhost). Color only, no extra highlight draw: every one of
@@ -240,6 +235,8 @@ local function drawVisible()
     local n = visN
     for i = #visOrder, n + 1, -1 do visOrder[i] = nil end
     if view then table.sort(visOrder, nearerVis) end
+    local most = MGE.AtmoLayer.maxDraws
+    if most and most > 0 and most < n then n = most end
     for k = 1, n do
         local i = visOrder[k]
         drawGhost(visG[i], visC[i], visA[i], false, visGrow[i])

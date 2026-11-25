@@ -27,10 +27,12 @@ which opens it again:
   other (the most work). Used from the next fight.
 - **Ghosts**: the flying props' move predictions while a turn waits (like the game's ghosts). Off saves their
   work on maps with many thrust props.
-- **Far props**: what moving props do far from every player. Move (default): they keep moving. Pause: they
+- **Distant**: what moving props do far from every player. Move (default): they keep moving. Pause: they
   wait where they are until someone comes near: less work on big maps. Neither starts a prop: ones the
   map's maker didn't set Active stay still until something reaches them.
   Used from the next fight; replays pause the same props at the same frames.
+- **Max draws**: at most 5000 / 1000 (default) / 500 / 250 atmo shapes a frame, the nearest. Lower keeps big
+  maps' fps steady; low graphics settings can show more.
 - **Quit Atmo Play**: stops it and gives you your own atmo back.
 
 Your choices (and whether the window is open) are kept in `atmoplay.cfg`. Atmo Play stays quiet in the chat:

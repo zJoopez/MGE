@@ -78,9 +78,11 @@ end
 --   flight shapes      Detail: simple / shapes / full
 --   ghosts on          flying props' move predictions while a turn waits
 --   farprops move      move, or pause flights far from every player
+--   maxdraws 1000      at most this many atmo shapes drawn a frame, the nearest
 --   ui on              the window open at start (off: only its launcher button)
 --   uipos 10 120       where the window was dragged to
-Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, ghosts = true, pauseFar = false, ui = true, uiPos = nil }
+Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, ghosts = true, pauseFar = false, maxDraws = 1000, ui = true,
+    uiPos = nil }
 
 ---@return string data/script path
 function Runtime.settingsPath()
@@ -93,6 +95,9 @@ function Runtime.loadSettings()
         if key == "flight" then Runtime.settings.flight = Dynamics.level(value) end
         if key == "ghosts" and (value == "on" or value == "off") then Runtime.settings.ghosts = value == "on" end
         if key == "ui" and (value == "on" or value == "off") then Runtime.settings.ui = value == "on" end
+        if key == "maxdraws" and tonumber(value) and tonumber(value) >= 1 then
+            Runtime.settings.maxDraws = math.floor(tonumber(value))
+        end
         if key == "farprops" and (value == "move" or value == "pause") then
             Runtime.settings.pauseFar = value == "pause"
         end
@@ -107,7 +112,7 @@ function Runtime.saveSettings()
     local lines = { "flight " .. Runtime.settings.flight,
         "ghosts " .. (Runtime.settings.ghosts and "on" or "off"),
         "farprops " .. (Runtime.settings.pauseFar and "pause" or "move"),
-        "ui " .. (Runtime.settings.ui and "on" or "off") }
+        "maxdraws " .. Runtime.settings.maxDraws, "ui " .. (Runtime.settings.ui and "on" or "off") }
     local pos = Runtime.settings.uiPos
     if pos then lines[#lines + 1] = string.format("uipos %d %d", pos[1], pos[2]) end
     if not writeLines(Runtime.settingsPath(), lines) then
@@ -429,7 +434,7 @@ local function onDraw3d()
     local drawer = state.drawer
     if drawer and not Runtime.mgeRunning() then
         local t = Runtime.measure and os.clock()
-        local ok, drawn = pcall(Drawer.draw, drawer, view, graphicsLevel())
+        local ok, drawn = pcall(Drawer.draw, drawer, view, graphicsLevel(), Runtime.settings.maxDraws)
         if not ok then
             if not state.drawError then -- once a session; it tries again every frame
                 state.drawError = true
@@ -476,7 +481,13 @@ function Runtime.setGhosts(on)
     if not on and loaded and loaded.dynamics then Dynamics.dropPrediction(loaded.dynamics) end
 end
 
----Far props pause; a running mod takes it from its next fight
+---Distant (far props) pause; a running mod takes it from its next fight
+---At most this many atmo shapes drawn a frame, the nearest; from the next frame
+function Runtime.setMaxDraws(n)
+    Runtime.settings.maxDraws = math.max(1, math.floor(tonumber(n) or 1000))
+    Runtime.saveSettings()
+end
+
 function Runtime.setFarProps(on)
     Runtime.settings.pauseFar = on and true or false
     Runtime.saveSettings()

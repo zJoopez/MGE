@@ -57,7 +57,7 @@ local FIELDS = {
             " object ids free in this mod.\n0: every box to the atmo, the object ids stay free." },
     { label = "Atmo", keys = { "atmo" }, hints = { "0" }, whole = true,
         info = "Boxes after the Budget's added to the atmo (drawn\nonly, no collisions, the Atmo list), " ..
-            "the\nsmaller ones. Up to " .. MGE.AtmoLayer.room() .. ". Empty: none." },
+            "the\nsmaller ones. Empty: none." },
     { label = "Min size", keys = { "minSize" }, hints = { tostring(DEFAULTS.minSize) },
         info = "Brushes smaller than this on every side are\nleft out (trims, details). Map units." },
     { label = "Terrain tol.", keys = { "terrainTolerance" }, hints = { tostring(DEFAULTS.terrainTolerance) },
@@ -244,12 +244,12 @@ local function readOptions()
     if simplifyTolerance and simplifyTolerance < 0 then return nil, "Simplify tol. can't be below 0" end
     options.simplifyTolerance = simplifyTolerance
     if scale and scale <= 0 then return nil, "Scale must be above 0" end
-    local free, room = freeIds(), MGE.AtmoLayer.room()
+    local free = freeIds()
     -- objects first, then the atmo ones (Assets.addObjects' atmoExcess: the boxes after objectBudget)
     budget = math.floor(budget or free) -- empty: every free object id, 0: every box to the atmo
     if budget < 0 or budget > free then return nil, "Budget must be 0-" .. free .. " (free object ids)" end
     local atmoCount = math.floor(typed("atmo") or 0) -- empty: none
-    if atmoCount < 0 or atmoCount > room then return nil, "Atmo must be 0-" .. room .. " (" .. MGE.AtmoLayer.maxAtmo .. " at most)" end
+    if atmoCount < 0 then return nil, "Atmo can't be below 0" end
     if budget + atmoCount < 1 then return nil, "Budget and Atmo are both 0" end
     options.scale, options.budget, options.minSize = scale, budget + atmoCount, minSize
     options.objectBudget = budget

@@ -120,6 +120,11 @@ env_obj prop
     local ok, err = pcall(function()
         Drawer.draw(d, view, 2)
         T.nearList(drawn, { 3, 20, 40, 90 }, 1e-12, "near to far, the prop where it is")
+        drawn = {}
+        T.eq(Drawer.draw(d, view, 2, 2), 2, "max draws: two")
+        T.nearList(drawn, { 3, 20 }, 1e-12, "the nearest two")
+        drawn = {}
+        T.eq(Drawer.draw(d, view, 2, 0), 4, "0: all")
     end)
     set_color, draw_box_m = saved[1], saved[2]
     assert(ok, err)

@@ -423,12 +423,12 @@ end
 
 ---------------------------------------------------------------------------------------------------- playing in the editor
 
--- how drawn props fly while testing in the editor (Atmo Play's Dynamics.LEVELS), Settings > Prop flight (config.cfg):
+-- how drawn props fly while testing in the editor (Atmo Play's Dynamics.LEVELS), Settings > Detail (config.cfg):
 -- the player's computer, not the mod. Atmo Play has its own (its window's Detail)
 Playable.flightLevel = Dynamics.DEFAULT_LEVEL
--- the flying props' ghosts (Playable.drawGhosts), Settings > Prop ghosts (config.cfg propGhosts): off saves their work
+-- the flying props' ghosts (Playable.drawGhosts), Settings > Ghosts (config.cfg propGhosts): off saves their work
 Playable.ghosts = true
--- flying props far from every player pause (Atmo Play's far props), Settings > Far props (config.cfg propPauseFar)
+-- flying props far from every player pause (Atmo Play's far props), Settings > Distant (config.cfg propPauseFar)
 Playable.pauseFar = false
 
 local PLAY_HOOKS = MGE.hookname .. "_playable"
@@ -439,21 +439,21 @@ local dynamics = nil
 ---@type number? the player's replaycache while props have it off (cached replays misplace them, as in Atmo Play)
 local cacheBefore = nil
 
----Settings > Prop ghosts
+---Settings > Ghosts
 ---@param on boolean
 function Playable.setGhosts(on)
     Playable.ghosts = on and true or false
     if not Playable.ghosts and dynamics then Dynamics.dropPrediction(dynamics) end -- its memory goes at once
 end
 
----Settings > Far props: pause (true) or move; the props playing now take it from the next fight
+---Settings > Distant: pause (true) or move; the props playing now take it from the next fight
 ---@param on boolean
 function Playable.setPauseFar(on)
     Playable.pauseFar = on and true or false
     if dynamics then Dynamics.setPauseFar(dynamics, Playable.pauseFar) end
 end
 
----Settings > Prop flight: how drawn props fly (Dynamics.LEVELS); the props playing now take it from the next fight
+---Settings > Detail: how drawn props fly (Dynamics.LEVELS); the props playing now take it from the next fight
 ---@param level string
 function Playable.setFlightLevel(level)
     Playable.flightLevel = Dynamics.level(level)

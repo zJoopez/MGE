@@ -240,8 +240,9 @@ local function nearer(a, b) return a.dist < b.dist end
 ---skips what they hide). Props where they are, not while carried (their object shows them)
 ---@param view table? Drawer.measureView's (nil: every shape, unsorted)
 ---@param level integer the game's graphics level (0-2)
+---@param maxDraws integer? at most this many (the nearest); nil or 0: all
 ---@return integer drawn
-function Drawer.draw(d, view, level)
+function Drawer.draw(d, view, level, maxDraws)
     lastColor = nil -- others drew in between
     local n = 0
     for _, cell in ipairs(d.cellList) do
@@ -283,6 +284,7 @@ function Drawer.draw(d, view, level)
         end
         table.sort(visible, nearer)
     end
+    if maxDraws and maxDraws > 0 and maxDraws < n then n = maxDraws end
     for i = 1, n do
         local item = visible[i]
         local p = item.at

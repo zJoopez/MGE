@@ -21,11 +21,11 @@ local FileHandler = MGE.FileHandler
 local AtmoLayer = {
     color = { 0.75, 0.45, 1.0 }, -- ghost fill, selected ones use the selection highlight's color
     alpha = 0.15,
-    -- the atmo's size, what imports, Generate, Duplicate and To atmo may fill. MGE draws every atmo object
-    -- (utils/highlight.lua): 256 leaves 256 more shapes for the rest MGE draws, next to the game's 256
-    -- objects. How many the game draws a frame depends on its graphics settings (10 000 drew on the
-    -- lowest): Settings > Max atmo objects raises it, the player's call
-    maxAtmo = 256,
+    -- at most this many atmo shapes drawn a frame, the nearest the camera (Settings > Max draws). The game draws
+    -- only so many shapes a frame (fewer on higher graphics); a cap keeps big maps' fps steady
+    maxDraws = 1000,
+    DRAW_CHOICES = { 5000, 1000, 500, 250 },
+    MAX_GENERATE = 5000, -- most pieces one Generate adds to the atmo: no more could be drawn (DRAW_CHOICES' most)
     -- the objects' alpha while the Atmo list shows (set live, put back after): see-through, the atmo in front
     seeThroughAlpha = 0.15,
     ---@type { move: number[]?, rotation: number[][]?, scale: number[]?, pivot: number[], frame: number[][] }?
@@ -264,11 +264,6 @@ function AtmoLayer.toObjects()
     local before = #ModData.parsed.atmo
     AtmoLayer.moveOut()
     if #ModData.parsed.atmo < before and MGE.Main then MGE.Main.setListTab("objects") end
-end
-
----@return integer atmo objects an import may still add (maxAtmo minus those there already)
-function AtmoLayer.room()
-    return math.max(0, AtmoLayer.maxAtmo - #ModData.parsed.atmo)
 end
 
 ---Adds objects to the atmo, selected (an import's objects over the free ids, ui/assets.lua). No undo

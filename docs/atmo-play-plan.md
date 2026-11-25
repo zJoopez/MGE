@@ -642,6 +642,11 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     (models, animated, header). Gone with it: the props' copies in the game's atmo (dynamics.lua findItems /
     drawCopies / restoreCopies, noCopies; MGE never used them), the draw fallback (an error is said once, drawing
     goes on) and `/atmoplay draw`. An old `draw` line in atmoplay.cfg is ignored.
+    Max draws (2026-11-25, user tested in game: 1000 on max graphics drew no fewer shapes but gave much steadier fps;
+    past ~5k fps drops fast): the nearest N shapes a frame, 5000 / 1000 (default) / 500 / 250. Atmo Play's window
+    and atmoplay.cfg `maxdraws`; MGE's Settings > Max draws (config `maxDraws`, AtmoLayer.maxDraws). MGE's atmo size
+    limit (maxAtmo, Settings > Max atmo objects, the "no atmo room" checks) is gone; Generate adds at most
+    AtmoLayer.MAX_GENERATE (5000, the most Max draws can show) pieces at once to the atmo. Settings: Max draws, then a "Dynamic atmo" heading over Prop detail (was Prop flight; Low / Medium / High as in Atmo Play), Prop ghosts, Far props.
   - **Low fps (2026-11-22, user: capped at 30, props vanished mid flight).** Props run once a drawn frame; at 30 fps
     more match frames pass between two. Fights decide every take and release themselves (fine); replays watch the
     pool objects, and a let-go plus a take between two drawn frames never showed the object parked: the replay
