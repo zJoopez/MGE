@@ -8,6 +8,7 @@
 --                   settings set how many shapes it draws a frame. Typed like the steps
 --   Prop flight:    how drawn props fly in a playable mod (Playable.flightLevel): Simple, Shapes, Full
 --   Prop ghosts:    the flying props' move predictions while a turn waits (Playable.ghosts): On, Off
+--   Far props:      flying props far from every player move or pause (Playable.pauseFar): Move, Pause
 --   Shortcuts:      heading with a "?", hovering it lists the keyboard and mouse shortcuts
 -- Every row explains itself on the "?" at its end, like the editor rows
 --   UI size:        MGE's overall size (Widgets.UI_SCALE), restarts MGE to apply it
@@ -105,10 +106,11 @@ local SNAP_H = SECTION_H + #SNAP_STEPS * SETTING_H
 local ATMO_H = SECTION_H + #ATMO_FIELDS * SETTING_H
 local FLIGHT_H = SETTING_H -- Prop flight
 local GHOSTS_H = SETTING_H -- Prop ghosts
+local FAR_H = SETTING_H -- Far props
 local SHORTCUTS_H = SECTION_H + px(4)
 local CLOSE_H = Widgets.ROW_H
 local LABEL_W = px(150)
-local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + ATMO_H + FLIGHT_H + GHOSTS_H + SHORTCUTS_H + CLOSE_H +
+local panelH = TITLE_H + (#SETTINGS + 1) * SETTING_H + SNAP_H + ATMO_H + FLIGHT_H + GHOSTS_H + FAR_H + SHORTCUTS_H + CLOSE_H +
     PAD * 2 -- + UI size
 
 local overlay = TBMenu:spawnWindowOverlay(true) -- true: a click on the dark background closes it
@@ -302,12 +304,12 @@ addNumberSection("Snapping", SNAP_STEPS, SNAP_INFO) -- three steps, one explanat
 addNumberSection("Atmo objects", ATMO_FIELDS, ATMO_INFO)
 
 -- Prop flight (utils/playable.lua, Atmo Play's flight.lua): how props fly while no object carries them, by how
--- much work this computer can take. Atmo Play keeps its own (/atmoplay flight)
+-- much work this computer can take. Atmo Play keeps its own (its window's Detail)
 do
     local content = addRow(y, "Prop flight", "How props fly drawn in a playable mod:\n" ..
         "Simple: as spheres, the least work.\nShapes: their real shapes, they tip and roll.\n" ..
         "Full: real shapes that hit each other and\npush the props they run into: the most work.\n" ..
-        "From the next fight. Atmo Play: /atmoplay flight")
+        "From the next fight. Atmo Play: its window's Detail")
     local Dynamics = MGE.AtmoPlay.Dynamics
     local labels = { simple = "Simple", shapes = "Shapes", full = "Full" }
     local buttons
@@ -337,7 +339,7 @@ do
     local content = addRow(y, "Prop ghosts", "Ghosts of the flying props while a turn waits,\n" ..
         "where the turn takes them (like the game's ghosts).\n" ..
         "They fly the props ahead: as much work as\nplaying them. Off saves it with many thrust props.\n" ..
-        "Atmo Play: /atmoplay ghosts")
+        "Atmo Play: its window's Ghosts")
     local buttons
     local function show()
         for i, on in ipairs({ true, false }) do
@@ -353,6 +355,29 @@ do
     }, Widgets.GAP)
     show()
     y = y + GHOSTS_H
+end
+
+-- Far props (utils/playable.lua, Atmo Play's Dynamics.FLY_RANGE): flying props far from every player and dynamic
+-- object pause where they are until someone comes near, less work; props whose Motion is Always fly anyway
+do
+    local content = addRow(y, "Far props", "Flying props far from every player:\n" ..
+        "Move: all of them fly.\nPause: those far away wait where they are\nuntil someone comes near: less work.\n" ..
+        "Props set to Motion: Always fly anyway.\nFrom the next fight. Atmo Play: its window's Far props")
+    local buttons
+    local function show()
+        for i, on in ipairs({ false, true }) do
+            local btn = buttons[i]
+            if btn and not btn.destroyed then
+                btn.bgColor = MGE.Playable.pauseFar == on and Widgets.ACTIVE_COLOR or Widgets.STYLE.bg
+            end
+        end
+    end
+    buttons = Widgets.buttonRow(content, 0, ROW_H, {
+        { label = "Move", onClick = function() MGE.Playable.setPauseFar(false) show() end },
+        { label = "Pause", onClick = function() MGE.Playable.setPauseFar(true) show() end },
+    }, Widgets.GAP)
+    show()
+    y = y + FAR_H
 end
 
 -- Shortcuts heading with the "?" right after the text, hovering it lists them

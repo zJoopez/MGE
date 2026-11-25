@@ -719,6 +719,59 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
         unchanged. A relative stop (a share of the first round's change) was tried: 0.01 changed nothing and saved
         5%, 0.03+ made the box travel 8-17% short against the recorded real one: dropped. The early frames' cost
         is real contact work; only fewer flying props cuts it (a flight range).
+  - **Code review fixes (2026-11-24):** a mod changed and loaded again under its name is read again (runtime: the
+    file's text compared at match_begin; the name forgotten while MGE runs); Dynamics and the driver made outside
+    match_begin (a restart or /atmoplay reload mid-fight) start as after a replay: the first fight draw rebuilds the
+    props and sets every pool object again (they read the gamerule gravity at creation too); a carried prop's
+    object painted as the game reads colors (0-256 above 2, up to 2 drawn as 1) and `col` / `colour` read as
+    `color` (they painted white); a prop below the fall line isn't wanted (it was let go and taken again every frame;
+    the ground stops props at z 0, so this is a map built higher than FALL); pool objects missing from the world
+    left out of the pools; a replay take matched to nothing counted once (it counted every frame until its object
+    parked); no "stopped" message after a failed start. Tests for each (the fall and miss tests fail without their
+    fix).
+  - **A window (2026-11-24, user: like MGE's).** `atmoplay/ui.lua`, loaded only by atmoplay.lua (and packaged): MGE's
+    look and ways (a plain UIElement panel, a dark bar to drag it by with a close cross, buttons lit for the current
+    choice, texts drawn each frame from strings refreshed every 0.5 s: nothing rebuilt). Status (Runtime.statusLines),
+    Flight Simple / Shapes / Full, Ghosts On / Off, Drawing Atmo Play / Game, Reload / Time / Quit. Every button runs
+    its /atmoplay command (Runtime.command), so the window and the chat stay one. `/atmoplay ui [on | off]`, kept
+    in atmoplay.cfg (`ui`); opens with Atmo Play unless hidden by choice. Offline: a stand-in toriui (scratch) built
+    it, drew it, clicked every button (the commands in order, the right ones lit), dragged it, closed it; a runtime
+    test for the command, the cfg line and the status lines. In game: not seen yet.
+    Trimmed the same day (user: bloat): the window holds only Flight and Ghosts, fixed labels, nothing drawn or
+    refreshed per frame (the lit buttons change on a click or when shown). Gone from it: the status panel (four
+    lines drawn every frame, no use to a player; Runtime.statusLines removed), Drawing (`game` is the old path,
+    the game's atmo manager drawing every object; it's still the automatic fallback when Atmo Play's drawing errors),
+    Reload (a changed mod is read again by itself now) and Time (a measuring tool). Those stay as chat commands for
+    development; the README lists flight, ghosts, ui and quit.
+    Then (user, 2026-11-25): the trim broke the buttons (their labels were added with addAdaptedText's override,
+    which replaces the element's own drawing: no background, hover or lit color; MGE adds a button's label without
+    it) and dropped Quit. Now the window has everything a player sets, so no chat command is needed: Flight, Ghosts,
+    Launcher (atmoplay.cfg `launcher`: while the window is hidden, a small Atmo Play button where it was opens it
+    again) and Quit Atmo Play. Plain `/atmoplay` opens the window (the way back with the launcher off); the status is
+    `/atmoplay status`, with reload, time and draw for development. Offline: the stand-in toriui test checks every
+    button keeps its own drawing, the commands, the lit choices, the launcher and Quit (nothing comes back after it).
+    Then (user): no launcher toggle and no chat commands. The launcher is always there: a 32-px "AP" button where
+    the window was, while it's hidden. The window calls the runtime's silent setters (setFlight, setGhosts,
+    setWindow, stop); the `/atmoplay` hook exists only in dev builds (debuglog.lua present: status, reload, time,
+    draw, flight, ghosts, log, quit). Messages cut to failures and what the player must do (couldn't start, drawing /
+    props / ghosts failed, atmo not loaded or written, pool objects missing: load again, a cached replay: open again);
+    gone: "running", what a mod holds, "replay cache off", "MGE plays it", settings' echoes, "stopped". A runtime test:
+    a release registers no command and says nothing while a playable mod loads and plays.
+  - **Cleanup and fixes (2026-11-25, user):**
+    - The dev-only parts of runtime.lua (status, /atmoplay time, the dev command: ~110 lines) moved into
+      debuglog.lua, which the release zip leaves out. runtime.lua keeps `Runtime.measure` (nil unless /atmoplay time
+      measures: no per-frame timing work in releases) and `Runtime.dev` (state, reload, redraw) for it. 750 -> 638
+      lines. Probe logs from these sessions deleted (~32 MB).
+    - Pills: ODE's capsule inertia (dMassSetCapsule) instead of the box around them: against the recorded real
+      cylinder 89.3 / 89.6 travelled (was 79.6), 0.15 apart at frame 200 (was 1.0). Test pins the formula.
+    - Ghosts: a new prediction (camera moved away, a prop let go) is built while the old one stays shown, and takes
+      its place once it covers the ghost's frames (`s.pendingPrediction`); shown at once, the new one could only show
+      the few frames it had: the ghosts stalled and jumped as the camera moved. `Dynamics.dropPrediction` (ghosts off)
+      drops both.
+    - The window: Detail as Low / Medium / High (simple / shapes / full inside); its place saved in atmoplay.cfg
+      (`uipos`) when a drag ends.
+    - Open: a flight range (props far from every player pause their flights) as a toggle: whose (a player's option,
+      or the map maker's per prop for set pieces that must always move) to be decided.
   - **Replay of a 200,000:1 hit (2026-11-24, user: MGE working copy, thrust cubes of mass 20 / 25 into walls of
     0.0001 props; in the replay view the cubes slid through and props vanished "about where we entered the replay").**
     Probe `tools/atmoplay/probe_replay.lua` + `compare_replay.lua` (fight against each replay viewing, frame by frame).
@@ -862,6 +915,24 @@ and MGE pass the static colliders (`statics`); gravity from `get_game_rules().gr
     and rewinds (across snapshots, with takes, releases, spin and wakes).
   - Not in it: edge against edge between a sphere / pill and a box is approximate; thin walls can be passed
     by fast props (no sweep); flying props never hit carried ones or players (they become real near them).
+  - **Motion and far props (2026-11-25, user: "on many cases we'd want to keep thrust regardless so should be
+    toggle"; "dynamics could have physics toggle to decide whether they can start active without proximity").**
+    Per prop, `prop_motion <start> <always>` (MGE: Atmo list > Advanced > Motion, Active / Always; no line:
+    the defaults). start 1 (Active): ANY prop flies from frame 0, so plain dynamic atmo falls, tumbles and
+    settles under gravity before anything comes near (its flight ends at rest like a woken one's; user: "allow
+    dynamics atmos tumble and fall before activator gets near"). start 0: it sits still until reached: taken
+    (fights, replays' observed takes and rebuilds' take events alike) or woken by a flying prop; a thrust one
+    gets no carried pushes meanwhile (prop.dormant). No start: active with a thrust that pushes, else waiting
+    (Colliders.startsActive; colliders keep it as prop.startMode 1 / 0 / nil). Only Full makes falling props
+    hit each other: on Low / Medium a stack set Active falls through itself. The player's option, **Far props** (Atmo Play's window and atmoplay.cfg
+    `farprops move|pause`, MGE's Settings > Far props, config `propPauseFar`; from the next match_begin):
+    with Pause, flights farther than FLY_RANGE = 30 from every sampled point aren't stepped (they keep their
+    flight and go on later), unless `always` is 1. The points are body part 0 of each player and the mod's
+    own dynamic objects, sampled in enter_frame every physics frame in fights and replays alike
+    (Dynamics.sample; fly() steps frame f with the samples of f, or the nearest of the 60 before): the same
+    state in both, so a replay pauses the same props at the same frames (test: a fight drawn every third
+    frame equals its replay, the player walking up to a paused prop). Paused props get no ghost (the
+    prediction doesn't pause them). Not checked in game yet.
 
 ## Still open (checked during Phases 1-2, in game)
 

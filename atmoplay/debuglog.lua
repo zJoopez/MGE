@@ -165,5 +165,157 @@ function DebugLog.stop()
     setTrace(false)
 end
 
+---------------------------------------------------------------------------------------------------- status
+
+local function say(text) Runtime.say(text) end
+
+function DebugLog.status()
+    local state = Runtime.dev.state
+    local Driver = NS.Driver
+    local loaded = state.loaded
+    if not loaded then
+        say("running; " .. tostring(state.modName) .. " isn't a playable mod")
+        return
+    end
+    if loaded.drawOnly then
+        say(loaded.name .. ": a drawn mod, its atmo " .. (loaded.drawn and "drawn" or "not drawn") .. " (no pools)")
+        return
+    end
+    say(string.format("%s: %d/%d pool objects in use, %d solid atmo objects", loaded.name,
+        Driver.active(loaded.driver), #loaded.pool.entries, loaded.stats.collidable))
+    if state.drawer then
+        say(string.format("drawing: Atmo Play %d shapes (%d on screen last frame), the game %d", state.drawer.count,
+            state.drawer.drawn, state.drawer.left or 0))
+    end
+    if loaded.dynamics then
+        local carried, props, flying = Dynamics.counts(loaded.dynamics)
+        say(string.format("props: %d of %d carried by %d dynamic pool objects, %d flying drawn (flight %s)", carried,
+            props, #loaded.dynamics.entries, flying, Runtime.settings.flight))
+        local misses = loaded.dynamics.replayMisses
+        if misses and misses.far + misses.none > 0 then
+            say(string.format("this replay: %d takes found only by a wider search, %d not found (its props flew " ..
+                "elsewhere than in the fight: recorded with another version or flight level?)", misses.far, misses.none))
+        end
+    end
+end
+
+---------------------------------------------------------------------------------------------------- timing
+
+-- /atmoplay time: TIMING_FRAMES drawn frames measured (Runtime.measure is set meanwhile), then one report. Each part's
+-- average and worst in ms: the props (their flights, takes and releases), moving the props' drawn copies, the static
+-- pool, Atmo Play's drawing and the game drawing the atmo (its draw3d loop over every atmo element, Atmospheres;
+-- timed by wrapping UIElement3D.drawVisuals while it measures). os.clock: wall time on Windows
+DebugLog.TIMING_FRAMES = 300
+
+local timing = nil
+
+local function addTime(part, ms)
+    part.sum, part.max = part.sum + ms, math.max(part.max, ms)
+end
+
+local function stopTiming()
+    if not timing then return end
+    local U = rawget(_G, "UIElement3D")
+    if timing.origDraw and U then U.drawVisuals = timing.origDraw end
+    timing = nil
+    Runtime.measure = nil
+end
+
+local function reportTiming()
+    local t, n = timing, timing.frames
+    local state = Runtime.dev.state
+    local seconds = os.clock() - t.started
+    local function line(name, part)
+        return string.format("%s %.2f ms (worst %.1f)", name, part.sum / n, part.max)
+    end
+    local flying = state.loaded and state.loaded.dynamics and select(3, Dynamics.counts(state.loaded.dynamics)) or 0
+    say(string.format("%d frames, ~%.0f fps, flight %s, %d flying now:", n, n / math.max(seconds, 1e-6),
+        Runtime.settings.flight, flying))
+    say(line("props", t.props) .. ", " .. line("their copies", t.copies) .. ", " .. line("static pool", t.pool))
+    local ownLine = ""
+    if t.draws > 0 then
+        ownLine = ", " .. line("Atmo Play drawing", { sum = t.own.sum, max = t.own.max }):gsub("%(worst",
+            string.format("(%.0f shapes of %d a frame, worst", t.shapes / t.draws, state.drawer and state.drawer.count or 0))
+    end
+    say(line("the game drawing the atmo", t.atmo) .. ownLine .. string.format(" (%.2f ms a frame in all)",
+        (t.props.sum + t.copies.sum + t.pool.sum + t.atmo.sum + t.own.sum) / n))
+    stopTiming()
+end
+
+local function startTiming()
+    stopTiming()
+    timing = { frames = 0, started = os.clock(), props = { sum = 0, max = 0 }, copies = { sum = 0, max = 0 },
+        pool = { sum = 0, max = 0 }, atmo = { sum = 0, max = 0 }, own = { sum = 0, max = 0 }, shapes = 0, draws = 0 }
+    local U = rawget(_G, "UIElement3D")
+    if U and type(U.drawVisuals) == "function" then
+        local orig = U.drawVisuals
+        timing.origDraw = orig
+        U.drawVisuals = function(object, globalid)
+            local A = rawget(_G, "Atmospheres")
+            local gid = type(object) == "table" and (object.globalid or globalid) or object
+            if timing and A and gid == A.Globalid then
+                local t = os.clock()
+                orig(object, globalid)
+                addTime(timing.atmo, (os.clock() - t) * 1000)
+                return
+            end
+            return orig(object, globalid)
+        end
+    end
+    Runtime.measure = {
+        frame = function(poolMs, propsMs, copiesMs)
+            if not timing then return end
+            addTime(timing.pool, poolMs)
+            addTime(timing.props, propsMs)
+            addTime(timing.copies, copiesMs)
+            timing.frames = timing.frames + 1
+            if timing.frames >= DebugLog.TIMING_FRAMES then reportTiming() end
+        end,
+        own = function(ms, shapes)
+            if not timing then return end
+            addTime(timing.own, ms)
+            timing.shapes, timing.draws = timing.shapes + shapes, timing.draws + 1
+        end,
+        stop = stopTiming,
+    }
+    say("timing the next " .. DebugLog.TIMING_FRAMES .. " frames: play or watch as usual")
+end
+
+---------------------------------------------------------------------------------------------------- the command
+
+-- /atmoplay [status | reload | time | draw own | draw game | flight <level> | ghosts on | off | log | quit]: dev builds
+-- only (this file isn't in the release zip). Players use the window
+function DebugLog.command(text)
+    local word, rest = tostring(text or ""):match("^%s*(%S+)%s*(.-)%s*$")
+    if word ~= "atmoplay" then return end
+    local key, value = rest:match("^(%S*)%s*(.-)$")
+    local state = Runtime.dev.state
+    if key == "" or key == "status" then
+        DebugLog.status()
+    elseif key == "reload" then
+        Runtime.dev.reload()
+    elseif key == "draw" and Runtime.DRAW_MODES[value] then
+        Runtime.settings.draw = value
+        Runtime.saveSettings()
+        Runtime.dev.redraw()
+        say("draw " .. value)
+    elseif key == "time" then
+        if not state.loaded or state.loaded.drawOnly then say("time: load a playable mod first") else startTiming() end
+    elseif key == "flight" and Dynamics.level(value) == value then
+        Runtime.setFlight(value)
+        say("flight " .. value)
+    elseif key == "ghosts" and (value == "on" or value == "off") then
+        Runtime.setGhosts(value == "on")
+        say("ghosts " .. value)
+    elseif key == "log" then
+        DebugLog.toggle()
+    elseif key == "quit" then
+        Runtime.stop()
+    else
+        say("/atmoplay [status | reload | time | draw own|game | flight simple|shapes|full | ghosts on|off | log | quit]")
+    end
+    return 1
+end
+
 NS.DebugLog = DebugLog
 return DebugLog

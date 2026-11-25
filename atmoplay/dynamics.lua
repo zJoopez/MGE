@@ -126,6 +126,10 @@ local Dynamics = {
     -- how drawn props fly (a player's setting, by how fast their computer is; flight.lua): simple, spheres hits
     -- don't turn; shapes, their real shapes; full, real shapes that hit each other and the still props they meet
     LEVELS = { "simple", "shapes", "full" },
+    -- far props (the player's option, Atmo Play's window): flying props this far from every player and the mod's own
+    -- dynamic objects pause where they are (no step) unless their prop_motion says always. Decided by where those were
+    -- at the very frame stepped (sampled each physics frame in fights and replays alike: the same pauses)
+    FLY_RANGE = 30,
     DEFAULT_LEVEL = "shapes",
 }
 
@@ -328,6 +332,8 @@ function Dynamics.new(objects, props, params)
         noCopies = params.noCopies, -- MGE: it draws the atmo itself, the game's atmo copies aren't moved
         noGrid = params.noGrid,
         level = Dynamics.level(params.level), -- how props fly (Dynamics.LEVELS); a new one waits for match_begin
+        pauseFar = params.pauseFar and true or false, -- far props pause (Dynamics.FLY_RANGE); a change waits for match_begin
+        samples = {}, -- by frame: where the players and the mod's dynamic objects were (Dynamics.sample)
         simFrame = 0, -- the frame every flight is at (they step together, flight.lua)
         snapshots = {}, -- by frame: the moved props' poses and flights then (rebuild)
         grouped = {}, cells = {}, maxRadius = 0,
@@ -339,8 +345,20 @@ function Dynamics.new(objects, props, params)
         world = Flight.newWorld(params.statics, params.gravity), fixedGravity = params.gravity ~= nil,
         flying = {}, -- props with a flight (drawn, moving)
         replayMisses = { far = 0, none = 0 },
+        -- as if a replay came before: a state made outside match_begin (Atmo Play restarted or reloaded mid-fight)
+        -- finds pool objects still carrying the old instance's props in the arena. Its first fight draw then rebuilds
+        -- the props to that frame and sets every object again (reseat); match_begin sets the real value
+        wasReplay = true,
     }
     s.cellSize = math.max(s.radius * 2, 1)
+    -- the mod's gravity now (match_begin reads it again; a state made mid-fight has no match_begin before its flights)
+    if not s.fixedGravity then
+        local getRules = rawget(_G, "get_game_rules")
+        local ok, rules = false, nil
+        if getRules then ok, rules = pcall(getRules) end
+        local g = ok and type(rules) == "table" and Flight.parseGravity(rules.gravity) or nil
+        if g then s.world.gravity = g end
+    end
     for _, object in ipairs(objects) do
         local shape = Colliders.shapeOf(object.shape) or "box"
         -- its own parking spot and size as the file has them (MGE writes the group's common prop size there,
@@ -506,10 +524,17 @@ local function clear(s)
     for _, prop in ipairs(s.props) do
         prop.pos, prop.rot, prop.entry = prop.home.pos, prop.home.rot, nil
         prop.flight, prop.flying = nil, nil
-        -- a thrust prop flies from frame 0, from the atmo's pose
-        if prop.thrust then
+        -- an active prop flies from frame 0, from the atmo's pose: a thrust prop by default, any prop with prop_motion
+        -- start 1 (it falls, tumbles and settles before anything comes near: its flight ends at rest as a woken one's).
+        -- A waiting one (start 0, or no thrust and no start) stays still, a thrust one unpushed, until something
+        -- reaches it (a take, a flying prop's hit)
+        local active = prop.startMode == 1 or (prop.startMode == nil and prop.thrust ~= nil)
+        prop.dormant = nil
+        if active then
             prop.flight, prop.flying = Flight.start(nil, 0), true
             s.flying[#s.flying + 1] = prop
+        elseif prop.thrust then
+            prop.dormant = true
         end
         gridPlace(s, prop)
     end
@@ -517,6 +542,7 @@ local function clear(s)
     s.dirtyAll = true
     s.epoch = (s.epoch or 0) + 1 -- a new timeline: the move prediction starts again (Dynamics.predict)
     s.prediction, s.predictionKey = nil, nil -- and the old one's memory goes now, not when ghosts next show
+    s.pendingPrediction, s.pendingKey = nil, nil
 end
 
 ---A prop starts flying drawn from its pose now (at `frame`) with velocity `vel` and angular velocity `ang`
@@ -628,6 +654,20 @@ end
 ---Every flight stepped together, one frame at a time, from the sim's frame to `frame` (flight.lua: the same steps
 ---in a fight, its replay and a rebuild give the same numbers). Their copies follow; those that came to rest, fell
 ---or are carried now leave the list
+---Whether a flying prop moves with far props paused: marked always, or within FLY_RANGE of a sampled point
+---@param near number[][] Dynamics.sampleAt's points
+local function movesNear(prop, near)
+    if prop.alwaysMove then return true end
+    local r2 = Dynamics.FLY_RANGE * Dynamics.FLY_RANGE
+    local p = prop.pos
+    for k = 1, #near do
+        local q = near[k]
+        local dx, dy, dz = p[1] - q[1], p[2] - q[2], p[3] - q[3]
+        if dx * dx + dy * dy + dz * dz <= r2 then return true end
+    end
+    return false
+end
+
 local function fly(s, frame)
     if s.simFrame >= frame then return end
     -- the moved props are only for the game's atmo copies (drawn by MGE or Atmo Play's own drawing: none to move)
@@ -643,6 +683,7 @@ local function fly(s, frame)
             wake = function(prop, at)
                 prop.pos = { prop.pos[1], prop.pos[2], prop.pos[3] } -- its own table: steps change it in place
                 prop.flight = Flight.start(nil, at)
+                prop.dormant = nil -- reached by a flying prop: a waiting one is active from now
                 prop.flying = true
                 local stepping = s.stepping
                 stepping[#stepping + 1] = prop
@@ -680,8 +721,24 @@ local function fly(s, frame)
             if e.prop then carried = carried + 1 end
         end
         s.flightOpts.neighbors = (#s.grouped - listedFlying - carried > 0) and s.neighborsFn or nil
-        s.stepping = list
-        Flight.step(s.world, list, s.simFrame, s.flightOpts)
+        -- far props pause (the player's option): those far from every sampled player / dynamic object at this frame
+        -- aren't stepped (they keep their flight and go on when someone comes near), unless they always move
+        local stepList = list
+        local near = s.pauseFar and Dynamics.sampleAt(s, s.simFrame) or nil
+        if near then
+            stepList = s.stepBuf or {}
+            s.stepBuf = stepList
+            for i = #stepList, 1, -1 do stepList[i] = nil end
+            for _, prop in ipairs(list) do
+                if movesNear(prop, near) then stepList[#stepList + 1] = prop end
+            end
+        end
+        s.stepping = stepList
+        local before = #stepList
+        Flight.step(s.world, stepList, s.simFrame, s.flightOpts)
+        if stepList ~= list then
+            for i = before + 1, #stepList do list[#list + 1] = stepList[i] end -- woken this step: flying from now
+        end
         s.simFrame = s.simFrame + 1
         -- listed where they are now after every step (the next step's wakes find them there; a fight steps several
         -- frames in one call when draws were skipped, its replay one: the same either way)
@@ -737,10 +794,18 @@ end
 ---color line: white, "visible 0": alpha 0; replays don't record colors, EOBJ lines have none, so replays
 ---paint too). Its flag isn't set: pool objects carry their group's flag bits in the mod (Colliders.groupKey),
 ---and a flag set while watching crashed the game (R right after loading a playable mod)
-local function dress(e, prop)
+---A prop's color as its object shows it: the color line read as the game reads it (the first three over 256 when any
+---is above 2; up to 2 is brighter, drawn as 1), "visible 0": alpha 0. A raw "128 64 32" painted the object white
+local function propColor(prop)
     local c = prop.color or {}
-    local alpha = prop.visible == false and 0 or (c[4] or 1)
-    pcall(set_obj_color, e.id - 1, c[1] or 1, c[2] or 1, c[3] or 1, alpha)
+    local r, g, b, a = c[1] or 1, c[2] or 1, c[3] or 1, c[4] or 1
+    if r > 2 or g > 2 or b > 2 then r, g, b = r / 256, g / 256, b / 256 end
+    local function unit(v) return v < 0 and 0 or (v > 1 and 1 or v) end
+    return unit(r), unit(g), unit(b), prop.visible == false and 0 or unit(a)
+end
+
+local function dress(e, prop)
+    pcall(set_obj_color, e.id - 1, propColor(prop))
 end
 
 ---Replays: a carrying object painted again when its color isn't its prop's any more. The game puts objects back to
@@ -752,10 +817,9 @@ local function keepDressed(e)
     local ok, r, g, b, a = pcall(get_obj_color, e.id - 1)
     if not ok then return end
     if type(r) == "table" then r, g, b, a = r[1], r[2], r[3], r[4] end
-    local c = prop.color or {}
-    local want = prop.visible == false and 0 or (c[4] or 1)
+    local wr, wg, wb, wa = propColor(prop)
     local function off(x, y) return math.abs((tonumber(x) or -1) - y) > 0.01 end
-    if off(a, want) or off(r, c[1] or 1) or off(g, c[2] or 1) or off(b, c[3] or 1) then dress(e, prop) end
+    if off(a, wa) or off(r, wr) or off(g, wg) or off(b, wb) then dress(e, prop) end
 end
 
 ---The props as they were at a frame: from the events up to it; later ones are dropped (what follows is
@@ -786,7 +850,7 @@ function Dynamics.rebuild(s, frame)
             local prop, e = ev.prop, ev.entry
             prop.pos, prop.rot = ev.pos, ev.rot
             if ev.kind == "take" then
-                e.prop, prop.entry = prop, e
+                e.prop, prop.entry, prop.dormant = prop, e, nil
                 e.seen = { pos = ev.pos, rot = ev.rot }
                 prop.flight = nil
             else
@@ -950,6 +1014,7 @@ local function take(s, e, prop, frame)
     local vel, ang = fl and copy3(fl.vel) or nil, fl and copy3(fl.ang) or nil
     placeAt(e, prop.pos, prop.rot, vel, ang)
     prop.flight = nil -- fly() drops it from the list
+    prop.dormant = nil -- reached: a waiting prop is active from now
     e.prop, prop.entry = prop, e
     e.speed, e.spin, e.vel, e.angVel = vel and length(vel[1], vel[2], vel[3]) or 0,
         ang and length(ang[1], ang[2], ang[3]) or 0, vel, ang
@@ -1126,6 +1191,8 @@ function Dynamics.step(s, frame, tag)
                 end
                 tier = Dynamics.TIER_CHAIN
             end
+            -- one that fell off the map isn't wanted: let go below (fell), it was taken again in the same step
+            if best and s.fallen and prop.pos[3] < s.fallen then best = nil end
             if best then list[#list + 1] = { prop = prop, distance = best, tier = tier } end
         end
         table.sort(list, function(a, b)
@@ -1198,7 +1265,7 @@ function Dynamics.step(s, frame, tag)
     -- pushes' worth of force in one step: the same speed gained)
     for _, e in ipairs(s.entries) do
         local prop = e.prop
-        if prop and prop.thrust then
+        if prop and prop.thrust and not prop.dormant then
             local every = prop.thrust.every
             local from = e.pushedTo or (frame - 1)
             local count = math.floor(frame / every) - math.floor(from / every)
@@ -1267,6 +1334,8 @@ function Dynamics.observe(s, frame)
                 end
             elseif not isParked(e, z) then
                 free[#free + 1] = { e = e, pos = pos }
+            else
+                e.unmatched = nil -- parked again: its next take is a new one
             end
         end
     end
@@ -1297,18 +1366,23 @@ function Dynamics.observe(s, frame)
                 end
                 local misses = s.replayMisses
                 if best and bestD > slack and bestD <= Dynamics.MATCH_FAR then misses.far = misses.far + 1 end
+                -- no match: counted and logged once (it's tried again each frame until it parks)
+                local first = not e.unmatched
                 if not best or bestD > Dynamics.MATCH_FAR then
-                    misses.none = misses.none + 1
+                    if first then misses.none = misses.none + 1 end
+                    e.unmatched = true
                     best = nil
+                else
+                    e.unmatched = nil
                 end
                 local log = NS.DebugLog
-                if log and log.event and (not best or bestD > slack) then
+                if log and log.event and (not best or bestD > slack) and (best or first) then
                     pcall(log.event, string.format("replay take: obj %d at %.2f %.2f %.2f, %s", id, pos[1], pos[2],
                         pos[3], best and string.format("nearest prop %.2f away (slack %.2f): taken", bestD, slack)
                         or "no free prop of its group within " .. Dynamics.MATCH_FAR))
                 end
                 if best then
-                    e.prop, best.entry = best, e
+                    e.prop, best.entry, best.dormant = best, e, nil
                     best.pos, best.rot = pos, copyTB(get_obj_rot(id))
                     best.flight = nil -- fly() drops it from the list
                     local vx, vy, vz = get_obj_linear_vel(id)
@@ -1334,6 +1408,42 @@ function Dynamics.setLevel(s, level)
     s.nextLevel = level ~= s.level and level or nil
 end
 
+---Far props pause or not (the player's option), from the next match_begin (a fight and its rewinds keep one)
+---@param on boolean
+function Dynamics.setPauseFar(s, on)
+    on = on and true or false
+    if on ~= s.pauseFar then s.nextPauseFar = on else s.nextPauseFar = nil end
+end
+
+---enter_frame, every physics frame in fights and replays: where the players and the mod's dynamic objects are now,
+---for the far props' pauses (only kept while far props may pause). One body part a player is enough at FLY_RANGE
+---@param ws table get_world_state()
+function Dynamics.sample(s, ws)
+    if not s.pauseFar then return end
+    local points = {}
+    local count = ws.num_players or 2
+    for player = 0, count - 1 do
+        local ok, info = pcall(get_body_info, player, 0)
+        if ok and info and info.pos then points[#points + 1] = { info.pos.x, info.pos.y, info.pos.z } end
+    end
+    for _, id in ipairs(s.follow or {}) do
+        local x, y, z = get_obj_pos(id)
+        if x then points[#points + 1] = { x, y, z } end
+    end
+    s.samples[ws.match_frame] = points
+end
+
+---The points sampled at a frame (or the nearest frame before, for a replay sought ahead); nil: none, nothing pauses
+---@param frame integer
+---@return number[][]?
+function Dynamics.sampleAt(s, frame)
+    for f = frame, math.max(0, frame - 60), -1 do
+        local points = s.samples[f]
+        if points and #points > 0 then return points end
+    end
+    return nil
+end
+
 ---match_begin: a new fight or replay starts from the atmo's poses; a fight places what's near now
 ---@param ws table get_world_state()
 function Dynamics.matchBegin(s, ws)
@@ -1346,8 +1456,9 @@ function Dynamics.matchBegin(s, ws)
     if s.nextLevel then
         s.level, s.nextLevel, s.flightOpts = s.nextLevel, nil, nil
     end
+    if s.nextPauseFar ~= nil then s.pauseFar, s.nextPauseFar = s.nextPauseFar, nil end
     clear(s)
-    s.events, s.snapshots = {}, {}
+    s.events, s.snapshots, s.samples = {}, {}, {}
     s.replayMisses = { far = 0, none = 0 } -- replays: takes matched only by MATCH_FAR, takes not matched
     s.wasReplay = ws.replay_mode > 0
     -- a replay's first frame is watched by the next draw; a fight's is stepped now
@@ -1539,63 +1650,100 @@ function Dynamics.ghostFrame(s, ws)
     return math.max(0, math.min(frame, last)), tonumber(fade) or 1, last
 end
 
----The flying props' prediction moved up to `frames` ahead of the flights' frame, PREDICT_MS at most this call.
----It's kept while the flights move on as it predicted, so the next turn's ghosts go on from where the last turn's
----prediction got to; pr.base is the flights' frame in it. Made again when a prop is let go flying (a flight it doesn't
----have), on a rebuild or a new level. A take doesn't: the taken prop's ghost is the game's own then (drawGhosts skips
----carried props), and the drawn flights never met it anyway; its copy flying on in the prediction can only touch the
----ghosts near it. Takes near the players every turn made it start over every turn (user's log: ghosts 190-390 ms a
----second, more than playing the props)
+---A new prediction of the flying props from the flights' frame: with more of them than MAX_GHOSTS, the nearest the
+---camera (on screen first) only
+local function newPrediction(s, frames, camera, onScreen)
+    local list = {}
+    -- far props paused: no ghost for those paused now (they wait where they are; the prediction doesn't pause them)
+    local near = s.pauseFar and Dynamics.sampleAt(s, s.simFrame) or nil
+    for _, prop in ipairs(s.flying) do
+        if prop.flight and not prop.entry and (not near or movesNear(prop, near)) then list[#list + 1] = prop end
+    end
+    local picked = false
+    if #list > Dynamics.MAX_GHOSTS and camera then
+        local cx, cy, cz = camera[1], camera[2], camera[3]
+        local far = {}
+        for _, prop in ipairs(list) do
+            local p = prop.pos
+            local d = (p[1] - cx) ^ 2 + (p[2] - cy) ^ 2 + (p[3] - cz) ^ 2
+            if onScreen and not onScreen(p[1], p[2], p[3], prop.radius or 1) then d = d + 1e12 end -- off screen last
+            far[prop] = d
+        end
+        table.sort(list, function(a, b)
+            if far[a] ~= far[b] then return far[a] < far[b] end
+            return a.index < b.index
+        end)
+        for i = #list, Dynamics.MAX_GHOSTS + 1, -1 do list[i] = nil end
+        picked = true
+    end
+    table.sort(list, byIndex)
+    local pr = Flight.newPrediction(s.world, list, s.simFrame, { collide = s.level == "full", simple = s.level == "simple",
+        neighbors = function(prop, reach) return stillNear(s, prop, reach) end }, frames + 1)
+    pr.picked, pr.camera = picked, camera and { camera[1], camera[2], camera[3] } or nil
+    return pr
+end
+
+---The flying props' prediction (the one to show) moved up to `frames` ahead of the flights' frame, PREDICT_MS at most
+---this call. It's kept while the flights move on as it predicted, so the next turn's ghosts go on from where the last
+---turn's prediction got to; pr.base is the flights' frame in it. A new one is needed when a prop is let go flying (a
+---flight it doesn't have), on a new level, or when the camera moved away from where its few were picked. A take
+---doesn't: the taken prop's ghost is the game's own then (drawGhosts skips carried props), and the drawn flights never
+---met it anyway. Takes near the players every turn made it start over every turn (user's log: ghosts 190-390 ms a
+---second, more than playing the props).
+---The new one is built while the old one stays shown (the game's ghost keeps moving: a new one shown at once could
+---only show the few frames it had, the ghosts stalled and jumped as the camera moved), and takes its place once it
+---covers the ghost's frames, or at once when the old one can't be shown any more (a rebuild, a new fight: clear drops it)
 ---@param frames integer
----@return AtmoPlayPrediction
 ---@param camera number[]? where the camera is: with more flying props than MAX_GHOSTS, the nearest it (on screen first)
 ---@param onScreen (fun(x: number, y: number, z: number, r: number): boolean)?
+---@return AtmoPlayPrediction
 function Dynamics.predict(s, frames, camera, onScreen)
     local key = (s.epoch or 0) .. ":" .. (s.flightStarts or 0) .. ":" .. s.level
-    local pr = s.prediction
-    local base = pr and s.simFrame - pr.frame or 0
-    -- a picked few: picked again when the camera moved away
-    local moved = pr and pr.picked and camera and pr.camera and
-        (camera[1] - pr.camera[1]) ^ 2 + (camera[2] - pr.camera[2]) ^ 2 + (camera[3] - pr.camera[3]) ^ 2 >
-        Dynamics.GHOST_RECENTER ^ 2
-    if pr and s.predictionKey == key and base >= 0 and base <= pr.steps and pr.ring > frames and not moved then
+    local function usable(pr)
+        local base = s.simFrame - pr.frame
+        return base >= 0 and base <= pr.steps and pr.ring > frames
+    end
+    local function step(pr)
+        local base = s.simFrame - pr.frame
         if base > pr.base then Flight.predictTrim(pr, base) end
-    else
-        base = 0
-        local list = {}
-        for _, prop in ipairs(s.flying) do
-            if prop.flight and not prop.entry then list[#list + 1] = prop end
+        pr.base = base
+        local t0 = os.clock()
+        while not pr.done and pr.steps < base + frames do
+            Flight.predictStep(pr, 1)
+            if (os.clock() - t0) * 1000 >= Dynamics.PREDICT_MS then break end
         end
-        local picked = false
-        if #list > Dynamics.MAX_GHOSTS and camera then
-            local cx, cy, cz = camera[1], camera[2], camera[3]
-            local far = {}
-            for _, prop in ipairs(list) do
-                local p = prop.pos
-                local d = (p[1] - cx) ^ 2 + (p[2] - cy) ^ 2 + (p[3] - cz) ^ 2
-                if onScreen and not onScreen(p[1], p[2], p[3], prop.radius or 1) then d = d + 1e12 end -- off screen last
-                far[prop] = d
-            end
-            table.sort(list, function(a, b)
-                if far[a] ~= far[b] then return far[a] < far[b] end
-                return a.index < b.index
-            end)
-            for i = #list, Dynamics.MAX_GHOSTS + 1, -1 do list[i] = nil end
-            picked = true
-        end
-        table.sort(list, byIndex)
-        pr = Flight.newPrediction(s.world, list, s.simFrame, { collide = s.level == "full", simple = s.level == "simple",
-            neighbors = function(prop, reach) return stillNear(s, prop, reach) end }, frames + 1)
-        s.prediction, s.predictionKey = pr, key
-        pr.picked, pr.camera = picked, camera and { camera[1], camera[2], camera[3] } or nil
     end
-    pr.base = base
-    local t0 = os.clock()
-    while not pr.done and pr.steps < base + frames do
-        Flight.predictStep(pr, 1)
-        if (os.clock() - t0) * 1000 >= Dynamics.PREDICT_MS then break end
+    local shown = s.prediction
+    local moved = shown and shown.picked and camera and shown.camera and
+        (camera[1] - shown.camera[1]) ^ 2 + (camera[2] - shown.camera[2]) ^ 2 + (camera[3] - shown.camera[3]) ^ 2 >
+        Dynamics.GHOST_RECENTER ^ 2
+    if shown and s.predictionKey == key and usable(shown) and not moved then
+        s.pendingPrediction, s.pendingKey = nil, nil
+        step(shown)
+        return shown
     end
-    return pr
+    -- a new one, built while the old one stays shown
+    local pending = s.pendingPrediction
+    if not pending or s.pendingKey ~= key or not usable(pending) then
+        pending = newPrediction(s, frames, camera, onScreen)
+        s.pendingPrediction, s.pendingKey = pending, key
+    end
+    step(pending)
+    local ready = pending.done or pending.steps >= pending.base + frames
+    if ready or not (shown and usable(shown)) then
+        s.prediction, s.predictionKey = pending, s.pendingKey
+        s.pendingPrediction, s.pendingKey = nil, nil
+        return pending
+    end
+    local base = s.simFrame - shown.frame
+    if base > shown.base then Flight.predictTrim(shown, base) end
+    shown.base = base
+    return shown
+end
+
+---Ghosts off: the prediction shown and the one being built go, their memory at once
+function Dynamics.dropPrediction(s)
+    s.prediction, s.predictionKey, s.pendingPrediction, s.pendingKey = nil, nil, nil, nil
 end
 
 ---A color line's numbers as 0-1 (the game reads 0-256 when any of the first three is above 2)

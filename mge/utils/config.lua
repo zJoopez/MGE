@@ -10,6 +10,7 @@
 --   propFlight 2              how drawn props fly in a playable mod (Playable.flightLevel): 1 simple, 2 shapes,
 --                             3 full (Atmo Play's Dynamics.LEVELS)
 --   propGhosts 1              the flying props' move predictions while a turn waits (Playable.ghosts)
+--   propPauseFar 0            flying props far from every player pause (Playable.pauseFar, Atmo Play's far props)
 --   palette 255 128 0 255     one line a color, r g b a 0-255
 --
 -- Read when MGE starts (Config.load, before the window is built: the UI size is needed then), put on the
@@ -65,6 +66,8 @@ Config.ENTRIES = {
         set = function(v) MGE.Playable.setFlightLevel(MGE.AtmoPlay.Dynamics.LEVELS[v]) end },
     { key = "propGhosts", kind = "boolean",
         get = function() return MGE.Playable.ghosts end, set = function(v) MGE.Playable.setGhosts(v) end },
+    { key = "propPauseFar", kind = "boolean",
+        get = function() return MGE.Playable.pauseFar end, set = function(v) MGE.Playable.setPauseFar(v) end },
 }
 
 ---@type table<string, number|boolean> values read from the file, by key

@@ -14,20 +14,26 @@ Play draws those too, without making anything solid.
 ## Use
 
 1. Unzip into `data/script` (you get `data/script/atmoplay/`).
-2. `/ls atmoplay/atmoplay.lua`. It runs until the game closes or `/atmoplay quit`; opening the menu or
-   loading other scripts doesn't stop it.
+2. `/ls atmoplay/atmoplay.lua`. It runs until the game closes or you quit it in its window; opening the menu
+   or loading other scripts doesn't stop it.
 3. `/lm` a playable mod: its atmo is drawn and the map is solid. A drawn mod: its atmo is drawn.
 4. Loading a normal mod gives you your own atmo back.
 
-Commands: `/atmoplay` (status), `/atmoplay reload` (read the mod again), `/atmoplay quit`, and
-`/atmoplay flight [simple | shapes | full]`: how props fly while no pool object carries them, for your
-computer. `simple` flies them as spheres (the least work), `shapes` (default) with their real shapes, `full`
-with real shapes that also hit each other (the most work). Kept in `atmoplay.cfg`, used from the next fight.
-`/atmoplay time` measures the next 300 frames and says what they cost: the props, moving their drawn copies,
-the static pool, Atmo Play's drawing and the game drawing the atmo.
-`/atmoplay draw [own | game]`: who draws the atmo. `own` (default): Atmo Play draws its plain boxes, spheres and
-pills, only those on screen; the game keeps models, animated, random and scripted objects. `game`: the game
-draws every object, as before. Kept in `atmoplay.cfg`.
+Atmo Play's window has everything you set (drag it by its bar). Its cross hides it behind a small AP button,
+which opens it again:
+
+- **Detail**: how props move while no pool object carries them, for your computer. Simple flies them as
+  spheres (the least work), Shapes (default) with their real shapes, Full with real shapes that also hit each
+  other (the most work). Used from the next fight.
+- **Ghosts**: the flying props' move predictions while a turn waits (like the game's ghosts). Off saves their
+  work on maps with many thrust props.
+- **Far props**: Move (default) flies every prop. Pause lets props far from every player wait where they
+  are until someone comes near: less work on big maps. Props the map maker set to always move fly anyway.
+  Used from the next fight; replays pause the same props at the same frames.
+- **Quit Atmo Play**: stops it and gives you your own atmo back.
+
+Your choices (and whether the window is open) are kept in `atmoplay.cfg`. Atmo Play stays quiet in the chat:
+it only speaks up when something goes wrong or you need to load the mod again.
 
 ## Replays
 

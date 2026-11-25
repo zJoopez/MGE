@@ -318,3 +318,17 @@ T.test("prop hits off: flying props pass through, still hit the ground", functio
     Flight.advance(w, c, 600)
     T.near(c.pos[3], 0.25, 0.01, "on the ground")
 end)
+
+T.test("shapes: a pill's inertia is ODE's capsule's (cylinder + two half spheres), not the box around it", function()
+    local pill = { shape = "cylinder", sides = { 0.25, 0.25, 0.25 }, mass = 0.1 }
+    local b = Flight.bodyOf(pill)
+    -- dMassSetCapsuleTotal(0.1, r 0.25, l 0.25): by volume, cylinder 0.0491, the half spheres 0.0654 (of 0.1145)
+    local r, l = 0.25, 0.25
+    local m1, m2 = math.pi * r * r * l, 4 / 3 * math.pi * r ^ 3
+    local k = 0.1 / (m1 + m2)
+    local along = k * (m1 * 0.5 * r * r + m2 * 0.4 * r * r)
+    local across = k * (m1 * (0.25 * r * r + l * l / 12) + m2 * (0.4 * r * r + 0.375 * r * l + 0.25 * l * l))
+    T.near(1 / b.invI[3], along, 1e-12, "about its length")
+    T.near(1 / b.invI[1], across, 1e-12, "across")
+    T.near(1 / b.invI[1], 0.00455, 2e-5, "~0.00455 (the box around it: 0.00677)")
+end)

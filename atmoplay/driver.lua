@@ -115,7 +115,9 @@ end
 ---@param pool AtmoPlayPoolState
 ---@return AtmoPlayDriver
 function Driver.new(pool)
-    return { pool = pool, lastFrame = nil, wasReplay = false, fromFrame = Driver.FIRST_FRAME }
+    -- wasReplay: a driver made outside match_begin (Atmo Play restarted or reloaded mid-fight) sets every pool object
+    -- again on its first fight draw (Driver.reset), as after a replay; match_begin sets the real value
+    return { pool = pool, lastFrame = nil, wasReplay = true, fromFrame = Driver.FIRST_FRAME }
 end
 
 ---The mod's own dynamic objects in the world now (right after /lm): every object without the static bit

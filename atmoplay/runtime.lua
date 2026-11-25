@@ -48,8 +48,9 @@ local state = {
 }
 Runtime.state = state
 
-local timing = nil -- /atmoplay time's measurement (the timing section)
-local stopTiming -- its end (set in the timing section; leaving a playable mod calls it)
+---Dev builds only (debuglog.lua's /atmoplay time): told what each drawn frame cost. nil in releases: nothing measured
+---@type { frame: fun(poolMs: number, propsMs: number, copiesMs: number), own: fun(ms: number, shapes: integer), stop: fun() }?
+Runtime.measure = nil
 
 local function say(text)
     echo("^04[Atmo Play] ^07" .. text)
@@ -87,7 +88,12 @@ end
 --                      game (the game's atmo manager draws every one, as before)
 --   ghosts on          the flying props' move predictions while a turn waits (Dynamics.drawGhosts): off saves
 --                      their work (the prediction runs the props' flights ahead, as much as playing them)
-Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, draw = "own", ghosts = true }
+--   farprops move      flying props far from every player: move (all fly) or pause (they wait where they are until
+--                      someone comes near, less work; props the map maker marked "always" fly anyway)
+--   ui on              Atmo Play's window (ui.lua) open when it starts (off: only its small launcher button)
+--   uipos 10 120       where the window was dragged to (screen pixels)
+Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, draw = "own", ghosts = true, pauseFar = false, ui = true,
+    uiPos = nil }
 Runtime.DRAW_MODES = { own = true, game = true }
 
 ---@return string the settings file, a data/script path
@@ -101,12 +107,26 @@ function Runtime.loadSettings()
         if key == "flight" then Runtime.settings.flight = Dynamics.level(value) end
         if key == "draw" and Runtime.DRAW_MODES[value] then Runtime.settings.draw = value end
         if key == "ghosts" and (value == "on" or value == "off") then Runtime.settings.ghosts = value == "on" end
+        if key == "ui" and (value == "on" or value == "off") then Runtime.settings.ui = value == "on" end
+        if key == "farprops" and (value == "move" or value == "pause") then
+            Runtime.settings.pauseFar = value == "pause"
+        end
+        if key == "uipos" then
+            local x, y = tostring(line):match("^%s*%S+%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)")
+            if x then Runtime.settings.uiPos = { tonumber(x), tonumber(y) } end
+        end
+
     end
 end
 
 function Runtime.saveSettings()
-    if not writeLines(Runtime.settingsPath(), { "flight " .. Runtime.settings.flight, "draw " .. Runtime.settings.draw,
-            "ghosts " .. (Runtime.settings.ghosts and "on" or "off") }) then
+    local lines = { "flight " .. Runtime.settings.flight, "draw " .. Runtime.settings.draw,
+        "ghosts " .. (Runtime.settings.ghosts and "on" or "off"),
+        "farprops " .. (Runtime.settings.pauseFar and "pause" or "move"),
+        "ui " .. (Runtime.settings.ui and "on" or "off") }
+    local pos = Runtime.settings.uiPos
+    if pos then lines[#lines + 1] = string.format("uipos %d %d", pos[1], pos[2]) end
+    if not writeLines(Runtime.settingsPath(), lines) then
         say("couldn't save the settings to " .. Runtime.settingsPath())
     end
 end
@@ -264,28 +284,28 @@ local function loadPlayable(path)
     local name = path:match("([^/]+)%.tbm$") or path
     -- MGE open: it draws the atmo itself and moves a playable mod's pool (the same driver.lua); two drivers
     -- would move the same objects
-    if Runtime.mgeRunning() then
-        say(name .. ": MGE is open, it plays this mod")
-        return nil
-    end
+    if Runtime.mgeRunning() then return nil end
     -- a drawn mod (MGE's Default): its atmo is only drawn, there are no pools (driver nil: the hooks skip it)
     if Format.isDrawOnly(file.header) then
         local drawn = drawModAtmo(file.atmo)
-        say(name .. ": atmo drawn (a drawn mod, not solid)")
         return { path = path, name = name, file = file, drawn = drawn, drawOnly = true }
     end
+    -- the pool objects that are in the world: one the file names but the world lacks (the file changed since /lm) is
+    -- left out, not moved every frame on an id that isn't there
+    local missing = 0
+    local function present(list)
+        local out = {}
+        for _, object in ipairs(list) do
+            if get_obj_pos(object.id - 1) == nil then missing = missing + 1 else out[#out + 1] = object end
+        end
+        return out
+    end
+    local poolObjects, dynamicObjects = present(file.pool), present(file.dynamic)
     local colliders, stats, props = Colliders.build(file.atmo)
-    local pool, err = Pool.new(file.pool, colliders, file.header)
+    local pool, err = Pool.new(poolObjects, colliders, file.header)
     if not pool then
         say(name .. ": " .. tostring(err))
         return nil
-    end
-    local missing = 0
-    for _, object in ipairs(file.pool) do
-        if get_obj_pos(object.id - 1) == nil then missing = missing + 1 end
-    end
-    for _, object in ipairs(file.dynamic) do
-        if get_obj_pos(object.id - 1) == nil then missing = missing + 1 end
     end
     -- the pool objects are in the world right after /lm (each written with its group's flag and bounce)
     local driver = Driver.new(pool)
@@ -299,20 +319,14 @@ local function loadPlayable(path)
     if #props > 0 then
         -- follow: the mod's own dynamic objects push props too. Without a dynamic pool (props that never become
         -- real, or no ids left) they still fly drawn (thrust, hits)
-        dynamics = Dynamics.new(file.dynamic, props, { dradius = file.header.dradius, follow = driver.follow,
-            statics = colliders, level = Runtime.settings.flight, noCopies = Runtime.settings.draw == "own" })
+        dynamics = Dynamics.new(dynamicObjects, props, { dradius = file.header.dradius, follow = driver.follow,
+            statics = colliders, level = Runtime.settings.flight, noCopies = Runtime.settings.draw == "own",
+            pauseFar = Runtime.settings.pauseFar })
         driver.moreCenters = function() return Dynamics.centers(dynamics) end
-        if #file.dynamic == 0 then say(name .. ": " .. #props .. " props without a dynamic pool (drawn, not solid)") end
+
     end
     local drawn = drawModAtmo(file.atmo, dynamics)
 
-    local skipped = 0
-    for _, n in pairs(stats.skipped) do skipped = skipped + n end
-    say(string.format("%s: %d atmo objects, %d solid%s, %d pool objects", name, stats.total, stats.collidable,
-        skipped > 0 and (", " .. skipped .. " drawn only") or "", #file.pool))
-    if dynamics then
-        say(string.format("%d props (pushable), %d dynamic pool objects", #props, #file.dynamic))
-    end
     if missing > 0 then
         say(missing .. " pool objects missing: load the mod again (/lm)")
     end
@@ -328,7 +342,6 @@ local function replayCacheOff()
     if not ok or tonumber(value) == 0 then return end
     state.cacheBefore = tonumber(value)
     set_option("replaycache", 0)
-    say("replay cache off while this mod is loaded")
 end
 
 local function restoreReplayCache()
@@ -340,14 +353,31 @@ end
 local function leavePlayable()
     if state.loaded and state.loaded.dynamics then pcall(Dynamics.restoreCopies, state.loaded.dynamics) end
     state.loaded, state.drawer = nil, nil
-    stopTiming() -- a measurement doesn't run on into the next mod
+    if Runtime.measure then Runtime.measure.stop() end -- a measurement doesn't run on into the next mod
     restoreReplayCache()
     restorePlayerAtmo()
 end
 
+---A mod file's whole text (nil without one): match_begin compares it with the text last read, so a mod changed and
+---loaded again under its name (an MGE edit, a rebuild, "/lm again") is read again. Lua keeps one copy of each string:
+---the comparison costs a hash, not a walk through the text
+---@param name string? the mod gamerule
+---@return string?
+local function readRaw(name)
+    local path = resolveModPath(name)
+    if not path then return nil end
+    local file = Files.Open(Runtime.MOD_FOLDER .. path, FILES_MODE_READONLY)
+    if not file.data then return nil end
+    local raw = file:readAll(true)
+    file:close()
+    return raw
+end
+
 ---The mod changed (or a forced reload): leave the old playable mod, read the new one
-local function switchMod(name)
+---@param raw string? its text, if already read (readRaw)
+local function switchMod(name, raw)
     state.modName = name
+    state.modRaw = raw or readRaw(name)
     if state.loaded then leavePlayable() end
     local path = resolveModPath(name)
     if path then state.loaded = loadPlayable(path) end
@@ -380,9 +410,15 @@ end
 
 local function onMatchBegin()
     debugCall("event", "match_begin")
-    if Runtime.mgeRunning() then return end -- MGE plays it (a mod switch is seen after MGE closes)
+    if Runtime.mgeRunning() then
+        -- MGE plays it. Forgotten: after MGE closes, the mod is read again (MGE may have changed it, or Atmo Play
+        -- started while MGE had it open and never read it)
+        state.modName = nil
+        return
+    end
     local name = get_game_rules().mod
-    if name ~= state.modName then switchMod(name) end
+    local raw = readRaw(name)
+    if name ~= state.modName or raw ~= state.modRaw then switchMod(name, raw) end
     -- a fight: the pool is placed now (recorded under FRAME 0); a replay has it in its own FRAME 0. Props
     -- first: the static pool covers the props they carry
     if state.loaded then
@@ -397,78 +433,16 @@ local function onMatchBegin()
     debugCall("flush")
 end
 
----Between physics steps: in a fight, the pools follow the players once per new frame (driver.lua,
----dynamics.lua); in replays the props' drawn copies follow their objects
----------------------------------------------------------------------------------------------------- timing
-
--- /atmoplay time: TIMING_FRAMES drawn frames measured, then one report. Each part's average and worst in ms:
--- the props (their flights, takes and releases), moving the props' drawn copies, the static pool, and the game
--- drawing the atmo (its draw3d loop over every atmo element, Atmospheres; timed by wrapping
--- UIElement3D.drawVisuals while it measures). os.clock: wall time on Windows (the game's platform here)
-Runtime.TIMING_FRAMES = 300
-
-local function addTime(part, ms)
-    part.sum, part.max = part.sum + ms, math.max(part.max, ms)
-end
-
-stopTiming = function()
-    if not timing then return end
-    local U = rawget(_G, "UIElement3D")
-    if timing.origDraw and U then U.drawVisuals = timing.origDraw end
-    timing = nil
-end
-
-local function startTiming()
-    stopTiming()
-    timing = { frames = 0, started = os.clock(), props = { sum = 0, max = 0 }, copies = { sum = 0, max = 0 },
-        pool = { sum = 0, max = 0 }, atmo = { sum = 0, max = 0 }, own = { sum = 0, max = 0 }, shapes = 0, draws = 0 }
-    local U = rawget(_G, "UIElement3D")
-    if U and type(U.drawVisuals) == "function" then
-        local orig = U.drawVisuals
-        timing.origDraw = orig
-        U.drawVisuals = function(object, globalid)
-            local A = rawget(_G, "Atmospheres")
-            local gid = type(object) == "table" and (object.globalid or globalid) or object
-            if timing and A and gid == A.Globalid then
-                local t = os.clock()
-                orig(object, globalid)
-                addTime(timing.atmo, (os.clock() - t) * 1000)
-                return
-            end
-            return orig(object, globalid)
-        end
-    end
-    say("timing the next " .. Runtime.TIMING_FRAMES .. " frames: play or watch as usual")
-end
-
-local function reportTiming()
-    local t, n = timing, timing.frames
-    local seconds = os.clock() - t.started
-    local function line(name, part)
-        return string.format("%s %.2f ms (worst %.1f)", name, part.sum / n, part.max)
-    end
-    local flying = state.loaded and state.loaded.dynamics and select(3, Dynamics.counts(state.loaded.dynamics)) or 0
-    say(string.format("%d frames, ~%.0f fps, flight %s, %d flying now:", n, n / math.max(seconds, 1e-6),
-        Runtime.settings.flight, flying))
-    say(line("props", t.props) .. ", " .. line("their copies", t.copies) .. ", " .. line("static pool", t.pool))
-    local ownLine = ""
-    if t.draws > 0 then
-        ownLine = ", " .. line("Atmo Play drawing", { sum = t.own.sum, max = t.own.max }):gsub("%(worst",
-            string.format("(%.0f shapes of %d a frame, worst", t.shapes / t.draws, state.drawer and state.drawer.count or 0))
-    end
-    say(line("the game drawing the atmo", t.atmo) .. ownLine .. string.format(" (%.2f ms a frame in all)",
-        (t.props.sum + t.copies.sum + t.pool.sum + t.atmo.sum + t.own.sum) / n))
-    stopTiming()
-end
-
--- what the props cost this drawn frame (pre_draw and draw2d both run them; /atmoplay time)
+-- what the props cost this drawn frame (pre_draw and draw2d both run them), only while Runtime.measure measures
 local frameProps, frameCopies = 0, 0
 
----Dynamics.draw, its cost added to this drawn frame's
+---Dynamics.draw (its cost added to this drawn frame's while measured)
 local function drawProps(ws)
     runDynamics(Dynamics.draw, ws)
-    local d = state.loaded and state.loaded.dynamics
-    if d then frameProps, frameCopies = frameProps + (d.lastSimMs or 0), frameCopies + (d.lastCopiesMs or 0) end
+    if Runtime.measure then
+        local d = state.loaded and state.loaded.dynamics
+        if d then frameProps, frameCopies = frameProps + (d.lastSimMs or 0), frameCopies + (d.lastCopiesMs or 0) end
+    end
 end
 
 ---pre_draw, before anything is drawn: replays are watched here. The game has moved the pool objects to this frame
@@ -491,9 +465,14 @@ local function onEnterFrame()
     if state.loaded and not Runtime.mgeRunning() then
         local ws = get_world_state()
         if ws.replay_mode > 0 then drawProps(ws) end
+        -- where the players are this frame, for far props' pauses (fights and replays alike: the same pauses)
+        local dynamics = state.loaded.dynamics
+        if dynamics and dynamics.pauseFar then runDynamics(Dynamics.sample, ws) end
     end
 end
 
+---Between physics steps: in a fight, the pools follow the players once per new frame (driver.lua,
+---dynamics.lua); in replays the props' drawn copies follow their objects
 local function onDraw2d()
     if state.drawFallback then
         state.drawFallback = nil
@@ -505,16 +484,13 @@ local function onDraw2d()
         local ws = get_world_state()
         debugCall("frame", ws)
         drawProps(ws) -- a replay's frame was watched in pre_draw: this only draws the copies
-        local t = os.clock()
+        local measure = Runtime.measure
+        local t = measure and os.clock()
         if state.loaded.driver then Driver.draw(state.loaded.driver, ws) end
-        if timing then
-            addTime(timing.pool, (os.clock() - t) * 1000)
-            addTime(timing.props, frameProps)
-            addTime(timing.copies, frameCopies)
-            timing.frames = timing.frames + 1
-            if timing.frames >= Runtime.TIMING_FRAMES then reportTiming() end
+        if measure then
+            measure.frame((os.clock() - t) * 1000, frameProps, frameCopies)
+            frameProps, frameCopies = 0, 0
         end
-        frameProps, frameCopies = 0, 0
         debugCall("flush")
     end
 end
@@ -535,15 +511,14 @@ local function onDraw3d()
     local view = (state.drawer or (state.loaded and state.loaded.dynamics)) and Drawer.measureView() or nil
     local drawer = state.drawer
     if drawer and not Runtime.mgeRunning() then
-        local t = os.clock()
+        local t = Runtime.measure and os.clock()
         local ok, drawn = pcall(Drawer.draw, drawer, view, graphicsLevel())
         if not ok then
             -- the game's atmo holds only what it draws: it takes the whole atmo back (in draw2d, not mid-draw)
-            say("drawing failed: " .. tostring(drawn) .. "; the game draws the atmo until /atmoplay draw own")
+            say("drawing failed, the game draws the atmo this session: " .. tostring(drawn))
             state.drawer, state.drawFallback = nil, true
-        elseif timing then
-            addTime(timing.own, (os.clock() - t) * 1000)
-            timing.shapes, timing.draws = timing.shapes + drawn, timing.draws + 1
+        elseif Runtime.measure then
+            Runtime.measure.own((os.clock() - t) * 1000, drawn)
         end
     end
     -- the flying props' ghosts while the fight waits for the turn, as the game shows its objects' (either draw mode).
@@ -565,112 +540,72 @@ local function onLeaveGame()
     debugCall("flush")
 end
 
----------------------------------------------------------------------------------------------------- commands
+---------------------------------------------------------------------------------------------------- the player's settings
+-- Set from the window (ui.lua), silently: its lit buttons show them. Kept in atmoplay.cfg
 
-function Runtime.status()
-    local loaded = state.loaded
-    if not loaded then
-        say("running; " .. tostring(state.modName) .. " isn't a playable mod")
-        return
-    end
-    if loaded.drawOnly then
-        say(loaded.name .. ": a drawn mod, its atmo " .. (loaded.drawn and "drawn" or "not drawn") .. " (no pools)")
-        return
-    end
-    say(string.format("%s: %d/%d pool objects in use, %d solid atmo objects", loaded.name,
-        Driver.active(loaded.driver), #loaded.pool.entries, loaded.stats.collidable))
-    if state.drawer then
-        say(string.format("drawing: Atmo Play %d shapes (%d on screen last frame), the game %d", state.drawer.count,
-            state.drawer.drawn, state.drawer.left or 0))
-    end
-    if loaded.dynamics then
-        local carried, props, flying = Dynamics.counts(loaded.dynamics)
-        say(string.format("props: %d of %d carried by %d dynamic pool objects, %d flying drawn (flight %s)", carried,
-            props, #loaded.dynamics.entries, flying, Runtime.settings.flight))
-        local misses = loaded.dynamics.replayMisses
-        if misses and misses.far + misses.none > 0 then
-            say(string.format("this replay: %d takes found only by a wider search, %d not found (its props flew " ..
-                "elsewhere than in the fight: recorded with another version or flight level?)", misses.far, misses.none))
-        end
-    end
-end
-
-local FLIGHT_HELP = "simple: spheres, cheapest. shapes: real shapes. full: real shapes that hit each other (most work)"
-
----/atmoplay flight [level]: shows or sets how drawn props fly, kept in atmoplay.cfg; a playable mod running
----takes it from its next fight
----@param value string
-local function flightCommand(value)
-    if value == "" then
-        say("flight " .. Runtime.settings.flight .. " (" .. FLIGHT_HELP .. ")")
-        return
-    end
-    local level = Dynamics.level(value)
-    if level ~= value then
-        say("/atmoplay flight [simple | shapes | full]: " .. FLIGHT_HELP)
-        return
-    end
+---How drawn props fly (Dynamics.LEVELS); a playable mod running takes it from its next fight
+---@param level string
+function Runtime.setFlight(level)
+    level = Dynamics.level(level)
     Runtime.settings.flight = level
     Runtime.saveSettings()
     local loaded = state.loaded
     if loaded and loaded.dynamics then Dynamics.setLevel(loaded.dynamics, level) end
-    say("flight " .. level .. (loaded and loaded.dynamics and ", from the next fight" or ""))
 end
 
-local function onCommand(text)
-    local word, rest = tostring(text or ""):match("^%s*(%S+)%s*(.-)%s*$")
-    if word ~= "atmoplay" then return end
-    if rest == "" or rest == "status" then
-        Runtime.status()
-    elseif rest == "reload" then
+---The flying props' move predictions while a turn waits; off frees the prediction's memory at once
+---@param on boolean
+function Runtime.setGhosts(on)
+    Runtime.settings.ghosts = on and true or false
+    Runtime.saveSettings()
+    local loaded = state.loaded
+    if not on and loaded and loaded.dynamics then Dynamics.dropPrediction(loaded.dynamics) end
+end
+
+---Flying props far from every player pause (or all move); a playable mod running takes it from its next fight
+---@param on boolean
+function Runtime.setFarProps(on)
+    Runtime.settings.pauseFar = on and true or false
+    Runtime.saveSettings()
+    local loaded = state.loaded
+    if loaded and loaded.dynamics then Dynamics.setPauseFar(loaded.dynamics, Runtime.settings.pauseFar) end
+end
+
+---The window open, or hidden behind its launcher button; kept for the next start
+---@param open boolean
+function Runtime.setWindow(open)
+    Runtime.settings.ui = open and true or false
+    Runtime.saveSettings()
+    if NS.UI then
+        if open then NS.UI.show() else NS.UI.hide() end
+    end
+end
+
+---Where the window was dragged to, kept for the next start
+---@param x number
+---@param y number
+function Runtime.setWindowPos(x, y)
+    Runtime.settings.uiPos = { math.floor(x + 0.5), math.floor(y + 0.5) }
+    Runtime.saveSettings()
+end
+
+---Stops Atmo Play: the player's own atmo back
+function Runtime.stop()
+    if ATMOPLAY and ATMOPLAY.quit then ATMOPLAY.quit() end
+end
+
+---What the dev tools (debuglog.lua: status, /atmoplay reload, draw, time) reach in here
+Runtime.dev = {
+    state = state,
+    reload = function()
         switchMod(get_game_rules().mod)
         resetPool()
-    elseif rest == "draw" or rest:match("^draw%s") then
-        local value = rest:match("^draw%s*(.-)$") or ""
-        if value == "" then
-            say("draw " .. Runtime.settings.draw .. " (own: Atmo Play draws the atmo's plain shapes on screen; " ..
-                "game: the game draws every one)")
-        elseif not Runtime.DRAW_MODES[value] then
-            say("/atmoplay draw [own | game]")
-        else
-            Runtime.settings.draw = value
-            Runtime.saveSettings()
-            local loaded = state.loaded
-            if loaded and loaded.file then loaded.drawn = drawModAtmo(loaded.file.atmo, loaded.dynamics) end
-            say("draw " .. value)
-        end
-    elseif rest == "time" then
-        if not state.loaded or state.loaded.drawOnly then
-            say("time: load a playable mod first")
-        else
-            startTiming()
-        end
-    elseif rest == "flight" or rest:match("^flight%s") then
-        flightCommand(rest:match("^flight%s*(.-)$") or "")
-    elseif rest == "ghosts" or rest:match("^ghosts%s") then
-        local value = rest:match("^ghosts%s*(.-)$") or ""
-        if value == "on" or value == "off" then
-            Runtime.settings.ghosts = value == "on"
-            Runtime.saveSettings()
-            -- off: the prediction's memory goes at once
-            local loaded = state.loaded
-            if value == "off" and loaded and loaded.dynamics then loaded.dynamics.prediction = nil end
-        elseif value ~= "" then
-            say("/atmoplay ghosts [on | off]")
-            return 1
-        end
-        say("ghosts " .. (Runtime.settings.ghosts and "on" or "off") ..
-            " (the flying props' move predictions while a turn waits; off saves their work)")
-    elseif rest == "log" and NS.DebugLog then
-        NS.DebugLog.toggle()
-    elseif rest == "quit" then
-        if ATMOPLAY and ATMOPLAY.quit then ATMOPLAY.quit() end
-    else
-        say("/atmoplay [status | reload | flight [level] | ghosts [on | off] | draw [own | game] | time | quit" ..
-            (NS.DebugLog and " | log" or "") .. "]")
-    end
-    return 1
-end
+    end,
+    redraw = function()
+        local loaded = state.loaded
+        if loaded and loaded.file then loaded.drawn = drawModAtmo(loaded.file.atmo, loaded.dynamics) end
+    end,
+}
 
 ---------------------------------------------------------------------------------------------------- start / quit
 
@@ -686,29 +621,38 @@ function Runtime.start()
     add_hook("draw2d", Runtime.HOOKS, onDraw2d)
     add_hook("draw3d", Runtime.HOOKS, onDraw3d)
     add_hook("leave_game", Runtime.HOOKS, onLeaveGame)
-    add_hook("command", Runtime.HOOKS, onCommand)
-    if NS.DebugLog then -- only logged
+    if NS.DebugLog then -- dev builds: the /atmoplay command (debuglog.lua), and hooks only logged
+        add_hook("command", Runtime.HOOKS, NS.DebugLog.command)
         add_hook("end_game", Runtime.HOOKS, function() debugCall("event", "end_game") end)
         add_hook("new_game", Runtime.HOOKS, function() debugCall("event", "new_game") end)
     end
     -- "unload" isn't an end: the game fires it when it loads its own scripts too (opening the menu, the
     -- replay save overlay ('f') when the menu isn't loaded), and hooks stay. The game's chat scripts only
-    -- rebuild their UI on it. Atmo Play keeps running; /atmoplay quit (or /ls again) stops it
+    -- rebuild their UI on it. Atmo Play keeps running; its window's Quit (or /ls again) stops it
     if NS.DebugLog then add_hook("unload", Runtime.HOOKS, function() debugCall("event", "unload") end) end
 
     -- the mod that's loaded now
     switchMod(get_game_rules().mod)
-    say("running" .. (state.loaded and "" or ": load a playable mod (/lm)") .. ". /atmoplay for status")
+    if NS.UI then
+        if Runtime.settings.ui then NS.UI.show() else NS.UI.hide() end -- hidden by choice: its launcher
+    end
 end
 
 function Runtime.quit()
-    stopTiming() -- the game's UIElement3D.drawVisuals back
+    if Runtime.measure then Runtime.measure.stop() end -- the game's UIElement3D.drawVisuals back
     remove_hooks(Runtime.HOOKS)
     debugCall("stop") -- the engine's own setters back
     if state.loaded then
         leavePlayable() -- pool objects stay where they are until the next /lm; the atmo goes back
     end
     unwrapAtmoLoading()
+    if NS.UI then NS.UI.close() end
+end
+
+---Runs a dev command as if typed (tests; there's none in releases)
+---@param text string
+function Runtime.command(text)
+    if NS.DebugLog then return NS.DebugLog.command(text) end
 end
 
 NS.Runtime = Runtime

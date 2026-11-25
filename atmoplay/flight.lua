@@ -156,7 +156,15 @@ local function inverseInertia(shape, sides, mass)
         local i = 0.4 * mass * sides[1] ^ 2
         return { 1 / i, 1 / i, 1 / i }
     elseif shape == "cylinder" then
-        x, y, z = 2 * sides[1], 2 * sides[1], sides[2] + 2 * sides[1] -- as a box around the pill
+        -- ODE's capsule (dMassSetCapsule): a cylinder of radius r and length l with two half spheres, its mass shared by
+        -- volume. The box around the pill (the first version) turned ~1.5x too hard: drawn cylinders rolled ~11% short of
+        -- the game's (docs/atmo-play-plan.md, real against drawn)
+        local r, l = sides[1], sides[2]
+        local m1, m2 = math.pi * r * r * l, 4 / 3 * math.pi * r ^ 3
+        local k = mass / (m1 + m2)
+        local along = k * (m1 * 0.5 * r * r + m2 * 0.4 * r * r)
+        local across = k * (m1 * (0.25 * r * r + l * l / 12) + m2 * (0.4 * r * r + 0.375 * r * l + 0.25 * l * l))
+        return { 1 / across, 1 / across, 1 / along }
     else
         x, y, z = sides[1], sides[2], sides[3]
     end
@@ -223,11 +231,6 @@ local function orthonormalize(m)
     m[1][1], m[2][1], m[3][1] = ax, ay, az
     m[1][2], m[2][2], m[3][2] = bx, by, bz
     m[1][3], m[2][3], m[3][3] = ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
-end
-
-local function toTB(m)
-    return { r0 = m[1][1], r1 = m[1][2], r2 = m[1][3], r3 = 0, r4 = m[2][1], r5 = m[2][2], r6 = m[2][3], r7 = 0,
-        r8 = m[3][1], r9 = m[3][2], r10 = m[3][3], r11 = 0 }
 end
 
 ---Rows m turned by angular velocity w for dt (Rodrigues, world axes): Q * m, in place

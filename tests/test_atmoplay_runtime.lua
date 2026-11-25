@@ -44,7 +44,10 @@ local function fakeGame()
         Open = function(path, mode)
             local file = { data = (mode == FILES_MODE_WRITE or game.files[path]) and true or nil }
             if mode == FILES_MODE_WRITE then game.files[path] = "" end
-            function file:readAll() return T.lines(game.files[path]) end
+            function file:readAll(raw)
+                if raw then return game.files[path] end
+                return T.lines(game.files[path])
+            end
             function file:writeLine(line) game.files[path] = game.files[path] .. line .. "\n" end
             function file:close() end
             return file
@@ -152,7 +155,7 @@ run("a drawn mod (MGE's Default): its atmo drawn, nothing moved", function(game)
         Format.headerLine({ mode = Format.DRAW_MODE }) }
     for _, line in ipairs(ATMO) do lines[#lines + 1] = Format.ATMO_PREFIX .. line end
     game.files["../data/mod/drawn.tbm"] = table.concat(lines, "\n")
-    local Runtime = startRuntime()
+    local Runtime = startRuntime(true) -- its commands: dev builds only
     game.lm("drawn.tbm")
     T.ok(Runtime.state.loaded and Runtime.state.loaded.drawOnly, "read as a drawn mod")
     T.eq(game.loads[#game.loads], "Atmo Play.atmo", "its atmo drawn")
@@ -160,12 +163,12 @@ run("a drawn mod (MGE's Default): its atmo drawn, nothing moved", function(game)
     T.eq(#game.play(30, false, 1), 0, "a fight moves nothing")
     game.fire("leave_game")
     T.eq(#game.play(10, true), 0, "nor a replay")
-    game.fire("command", "atmoplay")
+    ATMOPLAY.Runtime.command("atmoplay")
     T.ok(game.said[#game.said]:find("drawn mod", 1, true) ~= nil, "the status says so")
 end)
 
 run("start: options untouched, normal mod left alone, playable mod drawn", function(game)
-    local Runtime = startRuntime()
+    local Runtime = startRuntime(true) -- its commands: dev builds only
     T.eq(game.options.replaycache, 2, "replaycache isn't touched")
     T.eq(Runtime.state.loaded, nil, "classic isn't playable")
     game.lm("plain.tbm")
@@ -177,13 +180,13 @@ run("start: options untouched, normal mod left alone, playable mod drawn", funct
     T.ok(cache:find("shader dark", 1, true) ~= nil, "the cache keeps the header (draw own)")
     T.ok(cache:find("env_obj wall", 1, true) == nil, "its plain shapes are Atmo Play's to draw")
     T.eq(Runtime.state.drawer.count, 4, "wall, floor, ball, far (clip is visible 0)")
-    game.fire("command", "atmoplay draw game")
+    ATMOPLAY.Runtime.command("atmoplay draw game")
     cache = game.files["../data/atmospheres/Atmo Play.atmo"]
     T.ok(cache:find("env_obj wall", 1, true) ~= nil, "draw game: the cache holds the atmo")
     T.ok(cache:find("#@", 1, true) == nil, "without the prefix")
     T.ok(cache:find("env_obj clip", 1, true) == nil, "invisible objects aren't drawn")
     T.eq(Runtime.state.drawer, nil, "nothing drawn by Atmo Play")
-    game.fire("command", "atmoplay draw own")
+    ATMOPLAY.Runtime.command("atmoplay draw own")
     T.eq(#Runtime.state.loaded.pool.entries, 5, "pool objects")
     T.eq(Runtime.state.loaded.missing, 0, "all pool objects exist")
 end)
@@ -280,28 +283,30 @@ run("the player's atmo comes back; quit unwraps the manager", function(game)
     T.eq(next(game.hooks), nil, "no hooks left")
 end)
 
-run("commands: a release has status, reload and quit, no log", function(game)
+run("commands: a release has none (its window sets everything), a dev build has the dev command", function(game)
     startRuntime()
-    T.eq(game.fire("command", "atmoplay"), 1, "/atmoplay handled")
-    T.eq(game.fire("command", "ping"), nil, "other commands left alone")
+    T.eq(game.hooks["command/atmoplay"], nil, "a release: no chat command")
     game.lm("arena.tbm")
-    T.eq(game.fire("command", "atmoplay log"), 1, "log: handled (the command list)")
     game.play(3, false, 1)
     T.eq(game.files["atmoplay_debug.log"], nil, "no log without debuglog.lua")
-    T.ok(game.said[#game.said]:find("reload", 1, true) ~= nil, "the command list")
     T.eq(game.hooks["end_game/atmoplay"], nil, "no hooks that only log")
+    local said = #game.said
+    T.eq(said, 0, "a release says nothing while all goes well")
+    startRuntime(true)
+    T.eq(game.fire("command", "atmoplay"), 1, "dev build: /atmoplay handled")
+    T.eq(game.fire("command", "ping"), nil, "other commands left alone")
 end)
 
 run("dev build: the debug log logs frames and hooks", function(game)
     startRuntime(true)
     game.lm("arena.tbm")
-    game.fire("command", "atmoplay log")
+    ATMOPLAY.Runtime.command("atmoplay log")
     game.play(3, false, 3)
     local log = game.files["atmoplay_debug.log"]
     T.ok(log and log:find("drive: frame 3", 1, true) ~= nil, "frames logged")
     game.fire("leave_game")
     T.ok(game.files["atmoplay_debug.log"]:find("leave_game", 1, true) ~= nil, "hooks logged")
-    game.fire("command", "atmoplay log")
+    ATMOPLAY.Runtime.command("atmoplay log")
 end)
 
 run("unload (the menu, the save overlay, other scripts) doesn't stop it", function(game)
@@ -370,7 +375,7 @@ end)
 run("debug log: every object call and a summary per frame, the setters back after", function(game)
     startRuntime(true)
     local original = set_obj_pos
-    game.fire("command", "atmoplay log")
+    ATMOPLAY.Runtime.command("atmoplay log")
     T.ok(set_obj_pos ~= original, "traced while logging")
     game.lm("arena.tbm")
     game.play(2, false, 1)
@@ -379,20 +384,20 @@ run("debug log: every object call and a summary per frame, the setters back afte
     T.ok(text:find("objects: frame 1 replay 0", 1, true) ~= nil, "a summary per frame")
     T.ok(text:find("pool objects at 0,0,0", 1, true) ~= nil, "with the objects at the origin")
     T.ok(#game.log > 0, "the calls still reach the game")
-    game.fire("command", "atmoplay log")
+    ATMOPLAY.Runtime.command("atmoplay log")
     T.eq(set_obj_pos, original, "the engine's setter back")
     T.eq(ATMOPLAY_TRACED, nil, "nothing kept")
 end)
 
 run("commands: flight sets the level, saved in atmoplay.cfg and read at start", function(game)
-    local Runtime = startRuntime()
+    local Runtime = startRuntime(true) -- its commands: dev builds only
     T.eq(Runtime.settings.flight, "shapes", "the default")
-    game.fire("command", "atmoplay flight full")
+    ATMOPLAY.Runtime.command("atmoplay flight full")
     T.eq(Runtime.settings.flight, "full", "set")
     T.ok((game.files[Runtime.settingsPath()] or ""):find("flight full", 1, true) ~= nil, "saved")
-    game.fire("command", "atmoplay flight fast")
+    ATMOPLAY.Runtime.command("atmoplay flight fast")
     T.eq(Runtime.settings.flight, "full", "an unknown level changes nothing")
-    T.ok(game.said[#game.said]:find("simple | shapes | full", 1, true) ~= nil, "the levels listed")
+    T.ok(game.said[#game.said]:find("simple|shapes|full", 1, true) ~= nil, "the levels listed")
     Runtime.settings.flight = "shapes"
     Runtime.start() -- a restart reads the file
     T.eq(Runtime.settings.flight, "full", "read back")
@@ -404,10 +409,10 @@ run("commands: time measures some frames, reports, and gives the game's drawing 
     UIElement3D = { drawVisuals = original }
     Atmospheres.Globalid = 7
     local ok, err = pcall(function()
-        local Runtime = startRuntime()
-        Runtime.TIMING_FRAMES = 5
+        local Runtime = startRuntime(true) -- its commands: dev builds only
+        ATMOPLAY.DebugLog.TIMING_FRAMES = 5 -- the timing is dev-only (debuglog.lua)
         game.lm("arena.tbm")
-        game.fire("command", "atmoplay time")
+        ATMOPLAY.Runtime.command("atmoplay time")
         T.ok(UIElement3D.drawVisuals ~= original, "the atmo's drawing timed")
         for f = 1, 5 do
             UIElement3D.drawVisuals(7) -- the game's draw3d
@@ -533,9 +538,9 @@ run("leaving a playable mod ends a /atmoplay time measurement", function(game)
     local original = function() end
     UIElement3D = { drawVisuals = original }
     local ok, err = pcall(function()
-        startRuntime()
+        startRuntime(true) -- its commands: dev builds only
         game.lm("arena.tbm")
-        game.fire("command", "atmoplay time")
+        ATMOPLAY.Runtime.command("atmoplay time")
         T.ok(UIElement3D.drawVisuals ~= original, "timing")
         game.lm("plain.tbm")
         T.eq(UIElement3D.drawVisuals, original, "the game's drawing given back")
@@ -557,4 +562,70 @@ run("a playable mod whose props never become real (no dynamic pool) still flies 
     T.ok(loaded.dynamics ~= nil, "its props are run (they fly drawn)")
     T.eq(#loaded.dynamics.entries, 0, "with no pool objects")
     T.eq(game.options.replaycache, 2, "the replay cache left alone (no pool objects to misplace)")
+end)
+
+run("the same mod loaded again: read again only when its file changed", function(game)
+    local Runtime = startRuntime()
+    game.lm("arena.tbm")
+    local first = Runtime.state.loaded
+    T.ok(first ~= nil, "arena is playable")
+    game.lm("arena.tbm")
+    T.eq(Runtime.state.loaded, first, "unchanged: the same one kept (not read again)")
+    game.files["../data/mod/arena.tbm"] = game.files["../data/mod/arena.tbm"] .. "\n" -- edited (MGE, a rebuild)
+    game.lm("arena.tbm")
+    T.ok(Runtime.state.loaded ~= first, "changed under its name: read again")
+end)
+
+run("MGE open: the mod is forgotten, read again once MGE closes", function(game)
+    local Runtime = startRuntime()
+    game.lm("arena.tbm")
+    local first = Runtime.state.loaded
+    MGE = { running = true }
+    local ok, err = pcall(function()
+        game.lm("arena.tbm")
+        T.eq(Runtime.state.loaded, first, "MGE plays it: Atmo Play's left as it was")
+        MGE.running = false
+        game.lm("arena.tbm")
+        T.ok(Runtime.state.loaded ~= first, "MGE closed: read again (MGE may have changed it)")
+    end)
+    MGE = nil
+    assert(ok, err)
+end)
+
+run("the window's side: its setters, kept in atmoplay.cfg, silent", function(game)
+    local Runtime = startRuntime()
+    game.lm("arena.tbm")
+    Runtime.setWindow(false) -- the window's cross
+    T.eq(Runtime.settings.ui, false, "hidden by choice")
+    local cfg = game.files[Runtime.settingsPath()] or ""
+    T.ok(cfg:find("ui off", 1, true) ~= nil, "kept in atmoplay.cfg")
+    local said = #game.said
+    Runtime.setFlight("full")
+    Runtime.setGhosts(false)
+    T.eq(Runtime.settings.flight, "full", "Flight set")
+    T.eq(Runtime.settings.ghosts, false, "Ghosts set")
+    local saved = game.files[Runtime.settingsPath()] or ""
+    T.ok(saved:find("flight full", 1, true) and saved:find("ghosts off", 1, true), "kept in atmoplay.cfg")
+    T.eq(#game.said, said, "nothing said")
+end)
+
+run("the window's place: saved when a drag ends, read at start", function(game)
+    local Runtime = startRuntime()
+    Runtime.setWindowPos(300.4, 200.6)
+    T.ok((game.files[Runtime.settingsPath()] or ""):find("uipos 300 201", 1, true) ~= nil, "kept in atmoplay.cfg")
+    Runtime.settings.uiPos = nil
+    Runtime.start() -- a restart reads the file
+    T.eq(Runtime.settings.uiPos and table.concat(Runtime.settings.uiPos, " "), "300 201", "read back")
+end)
+
+run("far props: Move by default, Pause saved and read back, silently", function(game)
+    local Runtime = startRuntime()
+    T.eq(Runtime.settings.pauseFar, false, "move by default")
+    local said = #game.said
+    Runtime.setFarProps(true)
+    T.ok((game.files[Runtime.settingsPath()] or ""):find("farprops pause", 1, true) ~= nil, "kept in atmoplay.cfg")
+    Runtime.settings.pauseFar = false
+    Runtime.start() -- a restart reads the file
+    T.eq(Runtime.settings.pauseFar, true, "read back")
+    T.eq(#game.said, said, "nothing said")
 end)

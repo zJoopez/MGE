@@ -1621,3 +1621,253 @@ env_obj right
     T.eq(seen.props[1], s.props[2], "on screen first")
     Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS = cap, budget
 end)
+
+T.test("review fixes: a carried prop's color as the game reads it (0-256, col / colour)", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj crate
+   shape box
+   pos 1 0 1
+   sides 0.4 0.4 0.4
+   colour 128 64 32 1
+   flag 0]]))
+    T.eq(props[1].color and props[1].color[1], 128, "colour read as color")
+    local s = Dynamics.new({ { id = 1, shape = "box" } }, props, { dradius = 2, fromFrame = 0 })
+    set_obj_pos(0, Dynamics.parkPos(1))
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s), "crate", "taken (a player is next to it)")
+    T.near(world.objects[0].color[1], 0.5, 1e-9, "128 painted as 0.5, not white")
+    T.near(world.objects[0].color[3], 0.125, 1e-9, "32 as 0.125")
+end)
+
+T.test("review fixes: a prop that fell off the map is let go and not taken again", function()
+    local s = setup(2)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    T.eq(carried(s):sub(1, 6), "crateA", "crateA taken")
+    -- it falls far below every prop's start, the player stays next to it
+    world.objects[0].pos = { 1, 0, s.fallen - 5 }
+    world.players[1] = { 1, 0, s.fallen - 5 }
+    local events = #s.events
+    for f = 1, 5 do Dynamics.draw(s, { replay_mode = 0, match_frame = f }) end
+    T.eq(s.props[1].entry, nil, "let go")
+    local its = {}
+    for i = events + 1, #s.events do
+        if s.events[i].prop == s.props[1] then its[#its + 1] = s.events[i].kind end
+    end
+    T.eq(table.concat(its, " "), "release", "once: one release, no take after it")
+end)
+
+T.test("review fixes: a replay take that matches nothing is counted once", function()
+    local s = setup(2)
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    world.objects[0].pos = { 40, 40, 1 } -- out of its parking spot, no prop anywhere near
+    for f = 0, 20 do Dynamics.draw(s, { replay_mode = 1, match_frame = f }) end
+    T.eq(s.replayMisses.none, 1, "one miss, not one a frame")
+end)
+
+T.test("review fixes: a state made mid-fight resets the pool objects on its first draw", function()
+    local s = setup(2)
+    -- no match_begin (Atmo Play restarted mid-fight): an object the old instance left carrying sits in the arena
+    world.objects[0].pos = { 1, 0, 1 }
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 300 })
+    local h = Dynamics.parkPos(1)
+    local p = world.objects[0].pos
+    T.near(math.abs(p[1] - h) + 0, 0, 1e-9, "parked again (nothing wants a prop there)")
+end)
+
+T.test("ghosts: picked again after a camera move, the old ones stay shown until the new prediction covers the ghost", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj left
+   shape box
+   pos -20 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 0 0 50
+env_obj right
+   shape box
+   pos 20 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 0 0 50]]))
+    local s = Dynamics.new({}, props, { dradius = 2, fromFrame = 0, gravity = { 0, 0, -9.82 } })
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local cap, budget = Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS
+    Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS = 1, math.huge
+    local old = Dynamics.predict(s, 20, { 25, 0, 2 })
+    T.eq(old.props[1], s.props[2], "the right one picked")
+    Dynamics.PREDICT_MS = -1 -- one predicted frame a call
+    local shown, calls = old, 0
+    repeat
+        shown = Dynamics.predict(s, 20, { -25, 0, 2 })
+        calls = calls + 1
+        if shown == old then T.ok(s.pendingPrediction ~= nil, "a new one building meanwhile") end
+    until shown ~= old or calls > 50
+    T.ok(calls > 15, "the old one stayed shown while the new one built (" .. calls .. " calls)")
+    T.eq(shown.props[1], s.props[1], "then the new one: the left one")
+    T.ok(shown.steps >= 20, "covering the ghost's frames")
+    T.eq(s.pendingPrediction, nil, "nothing left building")
+    Dynamics.dropPrediction(s)
+    T.ok(s.prediction == nil and s.pendingPrediction == nil, "ghosts off: both dropped")
+    Dynamics.MAX_GHOSTS, Dynamics.PREDICT_MS = cap, budget
+end)
+
+T.test("motion: prop_motion read (start, always); no line: active with thrust, else waiting; may pause", function()
+    T.eq(table.concat({ tostring(Colliders.motion({})), tostring(select(2, Colliders.motion({}))) }, " "), "nil false",
+        "no line: start not set")
+    local start, always = Colliders.motion({ prop_motion = "0 1" })
+    T.ok(start == false and always == true, "0 1: waits, always moves")
+    T.eq(Colliders.startsActive({}, true), true, "default with thrust: active")
+    T.eq(Colliders.startsActive({}, false), false, "default without: waits")
+    T.eq(Colliders.startsActive({ prop_motion = "1 0" }, false), true, "start 1 without thrust: active")
+    T.eq(Colliders.startsActive({ prop_motion = "0 0" }, true), false, "start 0 with thrust: waits")
+end)
+
+T.test("motion: a plain prop set active falls and settles from frame 0 with no one near; unset it stays", function()
+    local function run(line)
+        stubEngine()
+        local _, _, props = Colliders.build(T.lines([[
+env_obj crate
+   shape box
+   pos 6 0 3
+   sides 0.4 0.4 0.4
+   flag 0]] .. (line and ("\n   prop_motion " .. line) or "")))
+        local s = Dynamics.new({ { id = 1, shape = "box" } }, props, { dradius = 2, fromFrame = 0, gravity = { 0, 0, -9.82 } })
+        set_obj_pos(0, Dynamics.parkPos(1))
+        world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+        Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+        for f = 1, 400 do Dynamics.draw(s, { replay_mode = 0, match_frame = f }) end
+        return s.props[1]
+    end
+    local still = run(nil)
+    T.eq(still.pos[3], 3, "no line: waits in the air")
+    local crate = run("1 0")
+    T.near(crate.pos[3], 0.2, 0.01, "active: fell to the ground")
+    T.eq(crate.flight, nil, "and came to rest (its flight ended)")
+end)
+
+T.test("motion: a waiting thrust prop stays still and unpushed until a player reaches it, then flies on", function()
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj rocket
+   shape box
+   pos 6 0 1
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 200 0 0
+   prop_motion 0 0]]))
+    local s = Dynamics.new({ { id = 1, shape = "box" } }, props, { dradius = 2, fromFrame = 0, gravity = { 0, 0, -9.82 } })
+    set_obj_pos(0, Dynamics.parkPos(1))
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local rocket = s.props[1]
+    for f = 1, 10 do Dynamics.draw(s, { replay_mode = 0, match_frame = f }) end
+    T.eq(rocket.flight, nil, "not flying")
+    T.eq(rocket.pos, rocket.home.pos, "still where the atmo has it")
+    T.ok(rocket.dormant, "waiting")
+    -- a player walks up to it: taken, active from now; the players leave: let go, it flies on with its thrust
+    world.players = { { 6, 0, 1 }, { 120, 120, 1 } }
+    Dynamics.draw(s, { replay_mode = 0, match_frame = 11 })
+    T.ok(rocket.entry ~= nil and not rocket.dormant, "taken: active")
+    world.players = { { 100, 100, 1 }, { 120, 120, 1 } }
+    for f = 12, 20 do Dynamics.draw(s, { replay_mode = 0, match_frame = f }) end
+    T.ok(rocket.entry == nil and rocket.flight ~= nil, "let go: flying (thrust props never rest)")
+    -- a rewind to before the take: waiting again; on past it: active again (the take event)
+    Dynamics.rebuild(s, 5)
+    T.ok(rocket.dormant and rocket.flight == nil, "rewound before the take: waiting")
+end)
+
+---Two thrust props far apart, the players at one; the far one may pause, `always` says whether it does
+local function farSetup(always)
+    stubEngine()
+    local _, _, props = Colliders.build(T.lines([[
+env_obj near
+   shape box
+   pos 0 0 5
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 0 0 3
+env_obj far
+   shape box
+   pos 200 0 5
+   sides 0.4 0.4 0.4
+   flag 0
+   thrust 1 0 0 3
+   prop_motion 1 ]] .. (always and 1 or 0)))
+    local s = Dynamics.new({}, props, { dradius = 2, fromFrame = 0, gravity = { 0, 0, -9.82 }, pauseFar = true })
+    world.players = { { 0, 0, 1 }, { 1, 0, 1 } }
+    return s
+end
+
+---A fight with samples every frame (enter_frame) and draws, as the hosts run it
+local function runFar(s, frames, replay)
+    local poses = {}
+    for f = 0, frames do
+        local ws = { replay_mode = replay and 1 or 0, match_frame = f, num_players = 2 }
+        if f > 0 then Dynamics.draw(s, ws) end
+        Dynamics.sample(s, ws) -- enter_frame at f: where the players are for the step from f
+        poses[f] = { s.props[1].pos[3], s.props[2].pos[3] }
+    end
+    return poses
+end
+
+T.test("far props: one far from every player pauses, one near flies, one marked always flies anyway", function()
+    local s = farSetup(false)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local poses = runFar(s, 60)
+    T.ok(poses[60][1] ~= poses[1][1], "the near one flew")
+    T.eq(poses[60][2], 5, "the far one paused where it started")
+    T.ok(s.props[2].flight ~= nil, "still with its flight (goes on when someone comes near)")
+    local a = farSetup(true)
+    Dynamics.matchBegin(a, { replay_mode = 0, match_frame = 0 })
+    local poses2 = runFar(a, 60)
+    T.ok(poses2[60][2] ~= 5, "marked always: it flew far from everyone")
+    -- the player's option off: nothing pauses
+    local off = farSetup(false)
+    Dynamics.setPauseFar(off, false)
+    T.eq(off.pauseFar, true, "a change waits for match_begin")
+    Dynamics.matchBegin(off, { replay_mode = 0, match_frame = 0 })
+    T.eq(off.pauseFar, false, "taken at match_begin")
+    local poses3 = runFar(off, 60)
+    T.ok(poses3[60][2] ~= 5, "option off: the far one flew")
+end)
+
+T.test("far props: a player walking up wakes the paused one; its replay pauses at the very same frames", function()
+    local s = farSetup(false)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    local fight = {}
+    for f = 0, 80 do
+        local ws = { replay_mode = 0, match_frame = f, num_players = 2 }
+        -- the player walks over to the far prop from frame 30
+        if f >= 30 then world.players[1] = { 185, 0, 1 } end
+        if f > 0 and f % 3 ~= 0 then Dynamics.draw(s, ws) end -- some frames not drawn (several steps a draw)
+        Dynamics.sample(s, ws)
+        fight[f] = s.props[2].pos[3]
+    end
+    T.eq(fight[25], 5, "paused while everyone was far")
+    T.ok(fight[80] ~= 5, "flying once the player came near")
+    -- the replay: every frame watched, the same samples taken
+    world.players[1] = { 0, 0, 1 }
+    Dynamics.matchBegin(s, { replay_mode = 1, match_frame = 0 })
+    local worst = 0
+    for f = 0, 80 do
+        local ws = { replay_mode = 1, match_frame = f, num_players = 2 }
+        if f >= 30 then world.players[1] = { 185, 0, 1 } end
+        if f > 0 then Dynamics.draw(s, ws) end
+        Dynamics.sample(s, ws)
+        if f % 3 == 2 or f == 80 then -- the fight's drawn frames (its numbers are per draw)
+            worst = math.max(worst, math.abs(s.props[2].pos[3] - fight[f]))
+        end
+    end
+    T.near(worst, 0, 1e-9, "the replay's far prop flew as the fight's")
+end)
+
+T.test("far props: a paused one gets no ghost (the prediction wouldn't pause it), a near one does", function()
+    local s = farSetup(false)
+    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
+    runFar(s, 10)
+    local pr = Dynamics.predict(s, 20)
+    T.eq(#pr.list, 1, "one ghost")
+    T.eq(pr.list[1].of, s.props[1], "the near one's")
+end)

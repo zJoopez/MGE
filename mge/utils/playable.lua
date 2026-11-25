@@ -424,17 +424,12 @@ end
 ---------------------------------------------------------------------------------------------------- playing in the editor
 
 -- how drawn props fly while testing in the editor (Atmo Play's Dynamics.LEVELS), Settings > Prop flight (config.cfg):
--- the player's computer, not the mod. Atmo Play has its own (/atmoplay flight)
+-- the player's computer, not the mod. Atmo Play has its own (its window's Detail)
 Playable.flightLevel = Dynamics.DEFAULT_LEVEL
 -- the flying props' ghosts (Playable.drawGhosts), Settings > Prop ghosts (config.cfg propGhosts): off saves their work
 Playable.ghosts = true
-
----Settings > Prop ghosts
----@param on boolean
-function Playable.setGhosts(on)
-    Playable.ghosts = on and true or false
-    if not Playable.ghosts and dynamics then dynamics.prediction = nil end -- its memory goes at once
-end
+-- flying props far from every player pause (Atmo Play's far props), Settings > Far props (config.cfg propPauseFar)
+Playable.pauseFar = false
 
 local PLAY_HOOKS = MGE.hookname .. "_playable"
 ---@type AtmoPlayDriver?
@@ -443,6 +438,20 @@ local driver = nil
 local dynamics = nil
 ---@type number? the player's replaycache while props have it off (cached replays misplace them, as in Atmo Play)
 local cacheBefore = nil
+
+---Settings > Prop ghosts
+---@param on boolean
+function Playable.setGhosts(on)
+    Playable.ghosts = on and true or false
+    if not Playable.ghosts and dynamics then Dynamics.dropPrediction(dynamics) end -- its memory goes at once
+end
+
+---Settings > Far props: pause (true) or move; the props playing now take it from the next fight
+---@param on boolean
+function Playable.setPauseFar(on)
+    Playable.pauseFar = on and true or false
+    if dynamics then Dynamics.setPauseFar(dynamics, Playable.pauseFar) end
+end
 
 ---Settings > Prop flight: how drawn props fly (Dynamics.LEVELS); the props playing now take it from the next fight
 ---@param level string
@@ -509,7 +518,7 @@ function Playable.onMatchBegin()
         -- follow: the mod's own dynamic objects push props too. Without a dynamic pool (props that never become
         -- real) they still fly drawn (thrust, hits)
         local params = { dradius = ModData.parsed.playable.dradius, noCopies = true, follow = driver.follow,
-            statics = colliders, level = Playable.flightLevel }
+            statics = colliders, level = Playable.flightLevel, pauseFar = Playable.pauseFar }
         dynamics = Dynamics.new(loaded.dynamicObjects or {}, props, params)
         local d = dynamics
         driver.moreCenters = function() return Dynamics.centers(d) end
@@ -582,8 +591,12 @@ local function watchReplay()
 end
 add_hook("pre_draw", PLAY_HOOKS, watchReplay)
 -- and every physics frame, drawn or not (enter_frame at frame t sees the state draw2d would): no let-go or take falls
--- between two drawn frames, the drawn flights start exactly as in the fight (Atmo Play's runtime.lua: onEnterFrame)
-add_hook("enter_frame", PLAY_HOOKS, watchReplay)
+-- between two drawn frames, the drawn flights start exactly as in the fight (Atmo Play's runtime.lua: onEnterFrame).
+-- Fights and replays alike: where the players are this frame, for far props' pauses (the same pauses in both)
+add_hook("enter_frame", PLAY_HOOKS, function()
+    watchReplay()
+    if dynamics and dynamics.pauseFar then runDynamics(Dynamics.sample, get_world_state()) end
+end)
 table.insert(MGE.onQuit, function()
     remove_hooks(PLAY_HOOKS)
     driver, dynamics = nil, nil
