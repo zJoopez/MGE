@@ -24,6 +24,7 @@ local FILES = {
     "test_color_picker.lua",
     "test_config.lua",
     "test_joints.lua",
+    "test_selection_history.lua",
     "test_players.lua",
     "test_playable.lua",
     "test_atmoplay_format.lua",

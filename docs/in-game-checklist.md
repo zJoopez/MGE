@@ -126,6 +126,13 @@ a bare name with no file at that path.
 - [ ] A model object in a mod from a subfolder (`/lm Fun/...`): the model shows, Save writes `../<path>`,
       and an older MGE save with `../../` loads with the model repaired.
 - [ ] The working copy's name in other case (`MGE-Work`) is refused as a mod name.
+- [ ] Camera follow keeps the zoom: selecting a big group or adding to the selection zoomed in close
+      doesn't back the camera out. Taking over the game's camera from closer than 6 starts at 6. The map
+      placement view still opens with the whole region in view.
+- [ ] Ctrl + Shift + Z after a misclick (plain click on another object, or on the only selected one) brings
+      the selection back, Ctrl + Shift + Y goes forward again. Works on Objects and Atmo apart, after a
+      list click, Ctrl + A and box select too. The game does nothing of its own on Ctrl + Shift + Z / Y.
+- [ ] Undo goes back 50 steps; memory and edit speed stay fine on a big atmo.
 
 ## Reference mods
 

@@ -522,7 +522,7 @@ function MapPlace.start(s)
     if windowWasShown then window:hide(false) end
     buildBar()
     local box = regionBox()
-    MGE.Camera.focusOn(box.pos, Vec.length(box.sides) / 2)
+    MGE.Camera.focusOn(box.pos, Vec.length(box.sides) / 2, true) -- opening: the whole region in view
 end
 
 table.insert(MGE.onQuit, function() if MapPlace.active then stop() end end)

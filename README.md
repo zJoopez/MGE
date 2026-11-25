@@ -125,7 +125,8 @@ each player, in fights, and the game records those moves, so replays need nothin
 |---|---|
 | F1 | Hide / show the window |
 | Alt + Q / W / E | Move / Rotate / Scale tool (press again to turn it off) |
-| Shift + Z / Shift + Y | Undo / redo |
+| Shift + Z / Shift + Y | Undo / redo (50 steps; the selection stays as it is) |
+| Ctrl + Shift + Z / Y | Selection back / forward (Objects and Atmo lists, 50 steps): brings back a selection a misclick replaced |
 | Ctrl + S | Save |
 | Ctrl + A | Select / deselect all (objects, atmo objects, players or joints, whichever list is shown) |
 | Ctrl + N / Ctrl + D | New / duplicate (an object, atmo object, player or joint, on the shown list) |

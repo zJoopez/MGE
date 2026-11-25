@@ -42,6 +42,7 @@ local SHORTCUTS = table.concat({
     "Ctrl + N / D: new / duplicate selected (of the shown list)",
     "Delete: delete selected, of the shown list (asks first)",
     "Shift + Z / Y: undo / redo",
+    "Ctrl + Shift + Z / Y: selection back / forward (Objects, Atmo)",
     "Number fields apply when you leave them (or Enter), Esc drops the typing",
     "Wheel over a number field: + / - the step, Shift: the Shift step (one undo step a scroll)",
     "Alt + Q / W / E: Move / Rotate / Scale gizmo on / off",

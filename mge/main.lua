@@ -30,6 +30,7 @@
 ---@field FileHandler table utils/file_handler.lua
 ---@field ModData ModData utils/mod_export.lua
 ---@field History History utils/history.lua
+---@field SelectionHistory SelectionHistory utils/selection_history.lua
 ---@field Joints Joints utils/joints.lua
 ---@field Mat3 Mat3 utils/mat3.lua
 ---@field Transforms table utils/transforms.lua
@@ -132,6 +133,7 @@ loadModule("utils/mat3.lua")
 loadModule("utils/file_handler.lua")
 loadModule("utils/mod_export.lua")
 loadModule("utils/history.lua")
+loadModule("utils/selection_history.lua")
 loadModule("utils/atmo_layer.lua") -- after history
 loadModule("utils/atmo.lua")
 -- Atmo Play's modules in MGE's own namespace, so a running Atmo Play keeps its own
@@ -559,6 +561,7 @@ add_hook("match_begin", MGE.hookname, function()
     else
         -- new mod or game restart: older states no longer match
         History.reset()
+        MGE.SelectionHistory.reset()
         MGE.Main.resetWindow()
     end
     MGE.reloadPending = false
@@ -643,7 +646,8 @@ function MGE.closeTopOverlay()
     return false
 end
 
--- Shortcuts: Shift+Z / Y undo / redo (the game owns Ctrl+Z/Y), Ctrl+S save, Ctrl+A select all,
+-- Shortcuts: Shift+Z / Y undo / redo (the game owns Ctrl+Z/Y), Ctrl+Shift+Z / Y selection back / forward,
+-- Ctrl+S save, Ctrl+A select all,
 -- Alt+Q/W/E gizmo, Ctrl+N/D new / duplicate, Delete, Esc closes overlays, Enter confirms.
 -- Handled keys swallow their key_up too (consumedKeys): the game acts on releases as well
 ---@type table<integer, boolean>
@@ -686,14 +690,16 @@ local function onKeyDown(key)
         if not overlayOpen() then OBJECT_KEYS[key]() end
         return 1
     end
-    if shift and not ctrl then
-        if key == string.byte("z") then
+    if shift and (key == string.byte("z") or key == string.byte("y")) then
+        local back = key == string.byte("z")
+        if ctrl then
+            if not overlayOpen() then MGE.SelectionHistory.step(back and -1 or 1) end
+        elseif back then
             History.undo()
-            return 1
-        elseif key == string.byte("y") then
+        else
             History.redo()
-            return 1
         end
+        return 1
     elseif ctrl and not shift and key == string.byte("s") then
         MGE.save()
         return 1

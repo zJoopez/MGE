@@ -11,7 +11,7 @@ local ModData = MGE.ModData
 local History = {
     states = {},
     index = 0,
-    limit = 20,
+    limit = 50,
 }
 
 ---@param obj FileParserEnvObj|FileParserEnvObjJoint

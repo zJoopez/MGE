@@ -704,6 +704,7 @@ end
 
 ---Selection changed: editor shows the new selection's current values
 function Main.onSelectionChanged()
+    MGE.SelectionHistory.record()
     editor.onSelectionChanged()
 end
 

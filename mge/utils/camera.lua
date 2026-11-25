@@ -266,11 +266,12 @@ function Camera.focus(objects)
     Camera.focusOn(center, radius)
 end
 
----Points MGE's camera at a sphere from the current direction. Keeps the zoom unless the sphere wouldn't
----fit, then backs out just enough
+---Points MGE's camera at a sphere from the current direction, keeping the zoom (a forced zoom-out got in
+---the way of precise selecting). fit: backs out until the sphere fits
 ---@param center number[]
 ---@param radius number
-function Camera.focusOn(center, radius)
+---@param fit boolean?
+function Camera.focusOn(center, radius, fit)
     local c = get_camera_info()
     if not Camera.isControlling() then
         -- start from the game's current view direction
@@ -282,7 +283,9 @@ function Camera.focusOn(center, radius)
         Camera.distance = len
     end
 
-    local distance = math.max(Camera.fitDistance(radius), Camera.distance)
+    -- the game's camera may sit inside the near clip
+    local distance = math.min(math.max(Camera.distance or Camera.zoomMin, Camera.zoomMin), Camera.zoomMax)
+    if fit then distance = math.max(Camera.fitDistance(radius), distance) end
 
     set_camera_mode(4)
     MGE.cameraChanged = true -- reset on quit
