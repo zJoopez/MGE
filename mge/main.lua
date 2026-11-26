@@ -95,7 +95,7 @@ function MGE.say(text)
     if MGE.onMessage then pcall(MGE.onMessage, text) end
 end
 -- The game caches a loaded mod by the text typed after /lm; another spelling of the same file reads it
--- again (tools/reload_probe.lua). So apply alternates two spellings; "//" works on every system
+-- again (measured in game). So apply alternates two spellings; "//" works on every system
 MGE.workPath = "modmaker/mge-work.tbm"
 MGE.workSpellings = { "modmaker/mge-work.tbm", "modmaker//mge-work.tbm" }
 MGE.modName = get_game_rules().mod
@@ -163,7 +163,7 @@ local Atmo = MGE.Atmo
 
 ---The loaded mod's path under data/mod, nil for the built-in classic. The mod gamerule is the /lm text
 ---with .tbm added ("classic" without .tbm is the built-in one). A file at that path wins; otherwise the
----game searched like find_mod, which ignores the folder, so it's only the fallback (tools/modpath_probe.lua)
+---game searched like find_mod, which ignores the folder, so it's only the fallback (measured in game)
 ---@param name string? the mod gamerule
 ---@return string?
 local function resolveModPath(name)
@@ -454,18 +454,38 @@ local confirmActions = nil
 ---@return boolean shown
 function MGE.confirm(message, onConfirm, onCancel)
     if MGE.confirmOverlay and not MGE.confirmOverlay.destroyed then return false end
-    local actions
+    local actions, enterField
     local function finish(action)
         return function()
             if confirmActions == actions then confirmActions = nil end
             MGE.confirmOverlay = nil
+            -- a click unfocuses the field, then kill leaves the menu keyboard on (shortcuts stop)
+            if enterField then
+                if enterField.menuKeyboardId then enterField:disableMenuKeyboard() end
+                for i = #UIKeyboardHandler, 1, -1 do
+                    if UIKeyboardHandler[i] == enterField then table.remove(UIKeyboardHandler, i) end
+                end
+                enterField = nil
+            end
             if action then action() end
         end
     end
     -- frame: the Enter that opened it doesn't also confirm it
     actions = { confirm = finish(onConfirm), cancel = finish(onCancel), frame = UIElement and UIElement.frameIndex }
     confirmActions = actions
-    MGE.confirmOverlay = TBMenu:showConfirmationWindow(message, actions.confirm, actions.cancel)
+    local overlay = TBMenu:showConfirmationWindow(message, actions.confirm, actions.cancel)
+    MGE.confirmOverlay = overlay
+    -- Enter: the game opens chat on any Enter but one a focused text field takes, so a hidden one confirms
+    -- (on the release, as fields do)
+    enterField = overlay:addChild({ pos = { 0, 0 }, size = { 1, 1 }, textfield = true, textfieldsingleline = true })
+    enterField:addEnterAction(function()
+        if UIElement.frameIndex == actions.frame or overlay.destroyed then return end
+        overlay:kill()
+        actions.confirm()
+    end)
+    for _, v in ipairs(UIKeyboardHandler) do v.keyboard = v.permanentListener end
+    enterField.keyboard = true
+    enterField:enableMenuKeyboard()
     return true
 end
 
@@ -658,15 +678,7 @@ local function onKeyDown(key)
         if MGE.closeTopOverlay() then return 1 end
         return
     end
-    if (key == KEY_RETURN or key == KEY_KEYPAD_ENTER) and topOverlay() == "confirmOverlay" then
-        local actions = confirmActions
-        local frame = UIElement and UIElement.frameIndex
-        if actions and not (frame and frame == actions.frame) then
-            MGE.confirmOverlay:kill()
-            actions.confirm()
-        end
-        return 1
-    end
+    -- the confirmation's Enter: its hidden field (MGE.confirm)
     if (key == KEY_RETURN or key == KEY_KEYPAD_ENTER) and topOverlay() == "colorOverlay" then
         if MGE.ColorPicker.confirm then MGE.ColorPicker.confirm() end
         return 1

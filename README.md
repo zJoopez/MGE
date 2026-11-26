@@ -63,11 +63,11 @@ the mod.
     and adds its objects where the file has them. **Export** writes the selected ones to `assets/atmo`.
   - On this list the atmo objects are drawn in their own color and the mod's objects turn see-through.
 - **Editing:** the **Core** and **Advanced** tabs are the objects' tabs, on the selected atmo objects. The
-  gizmo, clicks and Shift + drag work the same. Core's last row has **To objects**.
+  gizmo, clicks and Shift + drag work the same. Advanced's last row has **To objects**.
   Mass, Visible, Friction, Bounce, Hardness and Flags only act in a playable atmo mod (Atmo Play, below): the
   game's own atmo ignores those lines. Static off makes a prop, pushable in Atmo Play. Model and Ids aren't on
-  the Atmo list. Below Flags are what only atmos have: **Depth** (drawn on top), **Graphics** (the graphics
-  levels it shows at) and, when there are any, the lines MGE keeps without editing them. The **Generate** tab works as on Objects, and its pieces
+  the Atmo list; Collision and Motion (props) are. Lines MGE doesn't edit (depth, graphics levels, animation)
+  are kept as written. The **Generate** tab works as on Objects, and its pieces
   go to the atmo (no joints field there: atmos have none).
 - **To atmo** (Objects → Advanced) moves the selected objects into the atmo and frees their ids. **To
   objects** moves atmo objects back while there are free ids. Objects joined by a joint stay.
