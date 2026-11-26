@@ -89,6 +89,9 @@ left out of the zips): `/atmoplay status|reload|time|log|...`.
 - A replay stores body state once per turn and simulates between. Ordinary dynamic objects drift in some
   fights even without a script (0.46 from frame 133 in a probe); per-frame FRAME/body/EOBJ lines make even
   teleporting fights exact (file 12x longer) — not used.
+- Props need replaycache 0 (`Dynamics.CACHE_OFF`, set while a mod with props is loaded): a saved replay opened
+  cached shows them frozen; the replay right after a fight is right cached or not. RPH's dynamics don't need it
+  (it moves them itself in replays). The player's value is kept in the cfg till given back.
 - Replays carry no object color: carried props are painted while watching (`keepDressed`, every draw call).
 - Saved replays get nothing extra: the game doesn't say which file is open, and a file's last FRAME isn't
   where the fight ended.

@@ -53,6 +53,13 @@ Config.ENTRIES = {
         get = function() return MGE.Playable.ghosts end, set = function(v) MGE.Playable.setGhosts(v) end },
     { key = "propPauseFar", kind = "boolean",
         get = function() return MGE.Playable.pauseFar end, set = function(v) MGE.Playable.setPauseFar(v) end },
+    -- the player's replaycache while props have it off; on load: the game closed first, give it back
+    { key = "replayCache", kind = "number", min = 0, max = 100, whole = true,
+        get = function() return MGE.Playable.cacheBefore() end,
+        set = function(v)
+            if MGE.Playable.cacheBefore() == nil then MGE.Playable.giveCacheBack(v) end
+            Config.values.replayCache = MGE.Playable.cacheBefore()
+        end },
 }
 
 ---@type table<string, number|boolean> values read from the file, by key

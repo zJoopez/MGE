@@ -131,6 +131,31 @@ T.test("undo steps share unchanged atmo copies, an edited one gets its own; undo
     T.eq(ModData.parsed.atmo[2].props.pos, "2 0 0", "undo: the first step")
 end)
 
+T.test("selection back after delete and undo: the restored objects are found", function()
+    setup({})
+    local atmo = {}
+    for i = 1, 3 do atmo[i] = { kind = "atmo", id = i, lines = {}, props = { pos = i .. " 0 0", shape = "box" } } end
+    ModData.parsed.atmo = atmo
+    local saved = MGE.SelectionHistory
+    dofile(MGE.scriptPath .. "utils/selection_history.lua")
+    local History, SH = MGE.History, MGE.SelectionHistory
+    History.reset()
+    SH.reset()
+    SH.record()
+    atmo[2].selected, atmo[3].selected = true, true
+    SH.record()
+    T.eq(AtmoLayer.removeSelected(), 2, "two deleted")
+    History.commit() -- as Delete does
+    SH.record() -- nothing selected now
+    History.undo()
+    T.eq(#ModData.parsed.atmo, 3, "undo: back")
+    T.ok(SH.move("atmo", -1), "back")
+    local sel = {}
+    for i, obj in ipairs(ModData.parsed.atmo) do if obj.selected then sel[#sel + 1] = i end end
+    T.eq(table.concat(sel, " "), "2 3", "the deleted ones selected again")
+    MGE.SelectionHistory = saved
+end)
+
 T.test("history: the mod's lines by content (a reload's new tables alone don't need a reload)", function()
     local a = { env_obj = {}, env_obj_joint = {}, ignores = { "version 15", "gamerule" }, trailer = {} }
     local b = { env_obj = {}, env_obj_joint = {}, ignores = { "version 15", "gamerule" }, trailer = {} }

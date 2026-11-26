@@ -166,7 +166,7 @@ end
 local function follow()
     if not MGE.Camera.followMoves then return end
     local box = regionBox()
-    MGE.Camera.focusOn(box.pos, Vec.length(box.sides) / 2)
+    MGE.Camera.focusOn(box.pos, Vec.length(box.sides) / 2, true)
 end
 
 ---Reruns the conversion's selection for the region

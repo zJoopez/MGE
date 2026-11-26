@@ -73,10 +73,11 @@ local function park(entry)
 end
 
 ---Every player's center (the average of its body parts)
+---@param count integer? players (get_world_state's num_players)
 ---@return number[][]
-local function playerCenters()
+local function playerCenters(count)
     local centers = {}
-    local count = get_world_state().num_players or 2
+    count = count or 2
     for player = 0, count - 1 do
         local s, n = { 0, 0, 0 }, 0
         for _, part in pairs(BODYPARTS) do
@@ -127,7 +128,7 @@ function Driver.drive(d, ws)
     if frame < (d.fromFrame or 0) then return end
     if d.lastFrame ~= nil and frame < d.lastFrame then Driver.reset(d) end -- the frame went back
     d.lastFrame = frame
-    local centers = playerCenters()
+    local centers = playerCenters(ws.num_players)
     for _, id in ipairs(d.follow or {}) do
         local x, y, z = get_obj_pos(id)
         if x then centers[#centers + 1] = { x, y, z } end

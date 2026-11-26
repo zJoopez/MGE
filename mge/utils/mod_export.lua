@@ -45,6 +45,22 @@ function ModData.copy(t)
     return copy
 end
 
+local nextSelKey = 0
+
+---Gives every object its own `selKey` (selection back / forward finds objects by it through renumbering and undo).
+---A duplicate copies its source's key: the later one gets a new one
+---@param list FileParserEnvObj[]?
+function ModData.keyObjects(list)
+    local seen = {}
+    for _, obj in ipairs(list or {}) do
+        if not obj.selKey or seen[obj.selKey] then
+            nextSelKey = nextSelKey + 1
+            obj.selKey = nextSelKey
+        end
+        seen[obj.selKey] = true
+    end
+end
+
 ---Click selects only obj (clicking the only selected one deselects it); Shift + click toggles it
 ---@param obj FileParserEnvObj
 ---@param additive boolean Shift held
@@ -320,7 +336,7 @@ end
 
 ---@param modelName string?
 ---@return string? the mod_assets path (without .obj) it points to; nil for one in the mod's own folder.
----".." above mod_assets is skipped (older MGE versions wrote ../../ for mods in subfolders)
+---".." above mod_assets is skipped
 function ModData.fromModelName(modelName)
     if not modelName or modelName == "" then return nil end
     local parts = { SELF }
@@ -335,7 +351,7 @@ function ModData.fromModelName(modelName)
     return table.concat(parts, "/")
 end
 
----Repairs model_names that climb above mod_assets (MGE wrote ../../ for mods in subfolders): one ../ is right
+---Repairs model_names that climb above mod_assets (../../): one ../ is right
 local function repairModels()
     for _, obj in ipairs(ModData.parsed.env_obj) do
         local name = obj.props.model_name

@@ -30,7 +30,7 @@ local SNAP_STEPS = {
     stepField("Shift step", "wheelFineStep", 1000),
     stepField("Rotate step", "rotateStep", 180),
 }
-local SNAP_INFO = "Wheel over a number field\nCtrl while gizmo drag\n Hold Shift for shift step."
+local SNAP_INFO = "Wheel over a number field\nCtrl while gizmo drag\nHold Shift for shift step."
 
 local SHORTCUTS = table.concat({
     "F1: show / hide window",
@@ -255,7 +255,7 @@ do
 end
 
 addNumberSection("Snapping", SNAP_STEPS, SNAP_INFO)
-addHelpHeading(y, "Dynamic atmo", "Playable atmo options.\n Allows disabling features to handle more dynamic atmos")
+addHelpHeading(y, "Dynamic atmo", "Playable atmo options.\nAllows disabling features to handle more dynamic atmos")
 y = y + SECTION_H
 do
     local LABELS = { simple = "Low", shapes = "Medium", full = "High" }
@@ -266,9 +266,10 @@ do
         function() return MGE.Playable.flightLevel end, MGE.Playable.setFlightLevel)
 end
 -- ghosts run the flights ahead: as much work as playing them
-addChoiceRow("Ghosts", nil, ON_OFF,
+addChoiceRow("Ghosts", "Flying props' ghosts while a turn waits.\nOff saves work with many flying props.", ON_OFF,
     function() return MGE.Playable.ghosts end, MGE.Playable.setGhosts)
-addChoiceRow("Distant", nil, { { label = "Move", value = false }, { label = "Pause", value = true } },
+addChoiceRow("Distant", "Moving props far from every player:\nMove: keep moving. Pause: wait until\n" ..
+    "someone comes near (less work).", { { label = "Move", value = false }, { label = "Pause", value = true } },
     function() return MGE.Playable.pauseFar end, MGE.Playable.setPauseFar)
 
 addHelpHeading(y, "Shortcuts", SHORTCUTS)

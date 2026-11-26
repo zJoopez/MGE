@@ -446,6 +446,19 @@ end
 
 ---@type { confirm: fun(), cancel: fun()?, frame: integer? }? the open confirmation's actions
 local confirmActions = nil
+---@type UIElement? the open confirmation's hidden Enter field
+local enterField = nil
+
+---Takes the hidden Enter field out of toriui's keyboard list (kill alone leaves the menu keyboard on: shortcuts stop)
+local function releaseEnterField()
+    local field = enterField
+    if not field then return end
+    enterField = nil
+    if field.menuKeyboardId then field:disableMenuKeyboard() end
+    for i = #UIKeyboardHandler, 1, -1 do
+        if UIKeyboardHandler[i] == field then table.remove(UIKeyboardHandler, i) end
+    end
+end
 
 ---The game's confirmation popup: Continue / Enter confirms, Cancel / Esc cancels. Does nothing while one is open
 ---@param message string
@@ -454,19 +467,12 @@ local confirmActions = nil
 ---@return boolean shown
 function MGE.confirm(message, onConfirm, onCancel)
     if MGE.confirmOverlay and not MGE.confirmOverlay.destroyed then return false end
-    local actions, enterField
+    local actions
     local function finish(action)
         return function()
             if confirmActions == actions then confirmActions = nil end
             MGE.confirmOverlay = nil
-            -- a click unfocuses the field, then kill leaves the menu keyboard on (shortcuts stop)
-            if enterField then
-                if enterField.menuKeyboardId then enterField:disableMenuKeyboard() end
-                for i = #UIKeyboardHandler, 1, -1 do
-                    if UIKeyboardHandler[i] == enterField then table.remove(UIKeyboardHandler, i) end
-                end
-                enterField = nil
-            end
+            releaseEnterField()
             if action then action() end
         end
     end
@@ -477,15 +483,20 @@ function MGE.confirm(message, onConfirm, onCancel)
     MGE.confirmOverlay = overlay
     -- Enter: the game opens chat on any Enter but one a focused text field takes, so a hidden one confirms
     -- (on the release, as fields do)
-    enterField = overlay:addChild({ pos = { 0, 0 }, size = { 1, 1 }, textfield = true, textfieldsingleline = true })
-    enterField:addEnterAction(function()
+    local field = overlay:addChild({ pos = { 0, 0 }, size = { 1, 1 }, textfield = true, textfieldsingleline = true })
+    enterField = field
+    -- a click anywhere unfocuses every field (toriui's handleMouseDn): take the focus back
+    field:addCustomDisplay(function()
+        if enterField == field then field.keyboard = true end
+    end)
+    field:addEnterAction(function()
         if UIElement.frameIndex == actions.frame or overlay.destroyed then return end
         overlay:kill()
         actions.confirm()
     end)
     for _, v in ipairs(UIKeyboardHandler) do v.keyboard = v.permanentListener end
-    enterField.keyboard = true
-    enterField:enableMenuKeyboard()
+    field.keyboard = true
+    field:enableMenuKeyboard()
     return true
 end
 
@@ -529,6 +540,7 @@ function MGE.quit(fromWindow)
     for _, callback in ipairs(MGE.onQuit or {}) do
         pcall(callback)
     end
+    pcall(releaseEnterField)
     for _, key in ipairs(OVERLAY_KEYS) do
         local overlay = MGE[key]
         if overlay and not overlay.destroyed then

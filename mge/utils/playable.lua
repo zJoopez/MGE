@@ -425,17 +425,37 @@ function Playable.setFlightLevel(level)
     if dynamics then Dynamics.setLevel(dynamics, Playable.flightLevel) end
 end
 
+---The player's replaycache while props have it off (config.cfg keeps it in case the game closes first)
+---@return number?
+function Playable.cacheBefore() return cacheBefore end
+
+---Gives a replaycache back, unless the player changed it meanwhile (not 0 any more)
+---@param before number?
+function Playable.giveCacheBack(before)
+    if before == nil then return end
+    local ok, value = pcall(get_option, "replaycache")
+    if ok and tonumber(value) == 0 then pcall(set_option, "replaycache", before) end
+end
+
+local function saveCache()
+    if not MGE.Config then return end
+    MGE.Config.values.replayCache = cacheBefore -- nil clears it (save keeps a value only a getter gives)
+    MGE.Config.save()
+end
+
 local function setReplayCache(withProps)
-    if withProps and cacheBefore == nil then
+    if withProps and cacheBefore == nil and Dynamics.CACHE_OFF then
         local ok, value = pcall(get_option, "replaycache")
         if ok and tonumber(value) and tonumber(value) ~= 0 then
             cacheBefore = tonumber(value)
             set_option("replaycache", 0)
+            saveCache()
             MGE.say("replay cache off while props are loaded")
         end
     elseif not withProps and cacheBefore ~= nil then
-        pcall(set_option, "replaycache", cacheBefore)
+        Playable.giveCacheBack(cacheBefore)
         cacheBefore = nil
+        saveCache()
     end
 end
 

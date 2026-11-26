@@ -27,7 +27,8 @@ end
 ---@param obj FileParserEnvObj
 ---@return boolean
 local function sameAtmo(stored, obj)
-    if stored.id ~= obj.id or stored.atmoName ~= obj.atmoName or stored.lines ~= obj.lines then return false end
+    if stored.id ~= obj.id or stored.atmoName ~= obj.atmoName or stored.lines ~= obj.lines or
+        stored.selKey ~= obj.selKey then return false end
     local a, b = stored.props, obj.props
     for key, value in pairs(b) do
         if a[key] ~= value then return false end
@@ -46,6 +47,9 @@ local function copyParsed(parsed, previous)
     local copy = { ignores = parsed.ignores, trailer = parsed.trailer, env_obj = {}, env_obj_joint = {}, atmo = {},
         sharedPlayers = parsed.sharedPlayers,
         playable = parsed.playable } -- never changed in place
+    -- keyed before copying: undo's copies carry the keys selection back / forward stored
+    ModData.keyObjects(parsed.env_obj)
+    ModData.keyObjects(parsed.atmo)
     for i, obj in ipairs(parsed.env_obj or {}) do copy.env_obj[i] = copyObject(obj) end
     for i, obj in ipairs(parsed.env_obj_joint or {}) do copy.env_obj_joint[i] = copyObject(obj) end
     local before = previous and previous.atmo or {}

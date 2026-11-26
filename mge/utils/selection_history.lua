@@ -1,6 +1,7 @@
 -- Selection back / forward (Ctrl + Shift + Z / Y): a misclick replaces a selection, and undo keeps the
--- current selection. Objects (by id) and atmo objects (by index, like History) each keep their own steps,
--- recorded on every selection change (Main.onSelectionChanged) when they differ from the current step
+-- current selection. Objects and atmo objects each keep their own steps, recorded on every selection change
+-- (Main.onSelectionChanged) when they differ from the current step. Steps hold each object's `selKey`
+-- (ModData.keyObjects), which survives renumbering (delete, reindex, To atmo) and undo's copies
 
 local ModData = MGE.ModData
 
@@ -19,11 +20,13 @@ local function listOf(layer)
 end
 
 ---@param layer string
----@return integer[] ids (atmo: indices) of the selected, in list order
+---@param layer string
+---@return integer[] keys of the selected, in list order
 local function current(layer)
+    ModData.keyObjects(listOf(layer))
     local keys = {}
-    for i, obj in ipairs(listOf(layer)) do
-        if obj.selected then keys[#keys + 1] = layer == "atmo" and i or obj.id end
+    for _, obj in ipairs(listOf(layer)) do
+        if obj.selected then keys[#keys + 1] = obj.selKey end
     end
     return keys
 end
@@ -71,8 +74,8 @@ end
 local function apply(layer, keys)
     local wanted = {}
     for _, key in ipairs(keys) do wanted[key] = true end
-    for i, obj in ipairs(listOf(layer)) do
-        obj.selected = wanted[layer == "atmo" and i or obj.id] or nil
+    for _, obj in ipairs(listOf(layer)) do
+        obj.selected = wanted[obj.selKey] or nil
     end
 end
 

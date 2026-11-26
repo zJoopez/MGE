@@ -266,8 +266,8 @@ function Camera.focus(objects)
     Camera.focusOn(center, radius)
 end
 
----Points MGE's camera at a sphere from the current direction, keeping the zoom (a forced zoom-out got in
----the way of precise selecting). fit: backs out until the sphere fits
+---Points MGE's camera at a sphere from the current direction, keeping the zoom. fit: backs out until
+---the sphere fits
 ---@param center number[]
 ---@param radius number
 ---@param fit boolean?

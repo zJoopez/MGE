@@ -72,9 +72,10 @@ end
 ---------------------------------------------------------------------------------------------------- settings
 
 -- atmoplay.cfg next to atmoplay.lua, "key value" lines: flight simple|shapes|full, ghosts on|off,
--- farprops move|pause, maxdraws N, ui on|off (window open at start), uipos X Y
+-- farprops move|pause, maxdraws N, ui on|off (window open at start), uipos X Y, replaycache N (the player's
+-- value while Atmo Play has it off: given back on the next start if the game closed first)
 Runtime.settings = { flight = Dynamics.DEFAULT_LEVEL, ghosts = true, pauseFar = false, maxDraws = 1000, ui = true,
-    uiPos = nil }
+    uiPos = nil, cacheBefore = nil }
 
 ---@return string data/script path
 function Runtime.settingsPath()
@@ -97,6 +98,7 @@ function Runtime.loadSettings()
             local x, y = tostring(line):match("^%s*%S+%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)")
             if x then Runtime.settings.uiPos = { tonumber(x), tonumber(y) } end
         end
+        if key == "replaycache" and tonumber(value) then Runtime.settings.cacheBefore = tonumber(value) end
     end
 end
 
@@ -107,6 +109,7 @@ function Runtime.saveSettings()
         "maxdraws " .. Runtime.settings.maxDraws, "ui " .. (Runtime.settings.ui and "on" or "off") }
     local pos = Runtime.settings.uiPos
     if pos then lines[#lines + 1] = string.format("uipos %d %d", pos[1], pos[2]) end
+    if Runtime.settings.cacheBefore then lines[#lines + 1] = "replaycache " .. Runtime.settings.cacheBefore end
     if not writeLines(Runtime.settingsPath(), lines) then
         say("couldn't save the settings to " .. Runtime.settingsPath())
     end
@@ -280,16 +283,29 @@ end
 
 ---Cached replays misplace teleported dynamic objects: a mod with props has the replay cache off while it's loaded
 local function replayCacheOff()
+    if not Dynamics.CACHE_OFF then return end
     local ok, value = pcall(get_option, "replaycache")
     if not ok or tonumber(value) == 0 then return end
     state.cacheBefore = tonumber(value)
     set_option("replaycache", 0)
+    Runtime.settings.cacheBefore = state.cacheBefore -- kept in atmoplay.cfg till given back
+    Runtime.saveSettings()
+end
+
+---Gives the player's replaycache back, unless they changed it meanwhile (not 0 any more)
+---@param before number?
+local function giveCacheBack(before)
+    if before == nil then return end
+    local ok, value = pcall(get_option, "replaycache")
+    if ok and tonumber(value) == 0 then pcall(set_option, "replaycache", before) end
 end
 
 local function restoreReplayCache()
     if state.cacheBefore == nil then return end
-    pcall(set_option, "replaycache", state.cacheBefore)
+    giveCacheBack(state.cacheBefore)
     state.cacheBefore = nil
+    Runtime.settings.cacheBefore = nil
+    Runtime.saveSettings()
 end
 
 local function leavePlayable()
@@ -316,6 +332,7 @@ end
 local function switchMod(name, raw)
     state.modName = name
     state.modRaw = raw or readRaw(name)
+    state.drawError, state.ghostError = nil, nil -- each mod reports its own once
     if state.loaded then leavePlayable() end
     local path = resolveModPath(name)
     if path then state.loaded = loadPlayable(path) end
@@ -375,7 +392,7 @@ end
 
 ---pre_draw: replays are watched here (before draw3d draws the props; in draw2d a swap showed one frame late)
 local function onPreDraw()
-    if state.loaded and not Runtime.mgeRunning() then
+    if state.loaded and state.loaded.dynamics and not Runtime.mgeRunning() then
         local ws = get_world_state()
         if ws.replay_mode > 0 then drawProps(ws) end
     end
@@ -384,7 +401,7 @@ end
 ---enter_frame, every physics frame drawn or not: replays watched here too (every take and release at its own frame),
 ---and far props' samples in fights and replays alike
 local function onEnterFrame()
-    if state.loaded and not Runtime.mgeRunning() then
+    if state.loaded and state.loaded.dynamics and not Runtime.mgeRunning() then
         local ws = get_world_state()
         if ws.replay_mode > 0 then drawProps(ws) end
         local dynamics = state.loaded.dynamics
@@ -427,7 +444,7 @@ local function onDraw3d()
         local t = Runtime.measure and os.clock()
         local ok, drawn = pcall(Drawer.draw, drawer, view, graphicsLevel(), Runtime.settings.maxDraws)
         if not ok then
-            if not state.drawError then -- once a session; it tries again every frame
+            if not state.drawError then -- once a mod; it tries again every frame
                 state.drawError = true
                 say("drawing failed: " .. tostring(drawn))
             end
@@ -526,6 +543,11 @@ end
 function Runtime.start(playerAtmo)
     remove_hooks(Runtime.HOOKS)
     Runtime.loadSettings()
+    if Runtime.settings.cacheBefore and state.cacheBefore == nil then -- the game closed while it was off
+        giveCacheBack(Runtime.settings.cacheBefore)
+        Runtime.settings.cacheBefore = nil
+        Runtime.saveSettings()
+    end
     state.playerAtmo = playerAtmo or defaultAtmo()
     wrapAtmoLoading()
 

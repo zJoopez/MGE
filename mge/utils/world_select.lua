@@ -105,12 +105,15 @@ function WorldSelect.measureProjectionNow()
             local rx2, ry2 = screenAt(anchor, right, -e)
             local ux1, uy1 = screenAt(anchor, up, e)
             local ux2, uy2 = screenAt(anchor, up, -e)
+            local m11, m21, m12, m22, det
             if rx1 and rx2 and ux1 and ux2 then
                 local k = depth / (2 * e) -- 1 / (sideways / depth) between the pair's points
-                local m11, m21 = (rx1 - rx2) * k, (ry1 - ry2) * k
-                local m12, m22 = (ux1 - ux2) * k, (uy1 - uy2) * k
-                local det = m11 * m22 - m12 * m21
-                if math.abs(det) < 1e-9 then return nil end
+                m11, m21 = (rx1 - rx2) * k, (ry1 - ry2) * k
+                m12, m22 = (ux1 - ux2) * k, (uy1 - uy2) * k
+                det = m11 * m22 - m12 * m21
+            end
+            -- a degenerate measure: the next share or depth may measure fine
+            if det and math.abs(det) >= 1e-9 then
                 -- the anchor sits halfway between each pair (same depth: right and up are across the view)
                 local cx = (rx1 + rx2 + ux1 + ux2) / 4
                 local cy = (ry1 + ry2 + uy1 + uy2) / 4

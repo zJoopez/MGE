@@ -8,7 +8,7 @@ local function withHistory(fn)
     local parsed = { env_obj = {}, atmo = {} }
     for i = 1, 4 do parsed.env_obj[i] = { id = i + 10, props = {} } end
     for i = 1, 3 do parsed.atmo[i] = { id = i, kind = "atmo", props = {} } end
-    MGE.ModData = { parsed = parsed }
+    MGE.ModData = { parsed = parsed, keyObjects = saved.ModData.keyObjects }
     local ok, err = pcall(function()
         dofile(MGE.scriptPath .. "utils/selection_history.lua")
         fn(MGE.SelectionHistory, parsed)
@@ -86,5 +86,28 @@ T.test("selection history: an unrecorded change becomes a step; layers apart; li
             selectOnly(parsed.env_obj, n % 2 + 1); SH.record()
         end
         T.eq(#SH.layers.objects.states, SH.limit, "capped")
+    end)
+end)
+
+T.test("selection history: steps follow objects through renumbering, undo copies and duplicates", function()
+    withHistory(function(SH, parsed)
+        local atmo = parsed.atmo
+        selectOnly(atmo, 3); SH.record()
+        selectOnly(atmo, 1); SH.record()
+        table.remove(atmo, 2) -- an unselected one deleted: the old #3 is now #2
+        for i, obj in ipairs(atmo) do obj.id = i end
+        SH.move("atmo", -1)
+        T.eq(selectedIndices(atmo), "2", "the same object, renumbered")
+
+        local copy = {}
+        for k, v in pairs(atmo[2]) do copy[k] = v end
+        atmo[2] = copy -- undo restores copies
+        atmo[3] = {}
+        for k, v in pairs(copy) do atmo[3][k] = v end -- a duplicate of it
+        atmo[3].selected = nil
+        SH.record()
+        selectOnly(atmo, 1); SH.record()
+        SH.move("atmo", -1)
+        T.eq(selectedIndices(atmo), "2", "the copy, not its duplicate")
     end)
 end)

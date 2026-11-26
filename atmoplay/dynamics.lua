@@ -35,6 +35,9 @@ local Flight = NS.Flight
 
 ---@class AtmoPlayDynamics
 local Dynamics = {
+    -- replaycache off while a mod with props is loaded: saved replays opened cached show the props frozen
+    -- (the after-fight replay is right either way); cached ones also put teleported dynamic objects 33-88 off
+    CACHE_OFF = true,
     DEFAULT_RADIUS = 2,
     REST_SPEED = 0.05,
     REST_SPIN = 0.1,
