@@ -32,6 +32,10 @@ local function selectedParts(kind)
     return out
 end
 
+-- Pos / Rot / Sides (Parts) and Pos (Joints) names, lit for the active gizmo tool
+local partLabels, highlightPartLabels = Rows.gizmoLabels()
+local jointLabels, highlightJointLabels = Rows.gizmoLabels()
+
 ---Pos / Rot / Sides / Shape rows
 ---@param holder UIElement
 local function buildParts(holder)
@@ -46,7 +50,8 @@ local function buildParts(holder)
         local v = BodyParts.placed(p.section, p.name) or { 0, 0, 0 }
         for k = 1, 3 do center[k] = center[k] + v[k] / #parts end
     end
-    inwuts.partPos = createInputRow("Pos", holder, function(_, i)
+    local _
+    inwuts.partPos, _, partLabels.move = createInputRow("Pos", holder, function(_, i)
         local typed = readInputs(inwuts.partPos, i)[i]
         if not typed or not any then return end
         local delta = typed - center[i]
@@ -61,10 +66,11 @@ local function buildParts(holder)
         "Center of the selected parts in the player's\nlayout (as the mod file). Joints between two\nselected parts move too.")
 
     -- Rot / Sides: the first part's line; a typed axis is set on all of them
+    ---@return UIElement? label the row's name
     local function setAxisRow(label, key, help, opts)
         local shown = first and BodyParts.vector(first.section, "body", first.name, key) or nil
         local name = key == "rot" and "partRot" or "partSides"
-        inwuts[name] = createInputRow(label, holder, function(_, i)
+        local inputs, _, labelButton = createInputRow(label, holder, function(_, i)
             local typed = readInputs(inwuts[name], i)[i]
             if not typed or not any or (key == "sides" and typed <= 0) then return end
             editSelected(function(section, player, names, mirrorX)
@@ -75,9 +81,14 @@ local function buildParts(holder)
                 end }, mirrorX)
             end)
         end, shown and hints(shown) or (key == "rot" and { "0", "0", "0" } or NOT_SET), help, nil, opts)
+        inwuts[name] = inputs
+        return labelButton
     end
-    setAxisRow("Rot", "rot", "Rotation in degrees (the first part's shown),\nset on all selected.", { angle = true })
-    setAxisRow("Sides", "sides", "Size (the first part's shown), set on all:\nbox X Y Z, sphere X radius,\npill X radius Y length.")
+    partLabels.rotate = setAxisRow("Rot", "rot", "Rotation in degrees (the first part's shown),\nset on all selected.",
+        { angle = true })
+    partLabels.scale = setAxisRow("Sides", "sides",
+        "Size (the first part's shown), set on all:\nbox X Y Z, sphere X radius,\npill X radius Y length.")
+    highlightPartLabels()
 
     -- Shape: lit when the selection shares one
     local shared = nil
@@ -153,7 +164,8 @@ local function buildJoints(holder)
         local v = BodyParts.jointPlaced(j.section, j.name) or { 0, 0, 0 }
         for k = 1, 3 do center[k] = center[k] + v[k] / #joints end
     end
-    inwuts.jointPartPos = createInputRow("Pos", holder, function(_, i)
+    local _
+    inwuts.jointPartPos, _, jointLabels.move = createInputRow("Pos", holder, function(_, i)
         local typed = readInputs(inwuts.jointPartPos, i)[i]
         if not typed or not any then return end
         local delta = typed - center[i]
@@ -210,6 +222,7 @@ local function buildJoints(holder)
         end)
     end, range and { hint(range[1]), hint(range[2]) } or { "-", "-" },
         "How far it bends: its two limits as the mod\nwrites them (classic elbow 2.3, 0.05).\nSet on all selected.")
+    highlightJointLabels()
 end
 
 ---@type EditorPanelModule
