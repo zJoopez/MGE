@@ -403,6 +403,35 @@ end
 -- BodyInfo.shape: sphere x radius, box sides, cylinder (pill) x radius y length; 1 is a box
 local BODY_SPHERE, BODY_CYLINDER = 0, 2
 
+---One body part's highlight: a translucent fill and an outline, scaled by f around where `at` puts it
+---@param player integer 0-based
+---@param id integer body part
+---@param c number[] color
+---@param f number? scale, default 1
+---@param at (fun(x: number, y: number, z: number): table)?
+---@param sides number[]? drawn instead of the live sides (a parts scale preview)
+local function drawBodyHighlight(player, id, c, f, at, sides)
+    f = f or 1
+    local b = get_body_info(player, id)
+    local p, rot = at and at(b.pos.x, b.pos.y, b.pos.z) or b.pos, b.rot
+    local s = sides and { x = sides[1], y = sides[2], z = sides[3] }
+        or { x = b.sides.x * f, y = b.sides.y * f, z = b.sides.z * f }
+    set_color(c[1], c[2], c[3], Highlight.fillAlpha)
+    if b.shape == BODY_SPHERE then
+        draw_sphere_m(p.x, p.y, p.z, s.x + 0.01, rot)
+        set_color(c[1], c[2], c[3], 1.0)
+        draw_sphere_m(p.x, p.y, p.z, -(s.x + 0.02), rot)
+    elseif b.shape == BODY_CYLINDER then
+        draw_capsule_m(p.x, p.y, p.z, s.y + 0.01, s.x + 0.01, rot)
+        set_color(c[1], c[2], c[3], 1.0)
+        draw_capsule_m(p.x, p.y, p.z, -(s.y + 0.02), -(s.x + 0.02), rot)
+    else
+        draw_box_m(p.x, p.y, p.z, s.x + 0.02, s.y + 0.02, s.z + 0.02, rot)
+        set_color(c[1], c[2], c[3], 1.0)
+        draw_box_m(p.x, p.y, p.z, -(s.x + 0.04), -(s.y + 0.04), -(s.z + 0.04), rot)
+    end
+end
+
 ---The object highlight on a player's body parts and joints. With scale (a scale drag), drawn scaled
 ---around the pivot in the preview color: bodies can't be resized live
 ---@param player integer 0-based
@@ -419,25 +448,7 @@ local function drawPlayerHighlight(player, scale)
         local q = scale.pivot
         return { x = q[1] + (x - q[1]) * f, y = q[2] + (y - q[2]) * f, z = q[3] + (z - q[3]) * f }
     end
-    for _, id in pairs(BODYPARTS) do
-        local b = get_body_info(player, id)
-        local p, rot = at(b.pos.x, b.pos.y, b.pos.z), b.rot
-        local s = { x = b.sides.x * f, y = b.sides.y * f, z = b.sides.z * f }
-        set_color(c[1], c[2], c[3], Highlight.fillAlpha)
-        if b.shape == BODY_SPHERE then
-            draw_sphere_m(p.x, p.y, p.z, s.x + 0.01, rot)
-            set_color(c[1], c[2], c[3], 1.0)
-            draw_sphere_m(p.x, p.y, p.z, -(s.x + 0.02), rot)
-        elseif b.shape == BODY_CYLINDER then
-            draw_capsule_m(p.x, p.y, p.z, s.y + 0.01, s.x + 0.01, rot)
-            set_color(c[1], c[2], c[3], 1.0)
-            draw_capsule_m(p.x, p.y, p.z, -(s.y + 0.02), -(s.x + 0.02), rot)
-        else
-            draw_box_m(p.x, p.y, p.z, s.x + 0.02, s.y + 0.02, s.z + 0.02, rot)
-            set_color(c[1], c[2], c[3], 1.0)
-            draw_box_m(p.x, p.y, p.z, -(s.x + 0.04), -(s.y + 0.04), -(s.z + 0.04), rot)
-        end
-    end
+    for _, id in pairs(BODYPARTS) do drawBodyHighlight(player, id, c, f, at) end
     set_color(c[1], c[2], c[3], Highlight.fillAlpha)
     for _, id in pairs(JOINTS) do
         local x, y, z = get_joint_pos(player, id)
@@ -534,6 +545,55 @@ add_hook("draw3d", MGE.hookname, function()
             local scale = Players and Players.scalePreview
             for _, player in ipairs(scale and scale.players or Main.selectedPlayerList()) do
                 if Players and Players.exists(player) then drawPlayerHighlight(player, scale) end
+            end
+            return
+        end
+        if Main.listTab == "parts" then
+            drawAtmo(false)
+            local Players, PartTarget = MGE.Players, MGE.PartTarget
+            local scale = PartTarget and PartTarget.scalePreview
+            if scale then -- a scale drag: the parts (and twins) at their new size
+                local SHAPES = { [BODY_SPHERE] = "sphere", [BODY_CYLINDER] = "cylinder" }
+                for _, e in ipairs(scale.entries) do
+                    if e.kind == "body" then
+                        local b = get_body_info(e.player, e.id)
+                        local sides = PartTarget.scaleSides(SHAPES[b.shape] or "box",
+                            { b.sides.x, b.sides.y, b.sides.z }, scale.factors)
+                        drawBodyHighlight(e.player, e.id, Highlight.previewColor, 1, nil, sides)
+                    end
+                end
+                return
+            end
+            -- joints in a move / rotate drag: where they'll be (bodies move live)
+            local moving = {}
+            for _, e in ipairs(PartTarget and PartTarget.preview or {}) do
+                if e.kind == "joint" and e.preview then
+                    moving[e.player .. ":" .. e.id] = true
+                    local c = Highlight.previewColor
+                    set_color(c[1], c[2], c[3], 0.6)
+                    draw_sphere(e.preview[1], e.preview[2], e.preview[3], (get_joint_radius(e.player, e.id) or 0.1) + 0.02)
+                end
+            end
+            local exists = {} -- per player once a frame: Players.exists reads the gamerules and a body
+            for _, part in ipairs(MGE.PartList and MGE.PartList.selected() or {}) do
+                if exists[part.player] == nil then
+                    exists[part.player] = Players ~= nil and Players.exists(part.player)
+                end
+                if exists[part.player] then
+                    if part.kind == "joint" then
+                        local id = JOINTS[part.name:upper()]
+                        local x, y, z
+                        if id then x, y, z = get_joint_pos(part.player, id) end
+                        if x and not moving[part.player .. ":" .. id] then
+                            local c = Highlight.color
+                            set_color(c[1], c[2], c[3], 0.6)
+                            draw_sphere(x, y, z, (get_joint_radius(part.player, id) or 0.1) + 0.02)
+                        end
+                    else
+                        local id = BODYPARTS[part.name:upper()]
+                        if id then drawBodyHighlight(part.player, id, Highlight.color) end
+                    end
+                end
             end
             return
         end

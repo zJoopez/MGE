@@ -26,6 +26,7 @@ local FILES = {
     "test_joints.lua",
     "test_selection_history.lua",
     "test_players.lua",
+    "test_body_parts.lua",
     "test_playable.lua",
     "test_atmoplay_format.lua",
     "test_atmoplay_colliders.lua",
@@ -101,7 +102,7 @@ ATMOPLAY_LOADING = nil
 MGE.AtmoPlay = ATMOPLAY
 
 local modules = { "utils/mat3.lua", "utils/file_handler.lua", "utils/mod_export.lua",
-    "utils/history.lua", "utils/atmo_layer.lua", "utils/atmo.lua", "utils/playable.lua" }
+    "utils/history.lua", "utils/atmo_layer.lua", "utils/atmo.lua", "utils/playable.lua", "utils/body_parts.lua" }
 for _, module in ipairs(dofile(MGE.scriptPath .. "mapconv/modules.lua")) do modules[#modules + 1] = module end
 for _, module in ipairs({ "ui/scroll_list.lua", "utils/shape_gen.lua", "utils/config.lua" }) do modules[#modules + 1] = module end
 for _, module in ipairs(modules) do

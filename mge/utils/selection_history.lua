@@ -1,14 +1,15 @@
 -- Selection back / forward (Ctrl + Shift + Z / Y): a misclick replaces a selection, and undo keeps the
--- current selection. Objects and atmo objects each keep their own steps, recorded on every selection change
--- (Main.onSelectionChanged) when they differ from the current step. Steps hold each object's `selKey`
--- (ModData.keyObjects), which survives renumbering (delete, reindex, To atmo) and undo's copies
+-- current selection. Objects, atmo objects and body parts each keep their own steps, recorded on every
+-- selection change (Main.onSelectionChanged) when they differ from the current step. Object steps hold each
+-- object's `selKey` (ModData.keyObjects), which survives renumbering (delete, reindex, To atmo) and undo's
+-- copies; part steps hold Main.selectedParts' keys ("<player>:<part>", ui/part_list.lua)
 
 local ModData = MGE.ModData
 
 ---@class SelectionHistory
 local SelectionHistory = {
     limit = 50,
-    ---@type table<string, { states: integer[][], index: integer }> by layer ("objects", "atmo")
+    ---@type table<string, { states: any[][], index: integer }> by layer ("objects", "atmo", "parts")
     layers = {},
 }
 
@@ -20,9 +21,14 @@ local function listOf(layer)
 end
 
 ---@param layer string
----@param layer string
----@return integer[] keys of the selected, in list order
+---@return any[] keys of the selected, in list order (parts: sorted)
 local function current(layer)
+    if layer == "parts" then
+        local keys = {}
+        for k in pairs(MGE.Main.selectedParts or {}) do keys[#keys + 1] = k end
+        table.sort(keys)
+        return keys
+    end
     ModData.keyObjects(listOf(layer))
     local keys = {}
     for _, obj in ipairs(listOf(layer)) do
@@ -57,10 +63,11 @@ local function recordLayer(layer)
     h.index = #h.states
 end
 
----Stores both layers' selections as new steps where they changed
+---Stores the layers' selections as new steps where they changed
 function SelectionHistory.record()
     recordLayer("objects")
     recordLayer("atmo")
+    if MGE.Main and MGE.Main.selectedParts then recordLayer("parts") end
 end
 
 ---Forgets every step (another mod: its ids aren't these)
@@ -70,17 +77,21 @@ end
 
 ---Selects a stored step's objects (ones gone since are skipped)
 ---@param layer string
----@param keys integer[]
+---@param keys any[]
 local function apply(layer, keys)
     local wanted = {}
     for _, key in ipairs(keys) do wanted[key] = true end
+    if layer == "parts" then -- players gone since: PartList.selected leaves them out
+        MGE.Main.selectedParts = wanted
+        return
+    end
     for _, obj in ipairs(listOf(layer)) do
         obj.selected = wanted[obj.selKey] or nil
     end
 end
 
 ---Moves one step back (-1) or forward (1) on a layer
----@param layer string "objects" or "atmo"
+---@param layer string "objects", "atmo" or "parts"
 ---@param step integer
 ---@return boolean moved, integer? count selected after the move
 function SelectionHistory.move(layer, step)
@@ -97,9 +108,10 @@ end
 ---@param step integer -1 back, 1 forward
 function SelectionHistory.step(step)
     local Main = MGE.Main
-    local layer = Main.listTab == "atmo" and "atmo" or Main.listTab == "objects" and "objects" or nil
+    local tab = Main.listTab
+    local layer = (tab == "atmo" or tab == "objects" or tab == "parts") and tab or nil
     if not layer then
-        MGE.say("selection back / forward: on the Objects and Atmo lists")
+        MGE.say("selection back / forward: on the Objects, Atmo and Parts lists")
         return
     end
     local moved, count = SelectionHistory.move(layer, step)
@@ -108,7 +120,7 @@ function SelectionHistory.step(step)
         return
     end
     Main.updateWindow() -- records nothing: the selection is the current step
-    if count > 0 then Main.selectionMade() end
+    if count > 0 and layer ~= "parts" then Main.selectionMade() end -- Generate back to Core, camera follow
     MGE.say(string.format("selection %s: %d selected", step < 0 and "back" or "forward", count))
 end
 

@@ -5,7 +5,9 @@ require("toriui.uielement")
 ---@field page integer
 ---@field pageSize integer
 ---@field activeTabs table<string, string> each list's active editor tab (panel id), by list
----@field listTab "objects"|"atmo"|"joints"|"players"|"misc" the shown list (misc: World)
+---@field listTab "objects"|"atmo"|"joints"|"players"|"parts"|"misc" the shown list (misc: World)
+---@field partsPlayer integer the Parts list's shown player
+---@field selectedParts table<string, boolean> selected body parts, "<player>:<part>" (ui/part_list.lua)
 ---@field selectedPlayer integer last picked player, shown by the panel even when none is selected
 ---@field selectedPlayers table<integer, boolean>
 ---@field selectPlayer fun(id: integer, additive: boolean?)
@@ -13,7 +15,7 @@ require("toriui.uielement")
 ---@field jointSlot integer current slot (last clicked, always selected): the Link tab edits it
 local Main = { page = 1, pageSize = 66, listTab = "objects", selectedPlayer = 0,
     selectedPlayers = { [0] = true }, selectedJoints = { [1] = true }, jointSlot = 1,
-    activeTabs = { objects = "core", atmo = "core", players = "player", joints = "jointLink", misc = "misc" } }
+    activeTabs = { objects = "core", atmo = "core", players = "player", parts = "parts", joints = "jointLink", misc = "misc" } }
 MGE.Main = Main -- before the UI modules load, so they can alias it
 
 local ModData = MGE.ModData
@@ -202,6 +204,7 @@ local listTabNames = {
     { id = "atmo", label = "Atmo" },
     { id = "joints", label = "Joints" },
     { id = "players", label = "Players" },
+    { id = "parts", label = "Parts" },
     { id = "misc", label = "World" },
 }
 local listTabItems = {}
@@ -271,6 +274,8 @@ local TAB_SETS = {
     objects = OBJECT_TABS,
     atmo = OBJECT_TABS, -- the same panels, on atmo objects' lines
     players = { { id = "player", label = "Core" } },
+    parts = { { id = "parts", label = "Core" }, { id = "partsAdvanced", label = "Advanced" },
+        { id = "partsJoints", label = "Joints" } },
     misc = { { id = "misc", label = "Core" } },
     joints = { { id = "jointLink", label = "Link" }, { id = "joint", label = "Properties" } },
 }
@@ -432,6 +437,7 @@ dofile(MGE.scriptPath .. "ui/assets.lua")
 local obj_selector = dofile(MGE.scriptPath .. "ui/obj_selector.lua")
 local joint_list = dofile(MGE.scriptPath .. "ui/joint_list.lua")
 local player_list = dofile(MGE.scriptPath .. "ui/player_list.lua")
+local part_list = dofile(MGE.scriptPath .. "ui/part_list.lua")
 local editor = dofile(MGE.scriptPath .. "ui/editor.lua")
 
 ---Shows the shown list's tab row and active panel
@@ -635,7 +641,7 @@ function Main.toggleSelectAllJoints()
 end
 
 ---Switches the shown list (the Atmo list makes the mod's objects see-through)
----@param id "objects"|"atmo"|"joints"|"players"
+---@param id "objects"|"atmo"|"joints"|"players"|"parts"|"misc"
 function Main.setListTab(id)
     local changed = Main.listTab ~= id
     Main.listTab = id
@@ -647,6 +653,8 @@ function Main.setListTab(id)
     if changed then
         if id == "players" then
             MGE.Camera.followPlayer(Main.selectedPlayerList())
+        elseif id == "parts" then
+            MGE.Camera.followPlayer({ Main.partsPlayer })
         elseif id == "joints" then
             followJoints()
         else
@@ -682,6 +690,8 @@ Main.refreshCounters = setDynamicStrings
 local function createObjSelector()
     if Main.listTab == "players" then
         player_list.create(obj_selector_container)
+    elseif Main.listTab == "parts" then
+        part_list.create(obj_selector_container)
     elseif Main.listTab == "joints" then
         joint_list.create(obj_selector_container)
     elseif Main.listTab == "atmo" then
@@ -745,6 +755,7 @@ end
 function Main.resetWindow()
     Main.page = 1
     Main.selectedJoints, Main.jointSlot = { [1] = true }, 1 -- another mod's joints
+    part_list.reset()
     MGE.Joints.resetDraft()
     Main.updateWindow()
 end

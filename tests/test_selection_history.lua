@@ -111,3 +111,31 @@ T.test("selection history: steps follow objects through renumbering, undo copies
         T.eq(selectedIndices(atmo), "2", "the copy, not its duplicate")
     end)
 end)
+
+T.test("selection history: the Parts list's steps (Main.selectedParts keys)", function()
+    withHistory(function(SH)
+        local saved = MGE.Main
+        local ok, err = pcall(function()
+            local Main = { listTab = "parts", selectedParts = {}, updated = 0 }
+            function Main.updateWindow() Main.updated = Main.updated + 1 end
+            function Main.selectionMade() error("parts don't move the camera through selectionMade") end
+            MGE.Main = Main
+            SH.record()
+            Main.selectedParts = { ["0:r_hand"] = true, ["0:j:r_wrist"] = true }
+            SH.record()
+            Main.selectedParts = { ["1:head"] = true } -- the misclick
+            SH.record()
+            SH.step(-1)
+            local keys = {}
+            for k in pairs(Main.selectedParts) do keys[#keys + 1] = k end
+            table.sort(keys)
+            T.eq(table.concat(keys, " "), "0:j:r_wrist 0:r_hand", "the hand and wrist back")
+            T.eq(Main.updated, 1, "window rebuilt")
+            SH.step(1)
+            T.ok(Main.selectedParts["1:head"] and not Main.selectedParts["0:r_hand"], "forward again")
+            T.eq(#SH.layers.objects.states, 1, "objects' steps apart (only the empty start)")
+        end)
+        MGE.Main = saved
+        if not ok then error(err, 0) end
+    end)
+end)

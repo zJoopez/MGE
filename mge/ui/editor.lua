@@ -37,6 +37,7 @@ local MODULES = {
     dofile(MGE.scriptPath .. "ui/editor_thrust.lua"),
     dofile(MGE.scriptPath .. "ui/editor_generate.lua"),
     dofile(MGE.scriptPath .. "ui/editor_player.lua"),
+    dofile(MGE.scriptPath .. "ui/editor_parts.lua"),
     dofile(MGE.scriptPath .. "ui/editor_link.lua"),
     dofile(MGE.scriptPath .. "ui/editor_joint.lua"),
     dofile(MGE.scriptPath .. "ui/editor_atmo.lua"),
@@ -48,7 +49,7 @@ local ROW_H = MGE.Widgets.ROW_H
 local PANEL_H = MGE.Widgets.PANEL_ROWS * ROW_H
 ---@type table<string, EditorPanel> by panel id (TAB_SETS in ui/main.lua)
 local PANELS = {}
-for _, id in ipairs({ "core", "advanced", "thrust", "generate", "player", "jointLink", "joint", "misc" }) do
+for _, id in ipairs({ "core", "advanced", "thrust", "generate", "player", "parts", "partsAdvanced", "partsJoints", "jointLink", "joint", "misc" }) do
     PANELS[id] = { height = PANEL_H }
 end
 

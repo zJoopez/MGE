@@ -154,6 +154,7 @@ local function gizmoTarget()
     if MGE.overlayOpen and MGE.overlayOpen() then return nil end
     if Gizmo.targetOverride then return Gizmo.targetOverride(Gizmo.mode) end
     if Main.listTab == "misc" then return nil end
+    if Main.listTab == "parts" then return MGE.PartTarget and MGE.PartTarget.get() end
     if Main.listTab == "joints" then
         if Gizmo.mode ~= "move" then return nil end
         return MGE.Joints.target(Main.selectedJointList())

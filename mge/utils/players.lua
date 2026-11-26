@@ -385,69 +385,9 @@ end
 -- Scaling rewrites the `player N` section's part positions, sides and joint radii around the model's
 -- center. Density and strength stay (a bigger player is heavier)
 
----Parts of a player section: ordered entries { kind, name, header, props = { { key, value } } },
----lines before the first part kept as they are
----@param lines string[]
----@return { preamble: string[], parts: table[] }
-local function parseSection(lines)
-    local out, current = { preamble = {}, parts = {} }, nil
-    for _, line in ipairs(lines) do
-        local kind, name = line:match("^%s*(%a+)%s+(%S+)%s*$")
-        if kind == "body" or kind == "joint" then
-            current = { kind = kind, name = name:lower(), header = line, props = {} }
-            table.insert(out.parts, current)
-        elseif current and line:match("%S") then
-            local key, value = line:match("^%s*(%S+)%s*(.-)%s*$")
-            table.insert(current.props, { key = key, value = value, raw = line })
-        elseif not current then
-            table.insert(out.preamble, line)
-        end
-    end
-    return out
-end
-
----@param part table parseSection entry
----@param key string
----@return string?
-local function getProp(part, key)
-    for _, p in ipairs(part.props) do if p.key == key then return p.value end end
-    return nil
-end
-
----@param part table
----@param key string
----@param value string
-local function setProp(part, key, value)
-    for _, p in ipairs(part.props) do
-        if p.key == key then
-            p.value, p.raw = value, nil
-            return
-        end
-    end
-    table.insert(part.props, { key = key, value = value })
-end
-
----@param section { preamble: string[], parts: table[] }
----@return string[]
-local function sectionLines(section)
-    local lines = {}
-    for _, l in ipairs(section.preamble) do table.insert(lines, l) end
-    for _, part in ipairs(section.parts) do
-        table.insert(lines, part.header or ("   " .. part.kind .. " " .. part.name))
-        for _, p in ipairs(part.props) do
-            table.insert(lines, p.raw or ("      " .. p.key .. " " .. p.value))
-        end
-    end
-    return lines
-end
-
----@param value string?
----@return number[]?
-local function readVec(value)
-    local x, y, z = tostring(value or ""):match("(%S+)%s+(%S+)%s+(%S+)")
-    x, y, z = tonumber(x), tonumber(y), tonumber(z)
-    return x and y and z and { x, y, z } or nil
-end
+local BodyParts = MGE.BodyParts
+local parseSection, getProp, setProp = BodyParts.parseSection, BodyParts.getProp, BodyParts.setProp
+local sectionLines, readVec = BodyParts.sectionLines, BodyParts.readVec
 
 ---Rewrites a player's section scaled around its model center. Missing pos / sides / radius lines come
 ---from the live body; a player on shared parts gets its own section
@@ -560,8 +500,7 @@ end
 
 ---A player's parsed section: its own lines, else the shared ones
 local function playerSection(player)
-    local ModData, FH = MGE.ModData, MGE.FileHandler
-    return parseSection(FH.getPlayerLines(ModData.parsed, player) or FH.getSharedPlayerLines(ModData.parsed) or {})
+    return (BodyParts.section(MGE.ModData.parsed, player))
 end
 
 ---Average of a part value over a player's parts (defaults for missing lines)

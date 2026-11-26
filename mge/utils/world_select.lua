@@ -365,16 +365,24 @@ end
 -- BodyInfo.shape: sphere x radius, box full sides, cylinder (pill) x radius y length along z
 local BODY_SPHERE, BODY_CYLINDER = 0, 2
 
+---A player's body part as a ray-test shape, where it stands now
+---@param player integer 0-based
+---@param id integer body part
+---@return WorldSelectShape
+local function bodyShape(player, id)
+    local b = get_body_info(player, id)
+    local s, r = b.sides, b.rot
+    local kind = b.shape == BODY_SPHERE and "sphere" or b.shape == BODY_CYLINDER and "pill" or "box"
+    local axes = { { r.r0, r.r4, r.r8 }, { r.r1, r.r5, r.r9 }, { r.r2, r.r6, r.r10 } } -- columns: local axes
+    return rayShape(kind, { b.pos.x, b.pos.y, b.pos.z }, axes, s.x, s.y, s.z)
+end
+
 ---Distance along the ray to a player's body part, nil when missed
 ---@param player integer 0-based
 ---@param id integer body part
 ---@return number?
 local function hitBody(origin, dir, player, id)
-    local b = get_body_info(player, id)
-    local s, r = b.sides, b.rot
-    local kind = b.shape == BODY_SPHERE and "sphere" or b.shape == BODY_CYLINDER and "pill" or "box"
-    local axes = { { r.r0, r.r4, r.r8 }, { r.r1, r.r5, r.r9 }, { r.r2, r.r6, r.r10 } } -- columns: local axes
-    return rayShape(kind, { b.pos.x, b.pos.y, b.pos.z }, axes, s.x, s.y, s.z).hit(origin, dir)
+    return bodyShape(player, id).hit(origin, dir)
 end
 
 ---Player whose body parts or joints are under the screen position, nearest along the ray. Call from draw3d
@@ -400,6 +408,32 @@ function WorldSelect.pickPlayer(x, y)
         end
     end
     return best, best and bestT
+end
+
+---Body part or joint under the screen position, nearest along the ray. Call from draw3d
+---@param x number
+---@param y number
+---@return integer? player 0-based
+---@return string? name lower case
+---@return "body"|"joint"|nil kind
+function WorldSelect.pickPart(x, y)
+    local origin, dir = WorldSelect.cameraRay(x, y)
+    if not origin or not dir or not MGE.Players then return nil end
+    local bestPlayer, bestName, bestKind, bestT = nil, nil, nil, math.huge
+    for player = 0, MGE.Players.count() - 1 do
+        if MGE.Players.exists(player) then
+            for name, id in pairs(BODYPARTS) do
+                local t = hitBody(origin, dir, player, id)
+                if t and t < bestT then bestPlayer, bestName, bestKind, bestT = player, name:lower(), "body", t end
+            end
+            for name, id in pairs(JOINTS) do
+                local jx, jy, jz = get_joint_pos(player, id)
+                local t = jx and hitSphere(origin, dir, { jx, jy, jz }, get_joint_radius(player, id) or 0.1)
+                if t and t < bestT then bestPlayer, bestName, bestKind, bestT = player, name:lower(), "joint", t end
+            end
+        end
+    end
+    return bestPlayer, bestName, bestKind
 end
 
 ---What a world click hits: a joint anchor first (anchors sit on object faces, so the ray would reach
@@ -580,6 +614,77 @@ function WorldSelect.pickPlayersBox(x1, y1, x2, y2)
                     break
                 end
             end
+        end
+    end
+    return list
+end
+
+---Body parts and joints in a screen box. Shift + drag: the ones its rays reach first (a ray grid plus one
+---ray per center inside, each taking the nearest part); through (Ctrl too): every one whose center is
+---inside. Only the players' parts count: a few dozen shapes, no binning needed. Call from draw3d
+---@param through boolean?
+---@return SelectedPart[]
+function WorldSelect.pickPartsBox(x1, y1, x2, y2, through)
+    local p = WorldSelect.measureProjection()
+    if not p or not MGE.Players then return {} end
+    local box = boxOf(x1, y1, x2, y2)
+    local shapes = {}
+    for player = 0, MGE.Players.count() - 1 do
+        if MGE.Players.exists(player) then
+            for name, id in pairs(BODYPARTS) do
+                local sh = bodyShape(player, id)
+                sh.part = { player = player, name = name:lower(), kind = "body" }
+                shapes[#shapes + 1] = sh
+            end
+            for name, id in pairs(JOINTS) do
+                local jx, jy, jz = get_joint_pos(player, id)
+                if jx then
+                    local r = get_joint_radius(player, id) or 0.1
+                    local sh = rayShape("sphere", { jx, jy, jz }, nil, r, r, r)
+                    sh.part = { player = player, name = name:lower(), kind = "joint" }
+                    shapes[#shapes + 1] = sh
+                end
+            end
+        end
+    end
+    local taken, list = {}, {}
+    local function take(part)
+        if taken[part] then return end
+        taken[part] = true
+        list[#list + 1] = part
+    end
+    if through then
+        for _, s in ipairs(shapes) do
+            if projectsInto(p, s.center, box) then take(s.part) end
+        end
+        return list
+    end
+    local near, points = {}, {}
+    for _, s in ipairs(shapes) do
+        local l, t, r, b = screenExtent(p, s.center, s.radius)
+        if l and not (r < box.left or l > box.right or b < box.top or t > box.bottom) then
+            near[#near + 1] = s
+            local inside, sx, sy = projectsInto(p, s.center, box)
+            if inside then points[#points + 1] = { sx, sy } end
+        end
+    end
+    local w, h = box.right - box.left, box.bottom - box.top
+    local cols = math.max(1, math.min(WorldSelect.boxGridMax, math.ceil(w / WorldSelect.boxGridStep)))
+    local rows = math.max(1, math.min(WorldSelect.boxGridMax, math.ceil(h / WorldSelect.boxGridStep)))
+    for i = 0, cols do
+        for j = 0, rows do points[#points + 1] = { box.left + w * i / cols, box.top + h * j / rows } end
+    end
+    for _, pt in ipairs(points) do
+        local origin, dir = WorldSelect.rayFrom(p, pt[1], pt[2])
+        if dir then
+            local best, bestT = nil, math.huge
+            for _, s in ipairs(near) do
+                if nearSphere(origin, dir, s.center, s.radius) then
+                    local t = s.hit(origin, dir)
+                    if t and t < bestT then best, bestT = s, t end
+                end
+            end
+            if best then take(best.part) end
         end
     end
     return list
@@ -784,6 +889,10 @@ local function boxSelect(b)
         Main.selectedPlayer = players[#players]
         Main.updateWindow()
         MGE.Camera.followPlayer(Main.selectedPlayerList())
+    elseif Main.listTab == "parts" then
+        local parts = WorldSelect.pickPartsBox(b.x1, b.y1, b.x2, b.y2, b.through)
+        if not parts[1] then return end
+        MGE.PartList.add(parts)
     elseif Main.listTab == "joints" and not linkPick() then -- with Pick from world, clicks pick objects
         local last
         for _, joint in ipairs(WorldSelect.pickJointsBox(b.x1, b.y1, b.x2, b.y2)) do
@@ -852,6 +961,15 @@ add_hook("draw3d", HOOK_SET, function()
             MGE.say("no object there, pick cancelled")
         end
         if picking.ended then picking.ended() end
+        return
+    end
+    if MGE.Main.listTab == "parts" then -- body parts only; a miss leaves the selection
+        local okPart, player, name, kind = pcall(WorldSelect.pickPart, click.x, click.y)
+        if not okPart then
+            MGE.say("world select error: " .. tostring(player))
+        elseif player and name then
+            MGE.PartList.select(player, name, click.additive, kind)
+        end
         return
     end
     local ok, kind, hit = pcall(WorldSelect.pickAny, click.x, click.y)

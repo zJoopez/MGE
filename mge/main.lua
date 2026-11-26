@@ -41,6 +41,8 @@
 ---@field Playable Playable playable atmo mods, utils/playable.lua
 ---@field AtmoPlay table MGE's own copy of Atmo Play's modules (../atmoplay/)
 ---@field Players Players start positions (engageplayerpos), utils/players.lua
+---@field BodyParts BodyParts player sections' body / joint blocks, utils/body_parts.lua
+---@field PartTarget PartTarget the Parts list's gizmo target, utils/part_target.lua
 ---@field GizmoMath GizmoMath utils/gizmo_math.lua
 ---@field Highlight table utils/highlight.lua
 ---@field EditorRows EditorRows ui/editor_rows.lua
@@ -151,7 +153,9 @@ loadModule("utils/world_select.lua")
 loadModule("utils/camera.lua")
 loadModule("utils/transforms.lua")
 loadModule("utils/shape_gen.lua")
-loadModule("utils/players.lua") -- after highlight and history
+loadModule("utils/body_parts.lua")
+loadModule("utils/players.lua") -- after highlight, history and body_parts
+loadModule("utils/part_target.lua")
 loadModule("utils/gizmo_math.lua")
 loadModule("utils/gizmo.lua") -- after world_select, highlight and transforms
 MGE.Config.apply() -- saved settings over the modules' defaults
@@ -580,6 +584,7 @@ add_hook("match_begin", MGE.hookname, function()
     -- the old baseline so the change gets saved
     if switchedMod or MGE.reloadPending then MGE.snapshotGamerules() end
 
+    MGE.PartTarget.reset() -- the bodies stand anew
     if MGE.reloadPending then
         -- our own apply: same objects, restore selection and list page
         for _, obj in ipairs(ModData.parsed.env_obj) do
@@ -616,7 +621,7 @@ local KEY_DELETE = 127 -- SDLK_DELETE
 ---@param action "new"|"duplicate"|"delete"
 local function listAction(action)
     local tab, actions = MGE.Main.listTab, nil
-    if tab == "misc" then return end
+    if tab == "misc" or tab == "parts" then return end -- parts: nothing to add or delete
     if tab == "players" then
         local L = MGE.PlayerList
         actions = { new = L.newPlayer, duplicate = L.duplicate, delete = L.deleteSelected }
@@ -731,6 +736,8 @@ local function onKeyDown(key)
         local tab = MGE.Main.listTab
         if tab == "players" then
             MGE.Main.toggleSelectAllPlayers()
+        elseif tab == "parts" then
+            MGE.PartList.toggleSelectAll()
         elseif tab == "joints" then
             MGE.Main.toggleSelectAllJoints()
         elseif tab == "atmo" then
