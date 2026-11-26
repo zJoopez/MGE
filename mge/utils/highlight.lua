@@ -538,7 +538,7 @@ add_hook("draw3d", MGE.hookname, function()
             if not MGE.isPlacing() then drawAtmo(true, true) end
             return
         end
-        if Main.listTab == "players" then
+        if Main.listTab == "players" and not Main.partsShown() then
             drawAtmo(false) -- faint ghosts, apart from solid objects
             -- selected players, or the scaled ones during a scale drag
             local Players = MGE.Players
@@ -548,7 +548,7 @@ add_hook("draw3d", MGE.hookname, function()
             end
             return
         end
-        if Main.listTab == "parts" then
+        if Main.partsShown() then
             drawAtmo(false)
             local Players, PartTarget = MGE.Players, MGE.PartTarget
             local scale = PartTarget and PartTarget.scalePreview

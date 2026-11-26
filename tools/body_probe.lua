@@ -192,6 +192,45 @@ local function dumpPlayer(p, file)
             tostring(line.radius), vec(live), get_joint_radius(p, j.id) or -1,
             expected and string.format(" miss %.4f", len(sub(live, expected))) or "")
     end
+    -- rotated bodies: the point the game turned each about. Frame from the joints (they stay at their file pos);
+    -- a body turned by M about P lands at P + M (c - P): its shift is (M - I)(c - P)
+    local jp, ji = {}, {}
+    for _, j in ipairs(joints) do
+        local line = file and file.joint[j.name] or {}
+        local f = readVec(line.pos)
+        if f then
+            jp[#jp + 1] = { name = j.name, file = f, live = { get_joint_pos(p, j.id) } }
+            ji[j.name] = #jp
+        end
+    end
+    local RJ, TJ, jworst
+    if ji.neck and ji.r_wrist and ji.l_ankle then
+        RJ, TJ, jworst = fit(jp, ji.neck, ji.r_wrist, ji.l_ankle)
+        put("FIT joints live = R*file + t: R=%s t=%s worst miss %.4f", mat(RJ), vec(TJ), jworst)
+    end
+    for _, b in ipairs(bodies) do
+        local line = file and file.body[b.name] or {}
+        local r, c = readVec(line.rot), readVec(line.pos)
+        if RJ and r and c and (r[1] ~= 0 or r[2] ~= 0 or r[3] ~= 0) then
+            local info = get_body_info(p, b.id)
+            local L = { info.pos.x, info.pos.y, info.pos.z }
+            local s = sub(apply(transpose(RJ), sub(L, TJ)), c) -- shift in the player frame
+            local M = mul(rotX(-math.rad(r[1])), mul(rotY(-math.rad(r[2])), rotZ(-math.rad(r[3]))))
+            local sides = readVec(line.sides) or { 0, 0, 0 }
+            local shape = tostring(line.shape or "")
+            local hz = shape:match("^sphere") and sides[1] or (shape:match("^cyl") or shape:match("^cap")) and sides[2] / 2
+                or sides[3] / 2
+            local cands = { { "center", c }, { "top", { c[1], c[2], c[3] + hz } }, { "bottom", { c[1], c[2], c[3] - hz } } }
+            for _, j in ipairs(jp) do cands[#cands + 1] = { "joint " .. j.name, j.file } end
+            for _, cand in ipairs(cands) do
+                local d = sub(c, cand[2])
+                cand.miss = len(sub(s, sub(apply(M, d), d)))
+            end
+            table.sort(cands, function(a, b2) return a.miss < b2.miss end)
+            put("PIVOT %-9s rot=%s shift=%s best: %s %.4f, %s %.4f, %s %.4f", b.name, line.rot, vec(s), cands[1][1],
+                cands[1].miss, cands[2][1], cands[2].miss, cands[3][1], cands[3].miss)
+        end
+    end
     put("match frame %d", ws.match_frame)
 end
 

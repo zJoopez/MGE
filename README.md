@@ -17,15 +17,14 @@ starting a second one.
 
 ## What it does
 
-The window has six lists, each with its own tabs.
+The window has five lists, each with its own tabs.
 
 | List | Tabs |
 |---|---|
 | **Objects** | **Core**: position, rotation, scale, color, mass, shape, visibility. **Advanced**: friction, bounce, hardness, flags, model, reindexing ids, To atmo. **Thrust**: frames, direction, axes. **Generate**: rows, rings and grids of new objects, each piece turned with Rot or the Rotate gizmo. |
 | **Atmo** | **Core**: as on Objects, with To objects. **Advanced**: friction, bounce, hardness, flags (as on Objects, for Atmo Play), depth, graphics levels, kept lines. **Generate**: as on Objects. |
 | **Joints** | **Link**: the two objects a joint connects, picked in the list or, with Pick from world on, in the world. **Properties**: position, axis, range, strength, velocity, type. |
-| **Players** | Start position, rotation, scale and body parts of each player. |
-| **Parts** | **Core**: position, rotation, sides and shape of the selected body parts. **Advanced**: density, friction, bounce, hardness, flag. **Joints**: position, radius, strength, velocity, axis, range of the selected joints. |
+| **Players** | **Player**: start position, rotation, scale and part averages of the selected players, model reset. **Parts**: position, rotation, sides and shape of the selected body parts. **Advanced**: density, friction, bounce, hardness, flag. **Joints**: position, radius, strength, velocity, axis, range of the selected joints. |
 | **World** | The mod's name (where Save writes), its message, the atmo's shader, map import, Export (Atmo, Mod), Atmo: Playable / Default (a playable atmo mod, or the atmo only drawn), Reset all (loads the classic mod). |
 
 - Number fields apply what you type when you leave them (click elsewhere) or press Enter, then show the
@@ -45,12 +44,19 @@ The window has six lists, each with its own tabs.
 - **Save** writes the mod to `data/mod/modmaker/<name>.tbm`, the name on **World → Core → Name** (the loaded mod's, `mge` for the classic mod; click it to change it). Saving over a file that isn't this mod's asks first. While you edit, MGE reloads a working copy
   (`modmaker/mge-work.tbm`) so changes show in the game straight away.
 
-### Parts: body parts like objects (experimental)
+### Players and their body parts (parts: experimental)
 
-The **Parts** list edits single body parts and joints of the players' models.
+The **Players** list shows a map of the default tori seen from behind (its left on the left; joints only on
+the Joints tab), whatever shape the mod gives the body, and the player buttons P0, P1... Its tab decides what
+everything acts on:
 
-- **Selecting:** the list shows a map of the default tori seen from behind (its left on the left), joints drawn
-  on top, whatever shape the mod gives the body: click a part or joint, Shift + click adds. P0, P1... pick whose parts show; a
+- **Player tab:** whole players. P0, P1... select them (Shift adds), as do world clicks and Shift + drag; the
+  list's buttons add, duplicate, import, export and delete players. A click on the map opens the part's tab.
+- **Parts, Advanced and Joints tabs:** single body parts and joints of the players' models.
+
+On the part tabs:
+
+- **Selecting:** click a part or joint on the map, Shift + click adds. P0, P1... pick whose parts the map shows; a
   selection can span players. Clicks in the world pick parts and joints too, Shift + drag adds the ones in the
   box (Ctrl + Shift: hidden ones too). Ctrl + A selects all of the shown player's parts (on the Joints tab: its
   joints). Ctrl + Shift + Z / Y bring back an earlier selection, as on Objects.
@@ -145,9 +151,9 @@ each player, in fights, and the game records those moves, so replays need nothin
 | F1 | Hide / show the window |
 | Alt + Q / W / E | Move / Rotate / Scale tool (press again to turn it off) |
 | Shift + Z / Shift + Y | Undo / redo (50 steps; the selection stays as it is) |
-| Ctrl + Shift + Z / Y | Selection back / forward (Objects, Atmo and Parts lists, 50 steps): brings back a selection a misclick replaced |
+| Ctrl + Shift + Z / Y | Selection back / forward (Objects, Atmo, and the Players list's part tabs, 50 steps): brings back a selection a misclick replaced |
 | Ctrl + S | Save |
-| Ctrl + A | Select / deselect all (objects, atmo objects, players, the shown player's parts or joints, whichever list is shown) |
+| Ctrl + A | Select / deselect all (objects, atmo objects, players, or on the part tabs the shown player's parts or joints) |
 | Ctrl + N / Ctrl + D | New / duplicate (an object, atmo object, player or joint, on the shown list) |
 | Delete | Delete the selection on the shown list (asks first) |
 | Shift + drag | Box select: adds what the box shows (the front ones) |

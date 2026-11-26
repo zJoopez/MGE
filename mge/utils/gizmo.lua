@@ -154,7 +154,7 @@ local function gizmoTarget()
     if MGE.overlayOpen and MGE.overlayOpen() then return nil end
     if Gizmo.targetOverride then return Gizmo.targetOverride(Gizmo.mode) end
     if Main.listTab == "misc" then return nil end
-    if Main.listTab == "parts" then return MGE.PartTarget and MGE.PartTarget.get() end
+    if Main.partsShown() then return MGE.PartTarget and MGE.PartTarget.get() end
     if Main.listTab == "joints" then
         if Gizmo.mode ~= "move" then return nil end
         return MGE.Joints.target(Main.selectedJointList())
@@ -525,6 +525,23 @@ add_hook("mouse_move", HOOK_SET, function(x, y)
     mouse = { x = x, y = y }
 end)
 
+---The projection shifted so `point` lands where get_screen_pos puts it. The drawn view eases toward the camera,
+---and a close camera's projection is measured at depth 10 (WorldSelect), so while orbiting it missed the gizmo
+---by the parallax. draw3d only
+---@param p CameraProjection
+---@param point number[]
+---@return CameraProjection
+local function calibratedAt(p, point)
+    local sx, sy, sz = get_screen_pos(point[1], point[2], point[3])
+    if not sx or sz ~= 0 then return p end -- off screen: as measured
+    local mx, my = WorldSelect.project(p, point)
+    if not mx then return p end
+    local c = {}
+    for k, v in pairs(p) do c[k] = v end -- the measured one is shared (highlight, clicks)
+    c.cx, c.cy = p.cx + sx - mx, p.cy + sy - my
+    return c
+end
+
 add_hook("draw3d", HOOK_SET, function()
     local ok, err = pcall(function()
         shapes = nil
@@ -533,8 +550,12 @@ add_hook("draw3d", HOOK_SET, function()
             hovered = nil
             return
         end
-        if drag and mouse then updateDrag(mouse.x, mouse.y) end
         local target = drag and drag.target or gizmoTarget()
+        if target then
+            local pivot = target.pivot()
+            projection = calibratedAt(projection, (drag and drag.offset) and add(pivot, drag.offset) or pivot)
+        end
+        if drag and mouse then updateDrag(mouse.x, mouse.y) end
         if not target then
             hovered = nil
             return

@@ -109,9 +109,9 @@ end
 function SelectionHistory.step(step)
     local Main = MGE.Main
     local tab = Main.listTab
-    local layer = (tab == "atmo" or tab == "objects" or tab == "parts") and tab or nil
+    local layer = (tab == "atmo" or tab == "objects") and tab or (Main.partsShown() and "parts") or nil
     if not layer then
-        MGE.say("selection back / forward: on the Objects, Atmo and Parts lists")
+        MGE.say("selection back / forward: on Objects, Atmo and the Players list's part tabs")
         return
     end
     local moved, count = SelectionHistory.move(layer, step)
@@ -120,7 +120,9 @@ function SelectionHistory.step(step)
         return
     end
     Main.updateWindow() -- records nothing: the selection is the current step
-    if count > 0 and layer ~= "parts" then Main.selectionMade() end -- Generate back to Core, camera follow
+    if count > 0 then
+        if layer == "parts" then MGE.PartList.follow() else Main.selectionMade() end -- camera follow
+    end
     MGE.say(string.format("selection %s: %d selected", step < 0 and "back" or "forward", count))
 end
 

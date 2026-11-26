@@ -43,7 +43,7 @@ local function buildParts(holder)
     -- Pos: the selection's center (player frame); a typed axis moves them all by the difference
     local center = { 0, 0, 0 }
     for _, p in ipairs(parts) do
-        local v = BodyParts.vector(p.section, "body", p.name, "pos") or { 0, 0, 0 }
+        local v = BodyParts.placed(p.section, p.name) or { 0, 0, 0 }
         for k = 1, 3 do center[k] = center[k] + v[k] / #parts end
     end
     inwuts.partPos = createInputRow("Pos", holder, function(_, i)
@@ -150,7 +150,7 @@ local function buildJoints(holder)
 
     local center = { 0, 0, 0 }
     for _, j in ipairs(joints) do
-        local v = BodyParts.vector(j.section, "joint", j.name, "pos") or { 0, 0, 0 }
+        local v = BodyParts.jointPlaced(j.section, j.name) or { 0, 0, 0 }
         for k = 1, 3 do center[k] = center[k] + v[k] / #joints end
     end
     inwuts.jointPartPos = createInputRow("Pos", holder, function(_, i)

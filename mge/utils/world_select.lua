@@ -882,14 +882,14 @@ local function boxSelect(b)
         if not any then return end
         Main.updateWindow()
         Main.selectionMade()
-    elseif Main.listTab == "players" then
+    elseif Main.listTab == "players" and not Main.partsShown() then
         local players = WorldSelect.pickPlayersBox(b.x1, b.y1, b.x2, b.y2)
         if not players[1] then return end
         for _, player in ipairs(players) do Main.selectedPlayers[player] = true end
         Main.selectedPlayer = players[#players]
         Main.updateWindow()
         MGE.Camera.followPlayer(Main.selectedPlayerList())
-    elseif Main.listTab == "parts" then
+    elseif Main.partsShown() then
         local parts = WorldSelect.pickPartsBox(b.x1, b.y1, b.x2, b.y2, b.through)
         if not parts[1] then return end
         MGE.PartList.add(parts)
@@ -963,7 +963,7 @@ add_hook("draw3d", HOOK_SET, function()
         if picking.ended then picking.ended() end
         return
     end
-    if MGE.Main.listTab == "parts" then -- body parts only; a miss leaves the selection
+    if MGE.Main.partsShown() then -- body parts and joints only; a miss leaves the selection
         local okPart, player, name, kind = pcall(WorldSelect.pickPart, click.x, click.y)
         if not okPart then
             MGE.say("world select error: " .. tostring(player))

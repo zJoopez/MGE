@@ -115,33 +115,13 @@ function BodyParts.setJointLine(section, names, key, text, mirror)
 end
 
 ---Moves the joints' pos lines through fn (player frame); with mirrorX their twins (not selected themselves)
----get it mirrored. Joints in skip are left (BodyParts.transform moved them already)
+---get it mirrored. Bodies turning about a moved joint keep their place (BodyParts.transform)
 ---@param section BodySection
 ---@param names string[]
 ---@param fn fun(p: number[], name: string): number[]
 ---@param mirrorX number?
----@param skip table<string, boolean>?
-function BodyParts.transformJoints(section, names, fn, mirrorX, skip)
-    local fmt = MGE.FileHandler.formatNumbers
-    local fnOf = {}
-    for _, n in ipairs(names) do fnOf[n:lower()] = fn end
-    if mirrorX then
-        for _, n in ipairs(names) do
-            local twin = BodyParts.twin(n)
-            if twin and not fnOf[twin] then
-                fnOf[twin] = function(p, name)
-                    return BodyParts.mirrorPos(fn(BodyParts.mirrorPos(p, mirrorX), name), mirrorX)
-                end
-            end
-        end
-    end
-    for name, f in pairs(fnOf) do
-        if not (skip and skip[name]) then
-            local p = BodyParts.vector(section, "joint", name, "pos") or { 0, 0, 0 }
-            local r = f(p, name)
-            BodyParts.setProp(BodyParts.part(section, "joint", name, true) --[[@as BodyPart]], "pos", fmt(r[1], r[2], r[3]))
-        end
-    end
+function BodyParts.transformJoints(section, names, fn, mirrorX)
+    BodyParts.transform(section, nil, {}, { pos = fn }, mirrorX, names)
 end
 
 -- single-number body lines and their classic values (modmaker.tbm: every body the same, hands flag 1)
@@ -514,29 +494,104 @@ function BodyParts.rotationToFile(frame, w)
     return Mat3.mul(Mat3.transpose(frame.R), Mat3.mul(w, frame.R))
 end
 
----The player's frame, fitted from its bodies' live positions against the file (defaults for missing lines).
----Parts with a rot line are left out while 3 others remain: the game shifts some turned parts (probe 2).
----Call when the bodies stand where the last load put them (after a reload, before a fight moves them)
+-- A body with a rot line turns about this joint (probe 2b: every part, each axis, miss 0); groin and feet about
+-- their own center. The game puts it at P + M (c - P): c its pos line, P the joint's pos line, M its rot
+BodyParts.PIVOTS = {
+    head = "neck", breast = "chest", chest = "lumbar", stomach = "abs",
+    r_pecs = "r_pecs", r_biceps = "r_shoulder", r_triceps = "r_elbow", r_hand = "r_wrist",
+    l_pecs = "l_pecs", l_biceps = "l_shoulder", l_triceps = "l_elbow", l_hand = "l_wrist",
+    r_butt = "r_glute", l_butt = "l_glute", r_thigh = "r_hip", l_thigh = "l_hip", r_leg = "r_ankle", l_leg = "l_ankle",
+}
+
+---@param r number[]?
+---@return boolean
+local function turned(r)
+    return r ~= nil and (r[1] ~= 0 or r[2] ~= 0 or r[3] ~= 0)
+end
+
+---Where the game puts a body (player frame): its pos line turned with its rot about its pivot joint
+---@param section BodySection
+---@param name string
+---@return number[]?
+function BodyParts.placed(section, name)
+    name = name:lower()
+    local c = BodyParts.vector(section, "body", name, "pos")
+    local r = BodyParts.vector(section, "body", name, "rot")
+    local pivot = BodyParts.PIVOTS[name]
+    local P = pivot and BodyParts.vector(section, "joint", pivot, "pos")
+    if not c or not P or not turned(r) then return c end
+    local q = Mat3.apply(BodyParts.rotMatrix(r --[[@as number[] ]]), sub(c, P))
+    return { P[1] + q[1], P[2] + q[2], P[3] + q[3] }
+end
+
+---Writes the pos line that makes the game put the body at D with its current rot and pivot: P + M^T (D - P)
+---@param section BodySection
+---@param name string
+---@param D number[] player frame
+function BodyParts.setPlaced(section, name, D)
+    name = name:lower()
+    local r = BodyParts.vector(section, "body", name, "rot")
+    local pivot = BodyParts.PIVOTS[name]
+    local P = pivot and BodyParts.vector(section, "joint", pivot, "pos")
+    local c = D
+    if P and turned(r) then
+        local q = Mat3.apply(Mat3.transpose(BodyParts.rotMatrix(r --[[@as number[] ]])), sub(D, P))
+        c = { P[1] + q[1], P[2] + q[2], P[3] + q[3] }
+    end
+    BodyParts.setProp(BodyParts.part(section, "body", name, true) --[[@as BodyPart]], "pos",
+        MGE.FileHandler.formatNumbers(c[1], c[2], c[3]))
+end
+
+-- Joints the game carries with a turned body (the knees: no body's pivot): placed at c' + M (j - c'), c' the
+-- body's placed center, M its rot (measured: body_rot_x / _y, body_rot_knee). Other joints stay at their pos line
+BodyParts.CARRIED = { r_knee = "r_thigh", l_knee = "l_thigh" }
+
+---Where the game puts a joint (player frame)
+---@param section BodySection
+---@param joint string
+---@return number[]?
+function BodyParts.jointPlaced(section, joint)
+    joint = joint:lower()
+    local j = BodyParts.vector(section, "joint", joint, "pos")
+    local body = BodyParts.CARRIED[joint]
+    local r = body and BodyParts.vector(section, "body", body, "rot")
+    if not j or not turned(r) then return j end
+    local c = BodyParts.placed(section, body) --[[@as number[] ]]
+    local q = Mat3.apply(BodyParts.rotMatrix(r --[[@as number[] ]]), sub(j, c))
+    return { c[1] + q[1], c[2] + q[2], c[3] + q[3] }
+end
+
+---Writes the joint's pos line that makes the game put it at K (with its carrying body as it is now)
+---@param section BodySection
+---@param joint string
+---@param K number[] player frame
+function BodyParts.setJointPlaced(section, joint, K)
+    joint = joint:lower()
+    local body = BodyParts.CARRIED[joint]
+    local r = body and BodyParts.vector(section, "body", body, "rot")
+    local j = K
+    if turned(r) then
+        local c = BodyParts.placed(section, body) --[[@as number[] ]]
+        local q = Mat3.apply(Mat3.transpose(BodyParts.rotMatrix(r --[[@as number[] ]])), sub(K, c))
+        j = { c[1] + q[1], c[2] + q[2], c[3] + q[3] }
+    end
+    BodyParts.setProp(BodyParts.part(section, "joint", joint, true) --[[@as BodyPart]], "pos",
+        MGE.FileHandler.formatNumbers(j[1], j[2], j[3]))
+end
+
+---The player's frame, fitted from its bodies' live positions against where the file places them (defaults
+---for missing lines). Call when the bodies stand where the last load put them (after a reload, before a fight)
 ---@param player integer 0-based
 ---@param section BodySection
 ---@return BodyFrame?
 function BodyParts.measureFrame(player, section)
-    local points, turned = {}, {}
+    local points = {}
     for name, id in pairs(BODYPARTS) do
-        local file = BodyParts.vector(section, "body", name, "pos")
+        local file = BodyParts.placed(section, name)
         local ok, info = pcall(get_body_info, player, id)
         if file and ok and info and info.pos then
-            local r = BodyParts.vector(section, "body", name, "rot")
-            local point = { file = file, live = { info.pos.x, info.pos.y, info.pos.z }, name = name }
-            if r and (r[1] ~= 0 or r[2] ~= 0 or r[3] ~= 0) then
-                turned[#turned + 1] = point
-            else
-                points[#points + 1] = point
-            end
+            points[#points + 1] = { file = file, live = { info.pos.x, info.pos.y, info.pos.z }, name = name }
         end
-    end
-    if #points < 3 then
-        for _, p in ipairs(turned) do points[#points + 1] = p end
     end
     table.sort(points, function(p, q) return p.name < q.name end) -- the same three each time
     return BodyParts.fitFrame(points)
@@ -596,17 +651,19 @@ local function mirrored(fns, cx)
     return out
 end
 
----Rewrites the selected bodies' lines (and the joints between moved bodies) through the functions, player
----frame: pos moves the bodies' and those joints' pos, rot gets and gives a body's rot line in degrees, sides
----a body's sides. Missing lines start from the defaults. With mirrorX, the twins of the selected bodies (not
----selected themselves) get the mirrored edit, and so do joints touching a twin
+---Rewrites the selected bodies' lines through the functions, player frame: pos moves where the game places
+---them (BodyParts.placed) and the joints between moved bodies plus the given joints, rot gets and gives a rot
+---line in degrees, sides a body's sides. Missing lines start from the defaults. Pos lines are written last,
+---about the pivots where they end up; bodies turning about a moved joint keep their place. With mirrorX, twins
+---not selected themselves get the mirrored edit, and so do joints touching a twin
 ---@param section BodySection
----@param player integer 0-based
+---@param player integer? 0-based (joint links); nil without bodies
 ---@param bodies string[] body names
 ---@param fns BodyPartFns
 ---@param mirrorX number? BodyParts.mirrorX, nil without Mirror
----@return table<string, boolean> joints moved (between moved bodies)
-function BodyParts.transform(section, player, bodies, fns, mirrorX)
+---@param joints string[]? joints moved with fns.pos too (selected ones)
+---@return table<string, boolean> joints moved
+function BodyParts.transform(section, player, bodies, fns, mirrorX, joints)
     local fmt = MGE.FileHandler.formatNumbers
     local fnsOf, moved = {}, {}
     for _, name in ipairs(bodies) do
@@ -622,27 +679,69 @@ function BodyParts.transform(section, player, bodies, fns, mirrorX)
         end
         for twin in pairs(twinSet) do fnsOf[twin], moved[twin] = twinFns, true end
     end
-    for name, f in pairs(fnsOf) do
-        local part = BodyParts.part(section, "body", name, true) --[[@as BodyPart]]
-        for _, key in ipairs({ "pos", "rot", "sides" }) do
-            if f[key] then
-                local v = BodyParts.vector(section, "body", name, key) or { 0, 0, 0 }
-                local r = f[key](v, name)
-                BodyParts.setProp(part, key, fmt(r[1], r[2], r[3]))
+
+    -- the joints that move, each with its function
+    local jointFn = {}
+    if fns.pos then
+        if next(moved) then
+            for _, joint in ipairs(BodyParts.jointsBetween(player, moved)) do
+                local link = BodyParts.linkOf(player, joint) --[[@as string[] ]]
+                jointFn[joint] = (twinSet[link[1]] or twinSet[link[2]]) and twinFns.pos or fns.pos
             end
         end
+        local selectedJoint = {}
+        for _, j in ipairs(joints or {}) do selectedJoint[j:lower()] = true end
+        for j in pairs(selectedJoint) do
+            jointFn[j] = jointFn[j] or fns.pos
+            local twin = twinFns and BodyParts.twin(j)
+            if twin and not selectedJoint[twin] and not jointFn[twin] then jointFn[twin] = twinFns.pos end
+        end
+    end
+
+    -- every target from where things stand now, before any line changes (placements depend on each other)
+    local target, writePos = {}, {}
+    for name, f in pairs(fnsOf) do
+        local D = BodyParts.placed(section, name) or { 0, 0, 0 }
+        target[name] = f.pos and f.pos(D, name) or D
+        writePos[name] = f.pos ~= nil or f.rot ~= nil
+    end
+    for body, pivot in pairs(BodyParts.PIVOTS) do -- turning about a moved joint: kept in place
+        if jointFn[pivot] then
+            target[body] = target[body] or BodyParts.placed(section, body)
+            writePos[body] = true
+        end
+    end
+    local jointTarget = {}
+    for joint, f in pairs(jointFn) do
+        jointTarget[joint] = f(BodyParts.jointPlaced(section, joint) or { 0, 0, 0 }, joint)
+    end
+    for joint, body in pairs(BodyParts.CARRIED) do -- a knee whose thigh moves or turns: kept in place
+        if writePos[body] and not jointTarget[joint] then jointTarget[joint] = BodyParts.jointPlaced(section, joint) end
+    end
+
+    -- then the lines: rot and sides, plain joints, bodies about their final pivots, knees about their final thighs
+    for name, f in pairs(fnsOf) do
+        local part = BodyParts.part(section, "body", name, true) --[[@as BodyPart]]
+        if f.rot then
+            local r = f.rot(BodyParts.vector(section, "body", name, "rot") or { 0, 0, 0 }, name)
+            BodyParts.setProp(part, "rot", fmt(r[1], r[2], r[3]))
+        end
+        if f.sides then
+            local s = f.sides(BodyParts.vector(section, "body", name, "sides") or { 0, 0, 0 }, name)
+            BodyParts.setProp(part, "sides", fmt(s[1], s[2], s[3]))
+        end
+    end
+    for joint, K in pairs(jointTarget) do
+        if not BodyParts.CARRIED[joint] then BodyParts.setJointPlaced(section, joint, K) end
+    end
+    for name, D in pairs(target) do
+        if writePos[name] then BodyParts.setPlaced(section, name, D) end
+    end
+    for joint, K in pairs(jointTarget) do
+        if BodyParts.CARRIED[joint] then BodyParts.setJointPlaced(section, joint, K) end
     end
     local movedJoints = {}
-    if not fns.pos then return movedJoints end
-    for _, joint in ipairs(BodyParts.jointsBetween(player, moved)) do
-        movedJoints[joint] = true
-        local link = BodyParts.linkOf(player, joint) --[[@as string[] ]]
-        local f = (twinSet[link[1]] or twinSet[link[2]]) and twinFns or fns
-        local part = BodyParts.part(section, "joint", joint, true) --[[@as BodyPart]]
-        local p = BodyParts.vector(section, "joint", joint, "pos") or { 0, 0, 0 }
-        local r = f.pos(p, joint)
-        BodyParts.setProp(part, "pos", fmt(r[1], r[2], r[3]))
-    end
+    for joint in pairs(jointFn) do movedJoints[joint] = true end
     return movedJoints
 end
 

@@ -1,7 +1,9 @@
--- Parts list (docs/body-parts-plan.md): a map of the classic tori seen from behind (its left on the left),
--- every body part and joint a clickable shape; Shift adds. Always the classic proportions, whatever the mod's
--- layout: a picker (custom layouts like a car body overlap too much to click). A player switch picks whose
--- parts the map selects; selections can span players. Mirror: edits also change the l_ / r_ twins
+-- The Players list (docs/body-parts-plan.md): a map of the classic tori seen from behind (its left on the left),
+-- every body part a clickable shape (the Joints tab: the joints, bodies faint), and a player switch. The tab
+-- decides what acts on what: Player
+-- (whole players: switch, world clicks, keys, gizmo), Parts / Advanced / Joints (parts and joints; Shift adds,
+-- selections can span players). The map keeps the classic proportions whatever the mod's layout: a picker
+-- (custom layouts like a car body overlap too much to click). Mirror: edits also change the l_ / r_ twins
 
 local PartList = {
     mirror = true, -- Mirror on the action bar
@@ -14,9 +16,8 @@ local BodyParts = MGE.BodyParts
 local Widgets = MGE.Widgets
 
 -- selection: Main.selectedParts["<player>:<body>"] / ["<player>:j:<joint>"] = true (body and joint names
--- overlap: chest, r_pecs, l_pecs), Main.partsPlayer the shown player
+-- overlap: chest, r_pecs, l_pecs); the map's player is Main.selectedPlayer
 Main.selectedParts = Main.selectedParts or {}
-Main.partsPlayer = Main.partsPlayer or 0
 
 ---@param player integer
 ---@param name string lower case
@@ -90,10 +91,45 @@ function PartList.select(player, name, additive, kind)
         end
         Main.selectedParts = only and {} or { [k] = true }
     end
-    local switched = Main.partsPlayer ~= player
-    Main.partsPlayer = player
+    local switched = Main.selectedPlayer ~= player
+    Main.selectedPlayer = player
     Main.updateWindow()
-    if switched then MGE.Camera.followPlayer({ player }) end
+    if Main.selectedParts[k] then
+        PartList.follow()
+    elseif switched then
+        MGE.Camera.followPlayer({ player })
+    end
+end
+
+---Points the camera at the selected parts and joints (camera follow on), keeping the zoom. Call when something
+---got selected
+function PartList.follow()
+    local Camera, Players = MGE.Camera, MGE.Players
+    if not Camera.followMoves or not Players then return end
+    local points, exists = {}, {}
+    for _, part in ipairs(PartList.selected()) do
+        if exists[part.player] == nil then exists[part.player] = Players.exists(part.player) end
+        if exists[part.player] then
+            if part.kind == "joint" then
+                local id = JOINTS[part.name:upper()]
+                local x, y, z
+                if id then x, y, z = get_joint_pos(part.player, id) end
+                if x then points[#points + 1] = { x, y, z } end
+            else
+                local id = BODYPARTS[part.name:upper()]
+                local b = id and get_body_info(part.player, id)
+                if b then points[#points + 1] = { b.pos.x, b.pos.y, b.pos.z } end
+            end
+        end
+    end
+    if #points == 0 then return end
+    local c = { 0, 0, 0 }
+    for _, p in ipairs(points) do c = { c[1] + p[1] / #points, c[2] + p[2] / #points, c[3] + p[3] / #points } end
+    local radius = 0
+    for _, p in ipairs(points) do
+        radius = math.max(radius, math.sqrt((p[1] - c[1]) ^ 2 + (p[2] - c[2]) ^ 2 + (p[3] - c[3]) ^ 2))
+    end
+    Camera.focusOn(c, radius + 0.3) -- a part's own size
 end
 
 ---Adds parts to the selection (box select). The map keeps its player when one of them is on it
@@ -102,28 +138,30 @@ function PartList.add(parts)
     local onShown = false
     for _, part in ipairs(parts) do
         Main.selectedParts[key(part.player, part.name, part.kind)] = true
-        if part.player == Main.partsPlayer then onShown = true end
+        if part.player == Main.selectedPlayer then onShown = true end
     end
-    if parts[1] and not onShown then Main.partsPlayer = parts[1].player end
+    if parts[1] and not onShown then Main.selectedPlayer = parts[1].player end
     Main.updateWindow()
+    if parts[1] then PartList.follow() end
 end
 
 ---Ctrl + A: all of the shown player's bodies (on the Joints tab: joints), or none when all are selected
 function PartList.toggleSelectAll()
-    local kind = Main.activeTabs.parts == "partsJoints" and "joint" or "body"
+    local kind = Main.activeTabs.players == "partsJoints" and "joint" or "body"
     local names = kind == "joint" and BodyParts.DEFAULTS.joint or BodyParts.DEFAULTS.body
-    local player, all = Main.partsPlayer, true
+    local player, all = Main.selectedPlayer, true
     for name in pairs(names) do
         if not Main.selectedParts[key(player, name, kind)] then all = false break end
     end
     for name in pairs(names) do Main.selectedParts[key(player, name, kind)] = (not all) or nil end
     Main.updateWindow()
+    if not all then PartList.follow() end
 end
 
 ---@param player integer
 function PartList.showPlayer(player)
-    if Main.partsPlayer == player then return end
-    Main.partsPlayer = player
+    if Main.selectedPlayer == player then return end
+    Main.selectedPlayer = player
     Main.updateWindow()
     MGE.Camera.followPlayer({ player })
 end
@@ -150,7 +188,7 @@ end
 
 ---A new mod: nothing selected, player 0 shown
 function PartList.reset()
-    Main.selectedParts, Main.partsPlayer = {}, 0
+    Main.selectedParts = {}
 end
 
 ---------------------------------------------------------------------------------------------------- the map
@@ -245,6 +283,7 @@ end
 PartList.mapItems, PartList.fitMap, PartList.hitsItem = mapItems, fit, hits
 
 local COLOR = { 0.8, 0.8, 0.8, 0.45 }
+local FAINT = { 0.8, 0.8, 0.8, 0.15 } -- bodies behind the Joints tab's joints
 local JOINT_COLOR = { 1, 0.75, 0.3, 0.55 }
 local HOVER = { 1, 1, 1, 0.75 }
 local MIN_PX = 3 -- tiny parts stay visible and clickable
@@ -259,8 +298,11 @@ local function buildMap(el, player)
     local rect = { x = 0, y = 0, w = el.size.w, h = el.size.h }
     local toScreen, scale = fit(items, rect)
     local hovered = nil ---@type PartMapItem?
+    -- joints only on the Joints tab (on top they made some parts hard to click), bodies faint behind them there
+    local jointsTab = Main.activeTabs.players == "partsJoints"
+    local pickKind = jointsTab and "joint" or "body"
 
-    ---The nearest part under a screen point (absolute): joints first, then bodies near to far
+    ---The nearest part of the tab's kind under a screen point (absolute), near to far
     ---@return PartMapItem?
     local function partAt(x, y)
         local lx, ly = x - el.pos.x, y - el.pos.y
@@ -269,12 +311,34 @@ local function buildMap(el, player)
         local grow = MIN_PX / scale
         for i = #items, 1, -1 do -- near first
             local it = items[i]
-            local big = { shape = it.shape, u = it.u, v = it.v, hw = math.max(it.hw, grow), hh = it.hh,
-                r = math.max(it.r, grow) }
-            if it.shape == "box" then big.hh = math.max(it.hh, grow) end
-            if hits(big, u, v) then return it end
+            if it.kind == pickKind then
+                local big = { shape = it.shape, u = it.u, v = it.v, hw = math.max(it.hw, grow), hh = it.hh,
+                    r = math.max(it.r, grow) }
+                if it.shape == "box" then big.hh = math.max(it.hh, grow) end
+                if hits(big, u, v) then return it end
+            end
         end
         return nil
+    end
+
+    ---@param it PartMapItem
+    ---@param c number[] color
+    local function drawItem(it, c)
+        set_color(c[1], c[2], c[3], c[4])
+        local cx, cy = toScreen(it.u, it.v)
+        cx, cy = cx + el.pos.x, cy + el.pos.y
+        local hw, hh, r = math.max(it.hw * scale, MIN_PX), it.hh * scale, math.max(it.r * scale, MIN_PX)
+        if it.shape == "sphere" then
+            draw_disk(cx, cy, 0, r, 24, 1, 0, 360, 0)
+        elseif it.shape == "cylinder" then
+            draw_quad(cx - r, cy - hh, r * 2, hh * 2)
+            -- angles as the game's chat pills: 0 down, 90 right, 180 up
+            draw_disk(cx, cy - hh, 0, r, 16, 1, 90, 180, 0)
+            draw_disk(cx, cy + hh, 0, r, 16, 1, -90, 180, 0)
+        else
+            hh = math.max(hh, MIN_PX)
+            draw_quad(cx - hw, cy - hh, hw * 2, hh * 2)
+        end
     end
 
     el:addCustomDisplay(true, function()
@@ -282,22 +346,16 @@ local function buildMap(el, player)
         local Highlight = MGE.Highlight
         local sel = Highlight and Highlight.color or { 0, 0.333, 1 }
         for _, it in ipairs(items) do
-            local c = Main.selectedParts[key(player, it.name, it.kind)] and { sel[1], sel[2], sel[3], 0.9 }
-                or (it == hovered and HOVER or (it.kind == "joint" and JOINT_COLOR or COLOR))
-            set_color(c[1], c[2], c[3], c[4])
-            local cx, cy = toScreen(it.u, it.v)
-            cx, cy = cx + el.pos.x, cy + el.pos.y
-            local hw, hh, r = math.max(it.hw * scale, MIN_PX), it.hh * scale, math.max(it.r * scale, MIN_PX)
-            if it.shape == "sphere" then
-                draw_disk(cx, cy, 0, r, 24, 1, 0, 360, 0)
-            elseif it.shape == "cylinder" then
-                draw_quad(cx - r, cy - hh, r * 2, hh * 2)
-                -- angles as the game's chat pills: 0 down, 90 right, 180 up
-                draw_disk(cx, cy - hh, 0, r, 16, 1, 90, 180, 0)
-                draw_disk(cx, cy + hh, 0, r, 16, 1, -90, 180, 0)
-            else
-                hh = math.max(hh, MIN_PX)
-                draw_quad(cx - hw, cy - hh, hw * 2, hh * 2)
+            if it.kind == pickKind or jointsTab then -- other tabs: no joints
+                local c
+                if it.kind ~= pickKind then
+                    c = FAINT
+                elseif Main.selectedParts[key(player, it.name, it.kind)] then
+                    c = { sel[1], sel[2], sel[3], 0.9 }
+                else
+                    c = it == hovered and HOVER or (it.kind == "joint" and JOINT_COLOR or COLOR)
+                end
+                drawItem(it, c)
             end
         end
         if hovered then
@@ -308,29 +366,38 @@ local function buildMap(el, player)
     end)
     el:addMouseHandlers(nil, function(_, x, y)
         local it = partAt(x, y)
-        if it then PartList.select(player, it.name, get_keyboard_shift() ~= 0, it.kind) end
+        if not it then return end
+        local onPlayerTab = Main.activeTabs.players == "player"
+        PartList.select(player, it.name, get_keyboard_shift() ~= 0 and not onPlayerTab, it.kind)
+        if onPlayerTab then Main.setTab("parts") end -- from the Player tab: the Parts tab opens with it
     end, function(x, y)
         hovered = partAt(x, y)
     end)
     el.killAction = function() hovered = nil end
 end
 
+---The player switch: on the Player tab it selects players (Shift adds), on the part tabs it picks whose parts
+---the map selects
 ---@param holder UIElement
 ---@param count integer
-local function buildPlayerSwitch(holder, count)
+---@param playerTab boolean
+local function buildPlayerSwitch(holder, count, playerTab)
     local items = {}
     for p = 0, count - 1 do
-        items[#items + 1] = { label = "P" .. p, onClick = function() PartList.showPlayer(p) end }
+        items[#items + 1] = { label = "P" .. p, onClick = function()
+            if playerTab then Main.selectPlayer(p, get_keyboard_shift() ~= 0) else PartList.showPlayer(p) end
+        end }
     end
     local buttons = Widgets.buttonRow(holder, 0, holder.size.h, items, Widgets.GAP, Widgets.TAB_TEXT_SCALE,
         Widgets.PANEL_STYLE)
     for p, btn in ipairs(buttons) do
-        if p - 1 == Main.partsPlayer then btn.bgColor = Widgets.ACTIVE_COLOR end
+        local lit = playerTab and Main.selectedPlayers[p - 1] or (not playerTab and p - 1 == Main.selectedPlayer)
+        if lit then btn.bgColor = Widgets.ACTIVE_COLOR end
     end
 end
 
 ---@return string
-local function summary()
+local function partSummary()
     local list = PartList.selected()
     if #list == 0 then return "Click a part or joint\n(Shift adds)" end
     local names = {}
@@ -344,36 +411,77 @@ local function summary()
     return #list .. " selected" .. (PartList.mirror and " (Mirror on)" or "") .. "\n" .. table.concat(names, "\n")
 end
 
----@param view UIElement list area, emptied by the caller
-function PartList.create(view)
-    local count = Main.getPlayerCount()
-    if Main.partsPlayer >= count then Main.partsPlayer = 0 end
-    local barIcons = Main.setListActions({
-        { label = "Select / deselect all of the shown player's parts (Ctrl + A)",
+---@return string
+local function playerSummary()
+    local list = Main.selectedPlayerList()
+    if #list == 0 then return "Click a player\n(Shift adds)" end
+    local lines = {}
+    for i, p in ipairs(list) do
+        if i > 4 then
+            lines[#lines + 1] = "+" .. (#list - 4) .. " more"
+            break
+        end
+        lines[#lines + 1] = "P" .. p .. ": " .. MGE.PlayerList.describeModel(p)
+    end
+    return table.concat(lines, "\n")
+end
+
+---The list's buttons: the Player tab's act on players, the part tabs' on parts
+---@param playerTab boolean
+local function buildActions(playerTab)
+    if playerTab then
+        local L = MGE.PlayerList
+        local icons = Main.setListActions({
+            { label = "Select / deselect all players (Ctrl + A)", icon = MGE.scriptPath .. "textures/selectall.tga",
+                wide = true, onClick = function() Main.toggleSelectAllPlayers() end },
+            { label = "New player (Ctrl + N), at most " .. MGE.Players.MAX,
+                icon = "../textures/menu/general/buttons/addsign.tga", wide = true, onClick = L.newPlayer },
+            { label = "Duplicate selected players (Ctrl + D)", icon = MGE.scriptPath .. "textures/duplicate.tga",
+                wide = true, onClick = L.duplicate },
+            { label = "Import model to the selected players", icon = MGE.scriptPath .. "textures/import.tga",
+                wide = true, onClick = function() MGE.Assets.openImport() end },
+            { label = "Export the first selected player's model", icon = MGE.scriptPath .. "textures/export.tga",
+                wide = true, onClick = L.exportFirst },
+            { label = "Delete selected players (Del)", icon = "../textures/menu/general/buttons/trash.tga", wide = true,
+                onClick = L.deleteSelected },
+        })
+        Main.lightWhile(icons[1], L.allSelected)
+        return
+    end
+    local icons = Main.setListActions({
+        { label = "Select / deselect all of the shown player's parts (Ctrl + A; on Joints: its joints)",
             icon = MGE.scriptPath .. "textures/selectall.tga", wide = true, onClick = PartList.toggleSelectAll },
         { label = "Mirror", onClick = function()
             PartList.mirror = not PartList.mirror
             Main.updateWindow()
         end },
     })
-    Main.lightWhile(barIcons[2], function() return PartList.mirror end)
-    Widgets.popupBelow(barIcons[2], "Mirror: edits also change the left / right twin\n(mirrored across the body's middle).")
+    Main.lightWhile(icons[2], function() return PartList.mirror end)
+    Widgets.popupBelow(icons[2], "Mirror: edits also change the left / right twin\n(mirrored across the body's middle).")
+end
+
+---The Players list: the map and the player switch on every tab; buttons and info by the tab
+---@param view UIElement list area, emptied by the caller
+function PartList.create(view)
+    local count = Main.getPlayerCount() -- keeps Main.selectedPlayer in range
+    local playerTab = Main.activeTabs.players == "player"
+    buildActions(playerTab)
 
     local gap = Widgets.px(6)
     local mapW = math.min(view.size.h, view.size.w * 0.5)
     local map = view:addChild({ pos = { 0, 0 }, size = { mapW, view.size.h }, interactive = true })
-    buildMap(map, Main.partsPlayer)
+    buildMap(map, Main.selectedPlayer)
 
     local side = view:addChild({ pos = { mapW + gap, gap }, size = { view.size.w - mapW - gap * 2, view.size.h - gap * 2 } })
     local switchH = Widgets.LIST_ROW_H
-    if count > 1 then
-        buildPlayerSwitch(side:addChild({ pos = { 0, 0 }, size = { side.size.w, switchH } }), count)
+    local showSwitch = count > 1 or playerTab
+    if showSwitch then
+        buildPlayerSwitch(side:addChild({ pos = { 0, 0 }, size = { side.size.w, switchH } }), count, playerTab)
     end
-    local info = side:addChild({
-        pos = { 0, count > 1 and switchH + gap or 0 },
-        size = { side.size.w, side.size.h - (count > 1 and switchH + gap or 0) },
-    })
-    info:addAdaptedText(summary(), nil, nil, Widgets.FONT, LEFT, Widgets.TEXT_SCALE_SMALL, nil, nil)
+    local top = showSwitch and switchH + gap or 0
+    local info = side:addChild({ pos = { 0, top }, size = { side.size.w, side.size.h - top } })
+    info:addAdaptedText(playerTab and playerSummary() or partSummary(), nil, nil, Widgets.FONT, LEFT,
+        Widgets.TEXT_SCALE_SMALL, nil, nil)
 end
 
 return PartList

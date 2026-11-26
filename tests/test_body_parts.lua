@@ -150,9 +150,10 @@ T.test("body parts: an edit moves the joints between moved bodies only; Mirror m
     local inward = { pos = function(p) return { p[1] + 0.1, p[2], p[3] } end,
         rot = function(r) return { r[1], r[2], r[3] + 10 } end }
     BodyParts.transform(section, 0, { "breast", "r_pecs" }, inward, BodyParts.mirrorX(section))
-    T.nearList(vec(section, "body", "r_pecs", "pos"), { 0.85, 0.9, 2.15 }, 1e-9, "r_pecs +x")
-    T.nearList(vec(section, "body", "l_pecs", "pos"), { 1.15, 0.9, 2.15 }, 1e-9, "its twin -x")
-    T.nearList(vec(section, "body", "breast", "pos"), { 1.1, 0.9, 2.2 }, 1e-9, "the middle one as typed")
+    -- turned parts: where the game places them (their pos lines make up for its pivots)
+    T.nearList(BodyParts.placed(section, "r_pecs"), { 0.85, 0.9, 2.15 }, 1e-9, "r_pecs +x")
+    T.nearList(BodyParts.placed(section, "l_pecs"), { 1.15, 0.9, 2.15 }, 1e-9, "its twin -x")
+    T.nearList(BodyParts.placed(section, "breast"), { 1.1, 0.9, 2.2 }, 1e-9, "the middle one as typed")
     T.nearList(vec(section, "body", "r_pecs", "rot"), { 0, 0, 10 }, 1e-9, "rot")
     T.nearList(vec(section, "body", "l_pecs", "rot"), { 0, 0, -10 }, 1e-9, "the twin's mirrored")
     T.nearList(vec(section, "joint", "r_pecs", "pos"), { 0.95, 0.85, 2.2 }, 1e-9, "joint breast-r_pecs: the edit")
@@ -161,7 +162,7 @@ T.test("body parts: an edit moves the joints between moved bodies only; Mirror m
 
     section = BodyParts.parseSection({})
     BodyParts.transform(section, 0, { "r_hand", "l_hand" }, inward, 1)
-    T.nearList(vec(section, "body", "l_hand", "pos"), { 2.45, 0.85, 2.3 }, 1e-9, "both selected: both as typed")
+    T.nearList(BodyParts.placed(section, "l_hand"), { 2.45, 0.85, 2.3 }, 1e-9, "both selected: both as typed")
 end)
 
 T.test("body parts: shape changes convert the sides; the head refuses", function()
@@ -264,7 +265,7 @@ T.test("parts gizmo: previews mirror the twins, releases write each player's fra
 
         section = BodyParts.parseSection({})
         target.rotateByMatrix(Mat3.rotZ(math.pi / 2)) -- about the hand itself: it only turns
-        T.nearList(vec(section, "body", "r_hand", "pos"), { -0.35, 0.85, 2.3 }, 1e-9, "turned in place")
+        T.nearList(BodyParts.placed(section, "r_hand"), { -0.35, 0.85, 2.3 }, 1e-9, "turned in place")
         T.nearList(vec(section, "body", "r_hand", "rot"), { 0, 0, -90 }, 1e-9, "rot line: rotZ(-z) = +90 about z")
         T.nearList(vec(section, "body", "l_hand", "rot"), { 0, 0, 90 }, 1e-9, "twin turned the other way")
 
@@ -315,9 +316,8 @@ T.test("body parts: joint lines, classic values, moves with Mirror and without m
 
     section = BodyParts.parseSection({})
     local up = function(p) return { p[1], p[2], p[3] + 0.3 } end
-    local moved = BodyParts.transform(section, 0, { "r_biceps", "r_triceps" }, { pos = up })
-    T.ok(moved.r_elbow, "the elbow moved with its bodies")
-    BodyParts.transformJoints(section, { "r_elbow", "r_wrist" }, up, nil, moved)
+    local moved = BodyParts.transform(section, 0, { "r_biceps", "r_triceps" }, { pos = up }, nil, { "r_elbow", "r_wrist" })
+    T.ok(moved.r_elbow and moved.r_wrist, "the elbow (between) and the wrist (selected) moved")
     T.nearList(BodyParts.vector(section, "joint", "r_elbow", "pos"), { 0.25, 0.9, 2.6 }, 1e-9, "not moved twice")
     T.nearList(BodyParts.vector(section, "joint", "r_wrist", "pos"), { -0.2, 0.9, 2.6 }, 1e-9, "a selected joint")
 end)
@@ -325,7 +325,7 @@ end)
 T.test("parts selection: bodies and joints apart (names overlap)", function()
     local saved = { Main = MGE.Main, Widgets = MGE.Widgets, PartList = MGE.PartList }
     local ok, err = pcall(function()
-        MGE.Main = { getPlayerCount = function() return 2 end, activeTabs = {} }
+        MGE.Main = { getPlayerCount = function() return 2 end, activeTabs = { players = "parts" } }
         MGE.Widgets = {}
         dofile(MGE.scriptPath .. "ui/part_list.lua")
         local L = MGE.PartList
@@ -340,12 +340,12 @@ T.test("parts selection: bodies and joints apart (names overlap)", function()
         T.eq(table.concat(L.byPlayer()[0], " "), "chest", "bodies by default")
         local updated = 0
         MGE.Main.updateWindow = function() updated = updated + 1 end
-        MGE.Main.selectedParts, MGE.Main.partsPlayer = {}, 0
+        MGE.Main.selectedParts, MGE.Main.selectedPlayer = {}, 0
         L.add({ { player = 1, name = "r_knee", kind = "joint" }, { player = 1, name = "head", kind = "body" } })
         T.ok(MGE.Main.selectedParts["1:j:r_knee"] and MGE.Main.selectedParts["1:head"], "box select adds")
-        T.eq(MGE.Main.partsPlayer, 1, "the map shows their player")
+        T.eq(MGE.Main.selectedPlayer, 1, "the map shows their player")
         L.add({ { player = 0, name = "groin", kind = "body" }, { player = 1, name = "chest", kind = "body" } })
-        T.eq(MGE.Main.partsPlayer, 1, "kept when one is on the shown player")
+        T.eq(MGE.Main.selectedPlayer, 1, "kept when one is on the shown player")
         T.eq(updated, 2, "window rebuilt each time")
     end)
     MGE.Main, MGE.Widgets, MGE.PartList = saved.Main, saved.Widgets, saved.PartList
@@ -407,5 +407,103 @@ T.test("parts gizmo: joints alone move only, previewed by the highlight, written
     end)
     for _, k in ipairs(G) do _G[k] = savedG[k] end
     for _, k in ipairs(M) do MGE[k] = savedM[k] end
+    if not ok then error(err, 0) end
+end)
+
+T.test("body parts: turned parts placed about their pivot joint (probe 2b), pos lines written to land there", function()
+    -- shifts measured in game (body_rot_x / _y, 30 degrees, classic layout)
+    local function shiftOf(name, rot)
+        local section = BodyParts.parseSection({ "   body " .. name, "      rot " .. rot })
+        local c, p = BodyParts.vector(section, "body", name, "pos"), BodyParts.placed(section, name)
+        return { p[1] - c[1], p[2] - c[2], p[3] - c[3] }
+    end
+    T.nearList(shiftOf("r_thigh", "30 0 0"), { 0, -0.150, 0.040 }, 1e-3, "r_thigh about r_hip")
+    T.nearList(shiftOf("r_thigh", "0 30 0"), { 0.149, 0, 0.045 }, 1e-3, "and about y")
+    T.nearList(shiftOf("l_leg", "0 30 0"), { -0.125, 0, -0.033 }, 1e-3, "l_leg about l_ankle")
+    T.nearList(shiftOf("head", "30 0 0"), { 0, 0.082, 0.005 }, 1e-3, "head about neck")
+    T.nearList(shiftOf("r_biceps", "0 0 30"), { 0.027, 0.100, 0 }, 1e-3, "biceps about shoulder")
+    T.nearList(shiftOf("groin", "30 0 0"), { 0, 0, 0 }, 1e-12, "groin about itself")
+    T.nearList(shiftOf("r_foot", "0 30 0"), { 0, 0, 0 }, 1e-12, "feet about themselves")
+
+    local section = BodyParts.parseSection({ "   body r_thigh", "      rot 20 -10 35" })
+    BodyParts.setPlaced(section, "r_thigh", { 0.7, 1.2, 1.0 })
+    T.nearList(BodyParts.placed(section, "r_thigh"), { 0.7, 1.2, 1.0 }, 1e-5, "setPlaced lands where asked")
+end)
+
+T.test("body parts: a whole leg turned stays together; a pivot joint moved alone leaves its body in place", function()
+    local section = BodyParts.parseSection({})
+    local legs = { "r_thigh", "r_leg", "r_foot" }
+    local before = {}
+    for _, n in ipairs(legs) do before[n] = BodyParts.placed(section, n) end
+    local hip0 = BodyParts.vector(section, "joint", "r_hip", "pos")
+    local knee0 = BodyParts.jointPlaced(section, "r_knee")
+    local W = Mat3.rotX(math.rad(30))
+    local about = { 0.8, 1, 0.8 }
+    local function turn(p)
+        local q = Mat3.apply(W, { p[1] - about[1], p[2] - about[2], p[3] - about[3] })
+        return { about[1] + q[1], about[2] + q[2], about[3] + q[3] }
+    end
+    BodyParts.transform(section, 0, legs, {
+        pos = turn,
+        rot = function(r) return BodyParts.rotLine(Mat3.mul(W, BodyParts.rotMatrix(r))) end,
+    }, nil, { "r_hip" })
+    for _, n in ipairs(legs) do
+        T.nearList(BodyParts.placed(section, n), turn(before[n]), 1e-5, n .. " where the turn takes it")
+        T.nearList(BodyParts.vector(section, "body", n, "rot"), { -30, 0, 0 }, 1e-5, n .. " turned")
+    end
+    T.nearList(BodyParts.vector(section, "joint", "r_hip", "pos"), turn(hip0), 1e-5, "the selected hip turned too")
+    T.nearList(BodyParts.jointPlaced(section, "r_knee"), turn(knee0), 1e-5, "the knee (between) lands with them")
+
+    local thigh = BodyParts.placed(section, "r_thigh")
+    BodyParts.transformJoints(section, { "r_hip" }, function(p) return { p[1] + 0.1, p[2], p[3] } end)
+    T.nearList(BodyParts.placed(section, "r_thigh"), thigh, 1e-5, "the turned thigh keeps its place")
+end)
+
+T.test("body parts: knees move with a turned thigh (measured), kept in place when it turns", function()
+    -- body_rot_knee: r_thigh rot 30 0 0 alone moved r_knee by (0, -0.19, -0.029); l_leg turned alone left l_knee
+    local section = BodyParts.parseSection({ "   body r_thigh", "      rot 30 0 0", "   body l_leg", "      rot 30 0 0" })
+    T.nearList(BodyParts.jointPlaced(section, "r_knee"), { 0.8, 0.81, 0.771 }, 1e-3, "r_knee carried by its thigh")
+    T.nearList(BodyParts.jointPlaced(section, "l_knee"), { 1.2, 1, 0.8 }, 1e-12, "a turned leg doesn't move it")
+    T.nearList(BodyParts.jointPlaced(section, "r_hip"), { 0.79, 1, 1.4 }, 1e-12, "other joints at their line")
+    BodyParts.setJointPlaced(section, "r_knee", { 0.8, 1, 0.8 })
+    T.nearList(BodyParts.jointPlaced(section, "r_knee"), { 0.8, 1, 0.8 }, 1e-5, "setJointPlaced lands where asked")
+
+    -- the Rot row on a thigh alone: it turns in place, its knee stays
+    section = BodyParts.parseSection({})
+    local knee0, thigh0 = BodyParts.jointPlaced(section, "r_knee"), BodyParts.placed(section, "r_thigh")
+    BodyParts.transform(section, 0, { "r_thigh" }, { rot = function() return { 40, 0, 0 } end })
+    T.nearList(BodyParts.placed(section, "r_thigh"), thigh0, 1e-5, "thigh in place")
+    T.nearList(BodyParts.jointPlaced(section, "r_knee"), knee0, 1e-5, "knee in place")
+    T.ok(BodyParts.vector(section, "joint", "r_knee", "pos")[2] ~= knee0[2], "its line makes up for the thigh")
+end)
+
+T.test("parts selection: the camera looks at the selected parts and joints (follow on), zoom kept", function()
+    local G = { "BODYPARTS", "JOINTS", "get_body_info", "get_joint_pos" }
+    local savedG = {}
+    for _, k in ipairs(G) do savedG[k] = _G[k] end
+    local saved = { Main = MGE.Main, Widgets = MGE.Widgets, PartList = MGE.PartList, Camera = MGE.Camera,
+        Players = MGE.Players }
+    local ok, err = pcall(function()
+        BODYPARTS, JOINTS = { HEAD = 0 }, { R_KNEE = 16 }
+        get_body_info = function() return { pos = { x = 1, y = 0, z = 3 } } end
+        get_joint_pos = function() return 1, 0, 1 end
+        local calls = {}
+        MGE.Camera = { followMoves = true, focusOn = function(c, r, fit) calls[#calls + 1] = { c = c, r = r, fit = fit } end }
+        MGE.Players = { exists = function() return true end }
+        MGE.Main = { getPlayerCount = function() return 2 end, activeTabs = { players = "parts" },
+            selectedParts = { ["0:head"] = true, ["0:j:r_knee"] = true } }
+        MGE.Widgets = {}
+        dofile(MGE.scriptPath .. "ui/part_list.lua")
+        MGE.PartList.follow()
+        T.eq(#calls, 1, "one look")
+        T.nearList(calls[1].c, { 1, 0, 2 }, 1e-9, "at the middle of the head and the knee")
+        T.near(calls[1].r, 1.3, 1e-9, "radius: the farthest plus a part's size")
+        T.ok(not calls[1].fit, "keeps the zoom")
+        MGE.Camera.followMoves = false
+        MGE.PartList.follow()
+        T.eq(#calls, 1, "camera follow off: no look")
+    end)
+    for _, k in ipairs(G) do _G[k] = savedG[k] end
+    for _, k in ipairs({ "Main", "Widgets", "PartList", "Camera", "Players" }) do MGE[k] = saved[k] end -- nil ones too
     if not ok then error(err, 0) end
 end)

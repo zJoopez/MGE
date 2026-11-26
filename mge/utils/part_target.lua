@@ -176,7 +176,7 @@ local function build(parts, key)
             if e.pos and e.kind == "body" then place(e, e.pos, e.rot) end
         end
     end
-    ---Commits a position edit: the bodies (and joints between them), then the selected joints not moved yet
+    ---Commits a position edit: the bodies, the joints between them and the selected joints, in one go
     ---@param posFn fun(fr: BodyFrame): fun(p: number[]): number[]
     ---@param rotFn (fun(fr: BodyFrame): fun(r: number[]): number[])?
     local function editPositions(posFn, rotFn)
@@ -184,8 +184,7 @@ local function build(parts, key)
             local fr = info[player] and info[player].frame
             if not fr then return end
             local p, r = posFn(fr), rotFn and rotFn(fr)
-            local moved = BodyParts.transform(section, player, bodies, { pos = p, rot = r }, mirrorX)
-            BodyParts.transformJoints(section, joints, p, mirrorX, moved)
+            BodyParts.transform(section, player, bodies, { pos = p, rot = r }, mirrorX, joints)
         end)
     end
     function t.moveBy(offset)

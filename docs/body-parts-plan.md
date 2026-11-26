@@ -37,6 +37,18 @@ for `rot` lines, the miss of each Euler reading against the groin's turn. `/bpro
    center, but breast and chest also move: breast exactly as turned about the point 0.15 below its center
    (the chest joint, 1 0.9 2.05), chest as about a point 0.1 below (lumbar height). Pivot rule unknown: a
    follow-up probe if the Rot row's preview must match; MGE reads the pose after the reload anyway.
+   **Needed after all:** a gizmo turn of a whole leg came apart after the reload (MGE writes centers already
+   turned; the game turns some parts again about its own point). Probe 2b: `body_rot_x` / `_y` / `_z` (every
+   body 30 degrees about one axis); the probe's PIVOT lines name the point each part turns about (center, a
+   face end or a joint; frame from the joints, which stay put). Then MGE writes c = P + M^T (D - P).
+   **Measured (2b):** each body turns about one joint, miss 0 on all three axes: head neck, breast chest,
+   chest lumbar, stomach abs, pecs their pecs joint, biceps shoulder, triceps elbow, hand wrist, butt glute,
+   thigh hip, leg **ankle**; groin and feet their own center (`BodyParts.PIVOTS`). MGE edits where parts are
+   placed (`BodyParts.placed`) and writes pos lines to land there (`setPlaced`); bodies turning about a moved
+   joint keep their place. All other joints stay at their pos line, except the knees (no body's pivot): they
+   moved as if turned about the thigh's placed center, j' = c' + M (j - c'), M the **thigh's** rot
+   (`body_rot_knee`: r_thigh turned alone moved r_knee, l_leg turned alone left l_knee). MGE edits knees by
+   where they land (`jointPlaced` / `setJointPlaced`); a knee keeps its place when its thigh turns or moves.
 3. **Shape / sides:** which sides number is radius / length per shape. `body_shape` (five changes at once)
    crashed the game on load; split into `body_shape_a` (breast cylinder, r_thigh sphere, l_thigh box),
    `body_shape_b` (l_leg `capsule`), `body_shape_c` (head box).
@@ -52,7 +64,11 @@ for `rot` lines, the miss of each Euler reading against the groin's turn. `/bpro
 
 ## Design
 
-- **Where:** its own **Parts** list next to Players, tabs **Core** and **Advanced**.
+- **Where:** the **Players** list (merged after building it as its own Parts list: the map's player switch
+  covers the players' selection). Tabs **Player** (whole players, as the old Players list), **Parts**,
+  **Advanced**, **Joints**; the active tab decides what clicks, keys, box select and the gizmo act on
+  (`Main.partsShown`). Player tab buttons: select all, new, duplicate, import, export, delete; part tabs: select
+  all, Mirror.
 - **Tori map** (the list's selector): a 2D back view of the player, every part a clickable shape, as RPH's
   mini tori (back view: the tori's left on screen left, nearly every part shows). For parts hard to click on
   some models (small, hidden, inside a model). Always the classic tori's proportions (modmaker.tbm), whatever

@@ -621,7 +621,7 @@ local KEY_DELETE = 127 -- SDLK_DELETE
 ---@param action "new"|"duplicate"|"delete"
 local function listAction(action)
     local tab, actions = MGE.Main.listTab, nil
-    if tab == "misc" or tab == "parts" then return end -- parts: nothing to add or delete
+    if tab == "misc" or MGE.Main.partsShown() then return end -- part tabs: nothing to add or delete
     if tab == "players" then
         local L = MGE.PlayerList
         actions = { new = L.newPlayer, duplicate = L.duplicate, delete = L.deleteSelected }
@@ -734,10 +734,10 @@ local function onKeyDown(key)
         return 1
     elseif ctrl and not shift and key == string.byte("a") then
         local tab = MGE.Main.listTab
-        if tab == "players" then
-            MGE.Main.toggleSelectAllPlayers()
-        elseif tab == "parts" then
+        if MGE.Main.partsShown() then
             MGE.PartList.toggleSelectAll()
+        elseif tab == "players" then
+            MGE.Main.toggleSelectAllPlayers()
         elseif tab == "joints" then
             MGE.Main.toggleSelectAllJoints()
         elseif tab == "atmo" then

@@ -114,11 +114,14 @@ end)
 
 T.test("selection history: the Parts list's steps (Main.selectedParts keys)", function()
     withHistory(function(SH)
-        local saved = MGE.Main
+        local saved, savedList = MGE.Main, MGE.PartList
+        local followed = 0
+        MGE.PartList = { follow = function() followed = followed + 1 end }
         local ok, err = pcall(function()
-            local Main = { listTab = "parts", selectedParts = {}, updated = 0 }
+            local Main = { listTab = "players", activeTabs = { players = "parts" }, selectedParts = {}, updated = 0 }
+            function Main.partsShown() return true end
             function Main.updateWindow() Main.updated = Main.updated + 1 end
-            function Main.selectionMade() error("parts don't move the camera through selectionMade") end
+            function Main.selectionMade() error("parts follow through PartList.follow, not selectionMade") end
             MGE.Main = Main
             SH.record()
             Main.selectedParts = { ["0:r_hand"] = true, ["0:j:r_wrist"] = true }
@@ -131,11 +134,12 @@ T.test("selection history: the Parts list's steps (Main.selectedParts keys)", fu
             table.sort(keys)
             T.eq(table.concat(keys, " "), "0:j:r_wrist 0:r_hand", "the hand and wrist back")
             T.eq(Main.updated, 1, "window rebuilt")
+            T.eq(followed, 1, "the camera follows the parts")
             SH.step(1)
             T.ok(Main.selectedParts["1:head"] and not Main.selectedParts["0:r_hand"], "forward again")
             T.eq(#SH.layers.objects.states, 1, "objects' steps apart (only the empty start)")
         end)
-        MGE.Main = saved
+        MGE.Main, MGE.PartList = saved, savedList
         if not ok then error(err, 0) end
     end)
 end)

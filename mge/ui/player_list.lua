@@ -1,5 +1,5 @@
--- Players list: a row per player. Click picks one, Shift + click adds more (the gizmo, highlight and
--- Import act on all, Export on the first)
+-- Players' actions (New, Duplicate, Delete, Export, model Reset, model info), for the Players list's Player tab
+-- (ui/part_list.lua shows the list)
 
 local player_list = {}
 MGE.PlayerList = player_list -- for the shortcuts
@@ -7,7 +7,6 @@ MGE.PlayerList = player_list -- for the shortcuts
 local Main = MGE.Main
 local ModData = MGE.ModData
 local FileHandler = MGE.FileHandler
-local ScrollList = MGE.ScrollList
 
 ---@param lines string[]
 ---@return integer body and joint parts in a player section
@@ -22,7 +21,7 @@ end
 ---Where the player's model comes from
 ---@param id integer
 ---@return string
-local function describeModel(id)
+function player_list.describeModel(id)
     local own = FileHandler.getPlayerLines(ModData.parsed, id)
     if own then return countParts(own) .. " parts changed" end
     local shared = FileHandler.getSharedPlayerLines(ModData.parsed)
@@ -100,45 +99,11 @@ function player_list.resetModels(players)
 end
 
 ---@return boolean every player is selected
-local function allSelected()
+function player_list.allSelected()
     for id = 0, Main.getPlayerCount() - 1 do
         if not Main.selectedPlayers[id] then return false end
     end
     return true
-end
-
----@param view UIElement list area, emptied by the caller
-function player_list.create(view)
-    -- the Objects list's buttons, same order
-    local barIcons = Main.setListActions({
-        { label = "Select / deselect all players (Ctrl + A)", icon = MGE.scriptPath .. "textures/selectall.tga", wide = true,
-            onClick = function() Main.toggleSelectAllPlayers() end },
-        { label = "New player (Ctrl + N), at most " .. MGE.Players.MAX, icon = "../textures/menu/general/buttons/addsign.tga", wide = true,
-            onClick = player_list.newPlayer },
-        { label = "Duplicate selected players (Ctrl + D)", icon = MGE.scriptPath .. "textures/duplicate.tga", wide = true,
-            onClick = player_list.duplicate },
-        { label = "Import model to the selected players", icon = MGE.scriptPath .. "textures/import.tga", wide = true,
-            onClick = function() MGE.Assets.openImport() end },
-        { label = "Export the first selected player's model", icon = MGE.scriptPath .. "textures/export.tga", wide = true,
-            onClick = player_list.exportFirst },
-        { label = "Delete selected players (Del)", icon = "../textures/menu/general/buttons/trash.tga", wide = true,
-            onClick = player_list.deleteSelected },
-    })
-    Main.lightWhile(barIcons[1], allSelected)
-
-    local ids = {}
-    for i = 0, Main.getPlayerCount() - 1 do table.insert(ids, i) end
-
-    ScrollList.create(view, { x = 0, y = 0, w = view.size.w, h = view.size.h }, ids, function(row, id)
-        row:addAdaptedText("Player " .. id, 8, nil, MGE.Widgets.FONT, LEFTMID, MGE.Widgets.TEXT_SCALE, nil, nil)
-        local info = row:addChild({
-            pos = { row.size.w / 2, 0 },
-            size = { row.size.w / 2 - 8, row.size.h },
-        })
-        info:addAdaptedText(describeModel(id), nil, nil, MGE.Widgets.FONT, RIGHTMID, MGE.Widgets.TEXT_SCALE_SMALL, nil, nil)
-        if Main.selectedPlayers[id] then row.bgColor = ScrollList.selectedColor end
-        row:addMouseUpHandler(function() Main.selectPlayer(id, get_keyboard_shift() ~= 0) end)
-    end)
 end
 
 return player_list
