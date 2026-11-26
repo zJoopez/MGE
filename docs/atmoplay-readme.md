@@ -22,8 +22,8 @@ Play draws those too, without making anything solid.
 Atmo Play's window has everything you set (drag it by its bar). Its cross hides it behind a small AP button,
 which opens it again:
 
-- **Detail**: how props move while no pool object carries them, for your computer. Simple flies them as
-  spheres (the least work), Shapes (default) with their real shapes, Full with real shapes that also hit each
+- **Detail**: how props move while no pool object carries them, for your computer. Low flies them as
+  spheres (the least work), Medium (default) with their real shapes, High with real shapes that also hit each
   other (the most work). Used from the next fight.
 - **Ghosts**: the flying props' move predictions while a turn waits (like the game's ghosts). Off saves their
   work on maps with many thrust props.
@@ -48,7 +48,7 @@ a replay still plays right, the map just isn't drawn.
   fight, or a replay saved then) plays the moves made so far; the frames after them, which nobody played,
   have no pools: tori fall through the map there.
 - A mod with props turns the replay cache off while it's loaded (cached replays misplace the props); your
-  setting comes back when another mod loads.
+  setting comes back when another mod loads, or when Atmo Play next starts if the game closed first.
 
 ## Making playable mods
 

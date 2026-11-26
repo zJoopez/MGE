@@ -57,13 +57,3 @@ T.test("a mod without header isn't playable", function()
     T.eq(#file.atmo, 0, "#@ lines before a header aren't atmo")
 end)
 
-T.test("drawn lines leave out invisible entities", function()
-    local drawn = Format.drawnLines({
-        "shader dark",
-        "env_obj a", "   pos 0 0 0", "   visible 0",
-        "env_obj b", "   pos 1 0 0", "   visible 1",
-        "env_obj c", "   pos 2 0 0",
-    })
-    T.eq(table.concat(drawn, ","), "shader dark,env_obj b,   pos 1 0 0,   visible 1,env_obj c,   pos 2 0 0",
-        "a is gone, the shader line stays")
-end)

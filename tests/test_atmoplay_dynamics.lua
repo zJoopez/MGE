@@ -517,22 +517,6 @@ env_obj floorFar
     T.eq(pool.entries[1].target and pool.entries[1].target.name, "floorFar", "the floor under the object")
 end)
 
-T.test("movedProp: a moved prop's pose by atmo index, nothing for one at home", function()
-    local s = setup(1)
-    Dynamics.matchBegin(s, { replay_mode = 0, match_frame = 0 })
-    T.eq(Dynamics.movedProp(s, 2), nil, "crateA (atmo entity 2) taken but not moved yet: at home")
-    world.objects[0].pos = { 1.4, 0, 1 }
-    world.objects[0].rot = { 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0 } -- turned about z
-    Dynamics.draw(s, { replay_mode = 0, match_frame = 1 })
-    local m = Dynamics.movedProp(s, 2)
-    T.ok(m ~= nil, "moved")
-    T.near(m.pos[1], 1.4, 1e-9, "where it is")
-    T.eq(m.frame[1][2], -1, "rotation rows from the matrix")
-    T.eq(m.frame[2][1], 1, "rotation rows from the matrix")
-    T.eq(Dynamics.movedProp(s, 2), m, "the same result while the pose holds")
-    T.eq(Dynamics.movedProp(s, 1), nil, "the floor isn't a prop")
-end)
-
 ---------------------------------------------------------------------------------------------------- the grid
 
 ---A field of crates (some scattered, two groups), players walking through it; carried crates drift while

@@ -546,3 +546,44 @@ T.test("body parts: lines at 6 decimals don't drift: a leg turned a full circle 
     end
     T.nearList(BodyParts.jointPlaced(section, "r_knee"), knee0, 1e-4, "the knee too")
 end)
+
+T.test("body parts: Reset puts parts and joints back to the classic body, the rest stays where it stands", function()
+    local section = BodyParts.parseSection({
+        "   body r_thigh", "      pos 0.7 1 1.2", "      rot 30 0 0", "      density 0.6",
+        "   body l_thigh", "      pos 1.3 1 1.2",
+        "   body r_leg", "      rot 0 0 20",
+        "   joint r_ankle", "      pos 0.85 1.05 0.3",
+        "   joint r_hip", "      pos 0.8 1 1.45", "      strength 9" })
+    local leg0 = BodyParts.placed(section, "r_leg")
+    local knee0 = BodyParts.jointPlaced(section, "r_knee")
+    -- the thigh (and its twin with Mirror) and the ankle reset
+    local removed = BodyParts.reset(section, { "r_thigh" }, { "r_ankle" }, true)
+    T.eq(removed, 3, "r_thigh, l_thigh and r_ankle blocks gone")
+    T.eq(BodyParts.part(section, "body", "l_thigh"), nil, "the twin too")
+    T.nearList(BodyParts.placed(section, "r_thigh"), { 0.8, 1, 1.1 }, 1e-9, "the thigh: classic place")
+    T.eq(BodyParts.number(section, "r_thigh", "density"), 0.25, "and classic lines")
+    T.nearList(BodyParts.placed(section, "r_leg"), leg0, 1e-5, "the turned leg, whose ankle went back, stays")
+    T.nearList(BodyParts.jointPlaced(section, "r_knee"), knee0, 1e-5, "the knee its thigh carried stays")
+    T.eq(BodyParts.jointNumber(section, "r_hip", "strength"), 9, "the hip wasn't selected: kept")
+
+    section = BodyParts.parseSection({ "   body r_thigh", "      pos 0.7 1 1.2", "   body l_thigh", "      pos 1.3 1 1.2" })
+    BodyParts.reset(section, { "r_thigh" }, {}, false)
+    T.nearList(BodyParts.vector(section, "body", "l_thigh", "pos"), { 1.3, 1, 1.2 }, 1e-9, "no Mirror: the twin kept")
+end)
+
+T.test("parts: Mirror is kept in config.cfg, read when the list loads", function()
+    local saved = { Main = MGE.Main, Widgets = MGE.Widgets, PartList = MGE.PartList, Config = MGE.Config }
+    local ok, err = pcall(function()
+        local Config = saved.Config
+        T.eq(Config.parse("partsMirror 0\n").partsMirror, false, "a config line")
+        MGE.Main, MGE.Widgets = { getPlayerCount = function() return 2 end, activeTabs = {} }, {}
+        MGE.Config = { values = { partsMirror = false } }
+        dofile(MGE.scriptPath .. "ui/part_list.lua")
+        T.eq(MGE.PartList.mirror, false, "off, as saved")
+        MGE.Config = { values = {} }
+        dofile(MGE.scriptPath .. "ui/part_list.lua")
+        T.eq(MGE.PartList.mirror, true, "nothing saved: on")
+    end)
+    for _, k in ipairs({ "Main", "Widgets", "PartList", "Config" }) do MGE[k] = saved[k] end
+    if not ok then error(err, 0) end
+end)

@@ -222,7 +222,7 @@ end
 ---Adds to `out` (once each, `seen`) every prop that can be within `reach` of p in x / y
 local function gather(s, p, reach, out, seen)
     if s.noGrid then
-        for _, prop in ipairs(s.grouped) do
+        for _, prop in ipairs(s.props) do
             if not seen[prop] then
                 seen[prop] = true
                 out[#out + 1] = prop
@@ -257,14 +257,14 @@ function Dynamics.new(objects, props, params)
     params = params or {}
     local s = {
         radius = tonumber(params.dradius) or Dynamics.DEFAULT_RADIUS,
-        entries = {}, groups = {}, groupKeys = {}, props = {}, byGroup = {}, byIndex = {},
+        entries = {}, groups = {}, groupKeys = {}, props = {}, byIndex = {},
         noGrid = params.noGrid,
         level = Dynamics.level(params.level), -- a change waits for match_begin
         pauseFar = params.pauseFar and true or false, -- a change waits for match_begin
         samples = {}, -- by frame: the points far props pause by (Dynamics.sample)
         simFrame = 0, -- the frame every flight is at
         snapshots = {},
-        grouped = {}, cells = {}, maxRadius = 0,
+        cells = {}, maxRadius = 0,
         events = {}, lastFrame = nil,
         follow = params.follow, followSizes = {},
         fromFrame = params.fromFrame or Driver.FIRST_FRAME,
@@ -320,17 +320,12 @@ function Dynamics.new(objects, props, params)
             if m and m > 0 then prop.flightMass = m end
         end
         -- carriable: its group has pool objects and it may become real
-        if s.groups[prop.group] ~= nil and not prop.noReal then
-            s.byGroup[prop.group] = s.byGroup[prop.group] or {}
-            table.insert(s.byGroup[prop.group], prop)
-            prop.grouped = true
-        end
-        s.grouped[#s.grouped + 1] = prop
+        if s.groups[prop.group] ~= nil and not prop.noReal then prop.grouped = true end
         if prop.radius > s.maxRadius then s.maxRadius = prop.radius end
         gridPlace(s, prop)
     end
     -- props overlapping where the map places them never push each other apart
-    for _, prop in ipairs(s.grouped) do
+    for _, prop in ipairs(s.props) do
         local near = {}
         gather(s, prop.pos, prop.radius + s.maxRadius, near, {})
         for _, other in ipairs(near) do
@@ -409,7 +404,7 @@ local function stillNear(s, prop, reach)
     nearStamp = nearStamp + 1
     local stamp, n = nearStamp, 0
     if s.noGrid then
-        n = addStill(s.grouped, prop, stamp, n)
+        n = addStill(s.props, prop, stamp, n)
     else
         local p, r = prop.pos, reach + s.maxRadius
         for x = cellOf(s, p[1] - r), cellOf(s, p[1] + r) do
@@ -567,7 +562,7 @@ local function fly(s, frame)
         for _, e in ipairs(s.entries) do
             if e.prop then carried = carried + 1 end
         end
-        s.flightOpts.neighbors = (#s.grouped - #list - carried > 0) and s.neighborsFn or nil
+        s.flightOpts.neighbors = (#s.props - #list - carried > 0) and s.neighborsFn or nil
         -- far props paused: only those near a point sampled at this frame step
         local stepList = list
         local near = s.pauseFar and Dynamics.sampleAt(s, s.simFrame) or nil
@@ -1263,22 +1258,6 @@ function Dynamics.centers(s)
     return out
 end
 
----A prop away from the atmo's pose by atmo index, with its rotation as a frame (cached per pose); nil at home
----@return { pos: number[], frame: number[][] }?
-function Dynamics.movedProp(s, index)
-    local prop = s.byIndex[index]
-    if not prop or (prop.pos == prop.home.pos and prop.rot == prop.home.rot) then return nil end
-    local cached = prop.moved
-    if cached and cached.forPos == prop.pos and cached.forRot == prop.rot and cached.forMoves == prop.moves then
-        return cached
-    end
-    local r = prop.rot
-    cached = { pos = prop.pos, frame = { { r.r0, r.r1, r.r2 }, { r.r4, r.r5, r.r6 }, { r.r8, r.r9, r.r10 } },
-        forPos = prop.pos, forRot = prop.rot, forMoves = prop.moves }
-    prop.moved = cached
-    return cached
-end
-
 ---A prop's own pos and rotation (read only) when it's away from the atmo's pose; nil at home
 ---@return number[]? pos, table? rot
 function Dynamics.movedPose(s, index)
@@ -1506,6 +1485,11 @@ function Dynamics.drawGhosts(s, ws, onScreen)
         end
     end
     return drawn
+end
+
+---Drops the reused buffers' references to the last mod's props (called when a mod is left)
+function Dynamics.release()
+    nearOut, ghostProps, ghostDist = {}, {}, {}
 end
 
 NS.Dynamics = Dynamics

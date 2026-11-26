@@ -368,5 +368,10 @@ function Drawer.draw(d, view, level, maxDraws)
     return n
 end
 
+---Drops the reused buffers' references to the last mod's shapes (a 5k atmo's, until the next draw filled them)
+function Drawer.release()
+    visible, cellOrder, ordered, boundary, bucketOf = {}, {}, {}, {}, {}
+end
+
 NS.Drawer = Drawer
 return Drawer

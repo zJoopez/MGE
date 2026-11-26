@@ -233,10 +233,22 @@ local function drawModAtmo(atmoLines, dynamics)
     return drawn
 end
 
+---The lines Files:readAll gives for a text: CRs dropped, split at LF, the last empty line dropped
+---@param raw string
+---@return string[]
+local function splitLines(raw)
+    local lines = {}
+    for ln in raw:gsub("\r", ""):gmatch("[^\n]*\n?") do lines[#lines + 1] = (ln:gsub("\n$", "")) end
+    if lines[#lines] == "" then lines[#lines] = nil end
+    return lines
+end
+
 ---Reads a playable mod and draws its atmo; nil when it isn't playable
+---@param path string under data/mod
+---@param raw string? its text when already read (a 5k atmo's mod: ~6 MB, read once)
 ---@return AtmoPlayLoaded?
-local function loadPlayable(path)
-    local lines = readLines(Runtime.MOD_FOLDER .. path)
+local function loadPlayable(path, raw)
+    local lines = raw and splitLines(raw) or readLines(Runtime.MOD_FOLDER .. path)
     if not lines then return nil end
     local file = Format.read(lines)
     if not file.header then return nil end
@@ -310,6 +322,8 @@ end
 
 local function leavePlayable()
     state.loaded, state.drawer = nil, nil
+    Drawer.release()
+    Dynamics.release()
     if Runtime.measure then Runtime.measure.stop() end
     restoreReplayCache()
     restorePlayerAtmo()
@@ -317,25 +331,29 @@ end
 
 ---A mod file's whole text, compared with the last (interned: cheap) so a changed mod is read again
 ---@return string?
+---@return string? raw the mod's text
+---@return string? path where it was found (under data/mod)
 local function readRaw(name)
     local path = resolveModPath(name)
-    if not path then return nil end
+    if not path then return nil, nil end
     local file = Files.Open(Runtime.MOD_FOLDER .. path, FILES_MODE_READONLY)
-    if not file.data then return nil end
+    if not file.data then return nil, path end
     local raw = file:readAll(true)
     file:close()
-    return raw
+    return raw, path
 end
 
 ---Leaves the old playable mod, reads the new one
 ---@param raw string? its text, if already read
-local function switchMod(name, raw)
+---@param path string? where readRaw found it
+local function switchMod(name, raw, path)
     state.modName = name
-    state.modRaw = raw or readRaw(name)
+    if raw == nil then raw, path = readRaw(name) end
+    state.modRaw = raw
     state.drawError, state.ghostError = nil, nil -- each mod reports its own once
     if state.loaded then leavePlayable() end
-    local path = resolveModPath(name)
-    if path then state.loaded = loadPlayable(path) end
+    path = path or resolveModPath(name)
+    if path then state.loaded = loadPlayable(path, raw) end
     if state.loaded and state.loaded.dynamics and #state.loaded.dynamics.entries > 0 then replayCacheOff() end
 end
 
@@ -367,8 +385,8 @@ local function onMatchBegin()
         return
     end
     local name = get_game_rules().mod
-    local raw = readRaw(name)
-    if name ~= state.modName or raw ~= state.modRaw then switchMod(name, raw) end
+    local raw, path = readRaw(name)
+    if name ~= state.modName or raw ~= state.modRaw then switchMod(name, raw, path) end
     if state.loaded then
         local ws = get_world_state()
         runDynamics(Dynamics.matchBegin, ws) -- props first: the static pool covers the carried ones

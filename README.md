@@ -60,8 +60,11 @@ On the part tabs:
   selection can span players. Clicks in the world pick parts and joints too, Shift + drag adds the ones in the
   box (Ctrl + Shift: hidden ones too). Ctrl + A selects all of the shown player's parts (on the Joints tab: its
   joints). Ctrl + Shift + Z / Y bring back an earlier selection, as on Objects.
-- **Mirror** (on the list's bar, on by default): an edit also changes the left / right twin, mirrored. A twin
-  joint gets the same axis, range and numbers (as the default body has them), only its position mirrored.
+- **Mirror** (on the list's bar, on by default, kept between sessions): an edit also changes the left / right
+  twin, mirrored. A twin joint gets the same axis, range and numbers (as the default body has them), only its
+  position mirrored.
+- **Reset** (on the list's bar): the selected parts and joints back to the default body (Mirror: their twins
+  too), one undo step. Nothing else moves.
 - **Editing:** the rows and the gizmo (Move, Rotate, Scale) work on the selection, one undo step each. Values are
   in the player's layout, as the mod file writes them. A joint moves only when both parts it links are
   selected; the others stay where they are. Scale works in place along each part's axes. Joints alone: Move only

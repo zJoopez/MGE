@@ -75,7 +75,18 @@ end
 
 ---A row: its label left, buttons sharing the rest, lit while get() is their value
 ---@param choices { [1]: string, [2]: any }[] label, value
-local function choiceRow(parent, y, label, set, get, choices, c)
+---@param nearest boolean? numbers: light the choice nearest the value (atmoplay.cfg can hold one between them)
+local function choiceRow(parent, y, label, set, get, choices, c, nearest)
+    local function lit(value)
+        local current = get()
+        if not nearest or type(current) ~= "number" or current <= 0 then return current == value end
+        local best, bestRatio = nil, math.huge
+        for _, choice in ipairs(choices) do
+            local ratio = math.abs(math.log(choice[2] / current))
+            if ratio < bestRatio then best, bestRatio = choice[2], ratio end
+        end
+        return best == value
+    end
     local text = parent:addChild({ pos = { 0, y }, size = { UI.LABEL_W, UI.ROW_H } })
     text:addAdaptedText(true, label, nil, nil, FONTS.LMEDIUM, LEFTMID, UI.TEXT_SCALE)
     local x0 = UI.LABEL_W
@@ -84,7 +95,7 @@ local function choiceRow(parent, y, label, set, get, choices, c)
         local value = choice[2]
         local btn = button(parent, x0 + (i - 1) * (w + UI.GAP), y, w, UI.ROW_H, choice[1],
             function() run(set, value) end, c)
-        UI.lit[#UI.lit + 1] = { btn = btn, isOn = function() return get() == value end }
+        UI.lit[#UI.lit + 1] = { btn = btn, isOn = function() return lit(value) end }
     end
 end
 
@@ -152,7 +163,7 @@ local function build()
     -- the nearest this many atmo shapes a frame: steadier fps on big maps
     local draws = {}
     for i, n in ipairs({ 5000, 1000, 500 }) do draws[i] = { tostring(n), n } end
-    choiceRow(content, y, "Max draws", Runtime.setMaxDraws, function() return settings.maxDraws end, draws, c)
+    choiceRow(content, y, "Max draws", Runtime.setMaxDraws, function() return settings.maxDraws end, draws, c, true)
     y = y + UI.ROW_H + UI.GAP + UI.PAD
     button(content, 0, y, content.size.w, UI.ROW_H, "Quit Atmo Play", function() run(Runtime.stop) end, c)
 

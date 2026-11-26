@@ -498,3 +498,29 @@ T.test("the pool plan is reused while the atmo and free ids stay, made again whe
     T.ok(moved ~= colliders, "an atmo line edited: colliders built again")
     T.ok(Playable.poolPlan(ModData.parsed, moved, movedProps) ~= fewer, "and planned again")
 end)
+
+T.test("the split key, counted again only for changed objects, matches a full count after every kind of edit", function()
+    smallMod()
+    Playable.setPlayable(true)
+    local atmo = ModData.parsed.atmo
+    local function full()
+        local copy = {}
+        for i, obj in ipairs(atmo) do copy[i] = obj end -- another list: counted from scratch
+        return Playable.poolSplitKey(copy)
+    end
+    local function check(label)
+        T.eq(Playable.poolSplitKey(atmo), full(), label)
+    end
+    check("as opened")
+    atmo[1].props.flag = "0" -- a solid object becomes a prop
+    check("a flag edited")
+    atmo[1].props.prop_real = "0"
+    check("a prop that never becomes real")
+    atmo[#atmo] = nil
+    check("the last object deleted")
+    table.remove(atmo, 1)
+    check("one deleted from the middle (the rest renumbered)")
+    atmo[#atmo + 1] = { kind = "atmo", id = #atmo + 1, props = { shape = "box", pos = "9 9 9", sides = "1 1 1", flag = "8" },
+        lines = {} }
+    check("one added")
+end)

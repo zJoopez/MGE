@@ -632,6 +632,43 @@ function BodyParts.jointsBetween(player, bodies)
     return out
 end
 
+---Puts bodies and joints back to the classic body: their blocks go (every line: the classic values apply), the
+---twins' too with mirror. Like other edits it moves nothing else: a turned body whose pivot joint is reset and a
+---knee whose turned thigh is reset keep their place (their pos lines rewritten)
+---@param section BodySection
+---@param bodies string[]
+---@param joints string[]
+---@param mirror boolean?
+---@return integer removed blocks
+function BodyParts.reset(section, bodies, joints, mirror)
+    local resetBody, resetJoint = {}, {}
+    for _, n in ipairs(BodyParts.withTwins(bodies, mirror)) do resetBody[n] = true end
+    for _, n in ipairs(BodyParts.withTwins(joints, mirror)) do resetJoint[n] = true end
+    local keepBody, keepJoint = {}, {}
+    for body, pivot in pairs(BodyParts.PIVOTS) do
+        if resetJoint[pivot] and not resetBody[body] and turned(BodyParts.vector(section, "body", body, "rot")) then
+            keepBody[body] = BodyParts.placed(section, body)
+        end
+    end
+    for joint, body in pairs(BodyParts.CARRIED) do
+        if resetBody[body] and not resetJoint[joint] and turned(BodyParts.vector(section, "body", body, "rot")) then
+            keepJoint[joint] = BodyParts.jointPlaced(section, joint)
+        end
+    end
+    local kept, removed = {}, 0
+    for _, part in ipairs(section.parts) do
+        if (part.kind == "body" and resetBody[part.name]) or (part.kind == "joint" and resetJoint[part.name]) then
+            removed = removed + 1
+        else
+            kept[#kept + 1] = part
+        end
+    end
+    section.parts = kept
+    for body, D in pairs(keepBody) do BodyParts.setPlaced(section, body, D) end
+    for joint, K in pairs(keepJoint) do BodyParts.setJointPlaced(section, joint, K) end
+    return removed
+end
+
 ---@alias BodyPartFns { pos: (fun(p: number[], name: string): number[])?, rot: (fun(r: number[], name: string): number[])?, sides: (fun(s: number[], name: string): number[])? }
 
 ---The same edit seen in the mirror: pos and rot mirrored in, edited, mirrored back; sides as they are

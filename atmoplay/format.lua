@@ -210,31 +210,5 @@ function Format.split(lines)
     return result
 end
 
----The atmo lines the game draws: "visible 0" entities (solid, not drawn) left out, the header kept
----@param atmoLines string[]
----@return string[]
-function Format.drawnLines(atmoLines)
-    local out, entity = {}, nil
-    local function flush()
-        if entity and not entity.hidden then
-            for _, line in ipairs(entity.lines) do out[#out + 1] = line end
-        end
-        entity = nil
-    end
-    for _, line in ipairs(atmoLines) do
-        if line:match("^%s*env_obj%s") then
-            flush()
-            entity = { lines = { line }, hidden = false }
-        elseif entity then
-            entity.lines[#entity.lines + 1] = line
-            if line:match("^%s*visible%s+0%s*$") then entity.hidden = true end
-        else
-            out[#out + 1] = line
-        end
-    end
-    flush()
-    return out
-end
-
 NS.Format = Format
 return Format

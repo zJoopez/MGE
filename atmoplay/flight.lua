@@ -945,7 +945,7 @@ function Flight.step(w, bodies, frame, opts)
             local k = b.invMass * dt
             v[1], v[2], v[3] = v[1] + fx * k, v[2] + fy * k, v[3] + fz * k
         end
-        -- one pos table per flight, moved in place (never the atmo's or an event's); prop.moves tells it moved
+        -- one pos table per flight, moved in place (never the atmo's or an event's)
         local p = prop.pos
         if p ~= fl.posBuf then
             p = { p[1], p[2], p[3] }
@@ -953,7 +953,6 @@ function Flight.step(w, bodies, frame, opts)
             prop.pos = p
         end
         p[1], p[2], p[3] = p[1] + v[1] * dt, p[2] + v[2] * dt, p[3] + v[3] * dt
-        prop.moves = (prop.moves or 0) + 1
         -- a sphere's rotation isn't kept up (it looks the same), unless a thrust on its own axes turns with it
         local seen = prop.shape ~= "sphere" or (thrust ~= nil and thrust.space == 1)
         if seen and (a[1] ~= 0 or a[2] ~= 0 or a[3] ~= 0) then
@@ -1132,11 +1131,6 @@ function Flight.step(w, bodies, frame, opts)
 end
 
 ---Flies one prop alone to `toFrame`; false once its flight ended
-function Flight.advance(w, prop, toFrame, opts)
-    local list = { prop }
-    while prop.flight and prop.flight.frame < toFrame do Flight.step(w, list, prop.flight.frame, opts) end
-    return prop.flight ~= nil
-end
 
 ---------------------------------------------------------------------------------------------------- prediction
 

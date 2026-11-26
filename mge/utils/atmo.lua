@@ -141,7 +141,7 @@ end
 ---The layer's text as Save would write it
 ---@return string
 function Atmo.currentText()
-    return Atmo.cachedText(ModData.parsed.atmo or {}, Atmo.state.header)
+    return (Atmo.cachedText(ModData.parsed.atmo or {}, Atmo.state.header)) -- the text only: callers pass it on
 end
 
 -- Atmo.cachedText's last text and what it was made from: each object with a copy of its props (lines and name
@@ -165,7 +165,8 @@ end
 ---footer's unsaved check and Playable's colliders ask after every edit (a 5k atmo's text: ~21 ms to write)
 ---@param objects FileParserEnvObj[]
 ---@param header string[]?
----@return string
+---@return string text
+---@return table[] snapshots one per object, replaced when that object changes (read only)
 function Atmo.cachedText(objects, header)
     local headerText = table.concat(header or {}, "\n")
     local snap = textCache.snap
@@ -184,7 +185,7 @@ function Atmo.cachedText(objects, header)
                 changed[#changed + 1] = i
             end
         end
-        if sameList and #changed == 0 then return textCache.text end
+        if sameList and #changed == 0 then return textCache.text, snap end
     end
     local function snapshot(obj)
         local props, count = {}, 0
@@ -202,7 +203,7 @@ function Atmo.cachedText(objects, header)
     end
     local text = Atmo.text({ header = header, objects = objects })
     textCache.objects, textCache.header, textCache.text, textCache.snap = objects, headerText, text, snap
-    return text
+    return text, snap
 end
 
 ---The layer differs from its file (or has content and no file)

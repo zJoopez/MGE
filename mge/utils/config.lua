@@ -53,6 +53,10 @@ Config.ENTRIES = {
         get = function() return MGE.Playable.ghosts end, set = function(v) MGE.Playable.setGhosts(v) end },
     { key = "propPauseFar", kind = "boolean",
         get = function() return MGE.Playable.pauseFar end, set = function(v) MGE.Playable.setPauseFar(v) end },
+    -- the Players list's Mirror: applied before the UI loads, so ui/part_list.lua reads it from Config.values
+    { key = "partsMirror", kind = "boolean",
+        get = function() return MGE.PartList and MGE.PartList.mirror end,
+        set = function(v) if MGE.PartList then MGE.PartList.mirror = v end end },
     -- the player's replaycache while props have it off; on load: the game closed first, give it back
     { key = "replayCache", kind = "number", min = 0, max = 100, whole = true,
         get = function() return MGE.Playable.cacheBefore() end,

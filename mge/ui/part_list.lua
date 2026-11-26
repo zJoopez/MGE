@@ -6,9 +6,13 @@
 -- (custom layouts like a car body overlap too much to click). Mirror: edits also change the l_ / r_ twins
 
 local PartList = {
-    mirror = true, -- Mirror on the action bar
+    mirror = true, -- Mirror on the action bar (config.cfg: partsMirror)
 }
 MGE.PartList = PartList
+do -- Config.apply ran before this module loaded
+    local saved = MGE.Config and MGE.Config.values and MGE.Config.values.partsMirror
+    if saved ~= nil then PartList.mirror = saved end
+end
 
 local Main = MGE.Main
 local ModData = MGE.ModData
@@ -198,6 +202,14 @@ function PartList.renumber(map)
     end
     Main.selectedParts = parts
     if MGE.SelectionHistory then MGE.SelectionHistory.resetLayer("parts") end
+end
+
+---Reset (the part tabs' bar): the selected parts and joints back to the default body (Mirror: their twins too),
+---one undo step
+function PartList.resetSelected()
+    PartList.edit(function(section, _, bodies, mirrorX, joints)
+        BodyParts.reset(section, bodies, joints, mirrorX ~= nil)
+    end)
 end
 
 ---A new mod: nothing selected, player 0 shown
@@ -467,11 +479,14 @@ local function buildActions(playerTab)
             icon = MGE.scriptPath .. "textures/selectall.tga", wide = true, onClick = PartList.toggleSelectAll },
         { label = "Mirror", onClick = function()
             PartList.mirror = not PartList.mirror
+            if MGE.Config then MGE.Config.save() end
             Main.updateWindow()
         end },
+        { label = "Reset", onClick = PartList.resetSelected },
     })
     Main.lightWhile(icons[2], function() return PartList.mirror end)
     Widgets.popupBelow(icons[2], "Mirror: edits also change the left / right twin\n(mirrored across the body's middle).")
+    Widgets.popupBelow(icons[3], "The selected parts and joints back to the\ndefault body (Mirror: their twins too).\nOne undo step.")
 end
 
 ---The Players list: the map and the player switch on every tab; buttons and info by the tab

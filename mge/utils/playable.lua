@@ -78,31 +78,54 @@ end
 ---rereads the atmo), so moves and colors need no reload
 ---@param atmo FileParserEnvObj[]?
 ---@return string
-local splitCache = { text = nil, key = nil }
+---An atmo object's pool class: "s <group>" solid, "p <group>" prop, "n <group>" a prop never real (no pool
+---object: counted apart), false when not solid
+---@param obj FileParserEnvObj
+---@return string|false
+local function splitClass(obj)
+    local reason, _, group, prop = Colliders.classify(obj.props)
+    if reason then return false end
+    local never = false
+    if prop then
+        local player, real = Colliders.collision(obj.props)
+        never = not player and not real
+    end
+    return (never and "n " or prop and "p " or "s ") .. group
+end
+
+-- the last key, and each object's class with the text cache's snapshot it was read from: only objects whose
+-- snapshot changed are classified again (all 5k took ~14 ms per atmo edit)
+local splitCache = { text = nil, key = nil, list = nil, snaps = {}, classes = {}, counts = {} }
 
 function Playable.poolSplitKey(atmo)
-    local text = MGE.Atmo.cachedText(atmo or {}, MGE.Atmo.state.header)
-    if splitCache.text == text then return splitCache.key end
-    -- from the lines alone: building colliders took ~170 ms on a 5k atmo per edit
-    local counts = {}
-    for _, obj in ipairs(atmo or {}) do
-        local reason, _, group, prop = Colliders.classify(obj.props)
-        if not reason then
-            -- a prop that never becomes real needs no pool object: counted apart
-            local never = false
-            if prop then
-                local player, real = Colliders.collision(obj.props)
-                never = not player and not real
-            end
-            local key = (never and "n " or prop and "p " or "s ") .. group
-            counts[key] = (counts[key] or 0) + 1
+    local list = atmo or {}
+    local text, snaps = MGE.Atmo.cachedText(list, MGE.Atmo.state.header)
+    if splitCache.text == text and splitCache.list == list then return splitCache.key end
+    local c = splitCache
+    if c.list ~= list then c.list, c.snaps, c.classes, c.counts = list, {}, {}, {} end
+    local counts = c.counts
+    local function count(class, by)
+        if not class then return end
+        local n = (counts[class] or 0) + by
+        counts[class] = n ~= 0 and n or nil
+    end
+    for i, obj in ipairs(list) do
+        if c.snaps[i] ~= snaps[i] then
+            count(c.classes[i], -1)
+            local class = splitClass(obj)
+            count(class, 1)
+            c.classes[i], c.snaps[i] = class, snaps[i]
         end
     end
+    for i = #c.snaps, #list + 1, -1 do -- objects gone from the end
+        count(c.classes[i], -1)
+        c.classes[i], c.snaps[i] = nil, nil
+    end
     local parts = {}
-    for group, n in pairs(counts) do parts[#parts + 1] = group .. "=" .. n end
+    for class, n in pairs(counts) do parts[#parts + 1] = class .. "=" .. n end
     table.sort(parts)
-    splitCache.text, splitCache.key = text, table.concat(parts, ";")
-    return splitCache.key
+    c.text, c.key = text, table.concat(parts, ";")
+    return c.key
 end
 
 ---@type string? poolSplitKey of the loaded pools, nil: not known yet
@@ -491,6 +514,7 @@ end
 ---After every reload: a driver for the loaded file's pool (and props), placed for this fight
 function Playable.onMatchBegin()
     driver, dynamics = nil, nil
+    Dynamics.release() -- the last props' buffers
     -- every exit without props restores the replay cache
     if not Playable.isOn() then
         setReplayCache(false)
