@@ -30,8 +30,7 @@ local SNAP_STEPS = {
     stepField("Shift step", "wheelFineStep", 1000),
     stepField("Rotate step", "rotateStep", 180),
 }
-local SNAP_INFO = "Wheel over a number field, or Ctrl while\ndragging the gizmo. Hold Shift for the\n" ..
-    "Shift step (rotation: 1 degree)."
+local SNAP_INFO = "Wheel over a number field\nCtrl while gizmo drag\n Hold Shift for shift step."
 
 local SHORTCUTS = table.concat({
     "F1: show / hide window",
@@ -251,26 +250,25 @@ do
     local AtmoLayer = MGE.AtmoLayer
     local choices = {}
     for i, n in ipairs(AtmoLayer.DRAW_CHOICES) do choices[i] = { label = tostring(n), value = n } end
-    addChoiceRow("Max draws", "Atmo shapes drawn a frame, nearest first.\nLower: steadier fps on big maps.", choices,
+    addChoiceRow("Max atmos", "Lower graphics settings game can draw more", choices,
         function() return AtmoLayer.maxDraws end, function(n) AtmoLayer.maxDraws = n end)
 end
 
 addNumberSection("Snapping", SNAP_STEPS, SNAP_INFO)
-addHelpHeading(y, "Dynamic atmo", "Props (atmo objects with Static off)\nin a playable mod.")
+addHelpHeading(y, "Dynamic atmo", "Playable atmo options.\n Allows disabling features to handle more dynamic atmos")
 y = y + SECTION_H
 do
     local LABELS = { simple = "Low", shapes = "Medium", full = "High" }
     local choices = {}
     for i, level in ipairs(MGE.AtmoPlay.Dynamics.LEVELS) do choices[i] = { label = LABELS[level] or level, value = level } end
-    addChoiceRow("Detail", "How props fly:\nLow: as spheres, least work.\nMedium: real shapes.\n" ..
-        "High: real shapes that hit each other, most work.", choices,
+    addChoiceRow("Detail", "Simulation detail:\nLow: Spheres only.\nMedium: Real shapes.\n" ..
+        "High: Real shapes + atmo collision.", choices,
         function() return MGE.Playable.flightLevel end, MGE.Playable.setFlightLevel)
 end
 -- ghosts run the flights ahead: as much work as playing them
-addChoiceRow("Ghosts", "Flying props' ghosts while a turn waits.\nOff saves work with many flying props.", ON_OFF,
+addChoiceRow("Ghosts", nil, ON_OFF,
     function() return MGE.Playable.ghosts end, MGE.Playable.setGhosts)
-addChoiceRow("Distant", "Moving props far from every player:\nMove: keep moving. Pause: wait until\n" ..
-    "someone comes near (less work).", { { label = "Move", value = false }, { label = "Pause", value = true } },
+addChoiceRow("Distant", nil, { { label = "Move", value = false }, { label = "Pause", value = true } },
     function() return MGE.Playable.pauseFar end, MGE.Playable.setPauseFar)
 
 addHelpHeading(y, "Shortcuts", SHORTCUTS)

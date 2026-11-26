@@ -26,7 +26,8 @@ env_obj <id>                  the static pool: hidden, every free static id
 
 - The game skips `#` lines; its atmo parser reads only `shader`, `opt`, `env_obj`. A 5k atmo as `#@ ` (1.6
   MB, 65k lines) loads with `/lm` in 39 ms, same as the pool alone (6.3 MB: 54 ms).
-- One file to share; viewers need Atmo Play, else tori fall through (live and in replays).
+- One file to share. Without Atmo Play: live play falls through; replays play back right (the game replays
+  the pool) but show no atmo, and editing a replay falls through (the pool isn't moved).
 - **Drawn mods:** MGE's Default save keeps the atmo inside too, header `#atmoplay v1 mode=draw`
   (`Format.isDrawOnly`): drawn, no pools. World > Export writes clean copies (`MGE - exp_<name>.atmo`,
   `modmaker/exp_<name>.tbm`). Mods saved before still open with their separate `.atmo`.

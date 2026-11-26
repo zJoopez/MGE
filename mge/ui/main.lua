@@ -135,7 +135,7 @@ local TOOLS = {
 }
 local bar = {}
 -- In place (Transforms.inPlace), lit while on, saved in config.cfg
-local IN_PLACE_LABEL = "In place: Rotate / Scale each object\naround itself, positions stay"
+local IN_PLACE_LABEL = "In place: Rotate / Scale without repositioning"
 table.insert(bar, { label = IN_PLACE_LABEL, icon = MGE.scriptPath .. "textures/inplace.tga", onClick = function()
     MGE.Transforms.inPlace = not MGE.Transforms.inPlace
     Main.updateInPlaceButton()
