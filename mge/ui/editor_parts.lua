@@ -9,13 +9,37 @@ local BodyParts = MGE.BodyParts
 
 local NOT_SET = { "-", "-", "-" }
 
+---A placeholder showing up to 4 decimals, trailing zeros dropped (float noise like 0.059999999 or 0.00000842
+---reads 0.06 and 0; small body values like 0.0274 stay readable). The exact value stays for wheel steps
 ---@param v number
----@return string
-local function hint(v) return MGE.FileHandler.formatNumber(v) end
+---@return { text: string, value: number }
+local function hint(v)
+    local s = (string.format("%.4f", v):gsub("0+$", ""):gsub("%.$", ""))
+    if s == "-0" then s = "0" end
+    return { text = s, value = v }
+end
 
 ---@param values number[]
----@return string[]
+---@return { text: string, value: number }[]
 local function hints(values) return { hint(values[1]), hint(values[2]), hint(values[3]) } end
+
+-- Gizmo rows (Pos, Rot, Sides) as the Player tab's: 2 decimals (plain numbers: the rows' own format), Rot in
+-- whole degrees. The exact values stay for wheel steps
+
+---@param values number[]
+---@return number[]
+local function gizmoHints(values) return { values[1], values[2], values[3] } end
+
+---@param values number[] degrees
+---@return { text: string, value: number }[]
+local function degreeHints(values)
+    local out = {}
+    for i = 1, 3 do
+        local whole = math.floor(values[i] + 0.5)
+        out[i] = { text = tostring(whole == 0 and 0 or whole), value = values[i] } -- no "-0"
+    end
+    return out
+end
 
 ---@param edit fun(section: BodySection, player: integer, names: string[], mirrorX: number?)
 local function editSelected(edit) MGE.PartList.edit(edit) end
@@ -62,7 +86,7 @@ local function buildParts(holder)
                 return q
             end }, mirrorX)
         end)
-    end, any and hints(center) or NOT_SET,
+    end, any and gizmoHints(center) or NOT_SET,
         "Center of the selected parts in the player's\nlayout (as the mod file). Joints between two\nselected parts move too.")
 
     -- Rot / Sides: the first part's line; a typed axis is set on all of them
@@ -80,7 +104,8 @@ local function buildParts(holder)
                     return q
                 end }, mirrorX)
             end)
-        end, shown and hints(shown) or (key == "rot" and { "0", "0", "0" } or NOT_SET), help, nil, opts)
+        end, shown and (key == "rot" and degreeHints(shown) or gizmoHints(shown))
+            or (key == "rot" and { "0", "0", "0" } or NOT_SET), help, nil, opts)
         inwuts[name] = inputs
         return labelButton
     end
@@ -176,7 +201,7 @@ local function buildJoints(holder)
                 return q
             end, mirrorX)
         end)
-    end, any and hints(center) or NOT_SET, "Center of the selected joints in the player's\nlayout (as the mod file).")
+    end, any and gizmoHints(center) or NOT_SET, "Center of the selected joints in the player's\nlayout (as the mod file).")
 
     -- one number each: the first joint's shown, a typed one set on all
     local NUMBERS = {

@@ -1,9 +1,10 @@
 local FileHandler = {}
 MGE.FileHandler = FileHandler
 
--- Decimals written for computed numbers: 10 keeps small sides precise and stops rounding drift over
--- save / reload rounds. "%f", never an exponent
-local DECIMALS = 10
+-- Decimals written for computed numbers: 6 is finer than the game's single precision holds (~0.00001 at 50
+-- units), keeps MIN_SIDE (0.0001), drifts at most ~0.0000005 an edit, and drops float noise (0.0599999999).
+-- 10 wrote ~12% more text on a 5k atmo. "%f", never an exponent
+local DECIMALS = 6
 
 ---Up to DECIMALS decimals, trailing zeros removed (keeps values like 0.0001)
 ---@param value number

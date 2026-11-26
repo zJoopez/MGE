@@ -105,7 +105,7 @@ end
 ---got selected
 function PartList.follow()
     local Camera, Players = MGE.Camera, MGE.Players
-    if not Camera.followMoves or not Players then return end
+    if not Camera or not Camera.followMoves or not Players then return end
     local points, exists = {}, {}
     for _, part in ipairs(PartList.selected()) do
         if exists[part.player] == nil then exists[part.player] = Players.exists(part.player) end

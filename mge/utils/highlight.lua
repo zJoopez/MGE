@@ -54,14 +54,7 @@ local function rotOf(box)
     return rot
 end
 
--- While drawAtmo runs, set_color only on change: thousands of atmo shapes mostly share a color
-local colorCaching, lastColor, lastAlpha = false, nil, nil
-
 local function setColor(c, alpha)
-    if colorCaching then
-        if c == lastColor and alpha == lastAlpha then return end
-        lastColor, lastAlpha = c, alpha
-    end
     set_color(c[1], c[2], c[3], alpha)
 end
 
@@ -116,28 +109,6 @@ local function colorOf(obj)
     for k = 1, 4 do c[k] = math.min(math.max(c[k] or 1, 0), 1) end
     colorByLine[line] = c
     return c
-end
-
----An atmo shape: boxes through drawBox, spheres and pills filled
----@param g AtmoGhost
----@param c number[]
----@param alpha number
----@param outline boolean
----@param grow number? added to sides (half to a radius)
-local function drawGhost(g, c, alpha, outline, grow)
-    local p, s = g.pos, g.sides
-    grow = grow or 0
-    if g.shape == "box" then
-        Highlight.drawBox(g, c, alpha, outline, grow)
-        return
-    end
-    local rot = rotOf(g)
-    setColor(c, alpha)
-    if g.shape == "sphere" then
-        draw_sphere_m(p[1], p[2], p[3], s[1] + grow / 2, rot)
-    else -- pill: x radius, y length
-        draw_capsule_m(p[1], p[2], p[3], s[2], s[1] + grow / 2, rot)
-    end
 end
 
 -- The Atmo list draws atmo shapes this much larger: an atmo copy exactly on a see-through real object
@@ -298,6 +269,23 @@ end
 local selG, selA, selGrow = {}, {}, {}
 local selN = 0
 
+-- Each atmo object's ghost, kept per undo state: every atmo change commits a new state (drags preview through
+-- AtmoLayer.live without touching lines), so the per-object cache checks (~0.7 ms on 5k) run once per edit
+local ready = { list = nil, count = 0, state = nil, ghosts = {} }
+
+---@param list FileParserEnvObj[]
+---@return (AtmoGhost|false)[] ghosts by list index, false without a pos line
+local function readyGhosts(list)
+    local History = MGE.History
+    local state = History and History.states and History.states[History.index]
+    if state and ready.list == list and ready.count == #list and ready.state == state then return ready.ghosts end
+    local AtmoLayer = MGE.AtmoLayer
+    local ghosts = {}
+    for i, obj in ipairs(list) do ghosts[i] = AtmoLayer.ghost(obj) or false end
+    ready.list, ready.count, ready.state, ready.ghosts = list, #list, state, ghosts
+    return ghosts
+end
+
 ---Collects ghosts that can show: selected ones into sel (up to `most`), the rest under the cutoff into vis
 ---@param full boolean
 ---@param plain boolean?
@@ -305,12 +293,13 @@ local selN = 0
 local function collectAtmo(full, plain, most)
     local AtmoLayer = MGE.AtmoLayer
     local list = ModData.parsed.atmo or {}
+    local ghosts = readyGhosts(list)
     -- props moved in a fight (playable mods) are drawn where they are now
     local moved = MGE.Playable and MGE.Playable.movedGhost
     visN, selN = 0, 0
     if not full then
-        for i, obj in ipairs(list) do
-            local g = AtmoLayer.ghost(obj)
+        for i in ipairs(list) do
+            local g = ghosts[i] or nil
             if g and moved then g = moved(i, g) end
             if g and nearEnough(g) and onScreen(g) then addVisible(g, AtmoLayer.color, AtmoLayer.alpha) end
         end
@@ -320,7 +309,7 @@ local function collectAtmo(full, plain, most)
     local grow = not plain and GROW or 0 -- F1's play view: as in game
     for i, atmoObj in ipairs(list) do
         if selN >= most then break end -- selected ones fill every draw
-        local g = AtmoLayer.ghost(atmoObj)
+        local g = ghosts[i] or nil
         if g and moved then g = moved(i, g) end
         local selected = atmoObj.selected and not plain
         if g and live and selected then g = AtmoLayer.liveGhost(g, live) end
@@ -363,14 +352,38 @@ local function drawAtmo(full, plain)
     else
         visCut = visN >= room and visDist[visOrder[room]] * CUT_MARGIN + 1 or math.huge
     end
-    colorCaching, lastColor, lastAlpha = true, nil, nil
+    -- one function call per shape (up to Max draws a frame): the rotation kept on the ghost (AtmoLayer.ghost's
+    -- are rebuilt when their lines change; liveGhost's and moved props' copies are new or set it), set_color
+    -- only on change (thousands of shapes mostly share a color)
+    local lastC, lastA = nil, nil
+    local setColorNow, box, sphere, capsule = set_color, draw_box_m, draw_sphere_m, draw_capsule_m
+    local function draw(g, c, alpha, grow)
+        local shape = g.shape
+        if shape == "box" and alpha <= 0 then return end -- drawBox draws no fill at 0
+        if c ~= lastC or alpha ~= lastA then
+            setColorNow(c[1], c[2], c[3], alpha)
+            lastC, lastA = c, alpha
+        end
+        local rot = g.rotTB
+        if not rot then
+            rot = rotOf(g)
+            g.rotTB = rot
+        end
+        local p, s = g.pos, g.sides
+        if shape == "box" then
+            box(p[1], p[2], p[3], s[1] + grow, s[2] + grow, s[3] + grow, rot)
+        elseif shape == "sphere" then
+            sphere(p[1], p[2], p[3], s[1] + grow / 2, rot)
+        else -- pill: x radius, y length
+            capsule(p[1], p[2], p[3], s[2], s[1] + grow / 2, rot)
+        end
+    end
     local color = Highlight.color
-    for k = 1, math.min(selN, most) do drawGhost(selG[k], color, selA[k], false, selGrow[k]) end
+    for k = 1, math.min(selN, most) do draw(selG[k], color, selA[k], selGrow[k]) end
     for k = 1, n do
         local i = visOrder[k]
-        drawGhost(visG[i], visC[i], visA[i], false, visGrow[i])
+        draw(visG[i], visC[i], visA[i], visGrow[i])
     end
-    colorCaching = false
     visN, selN = 0, 0
 end
 

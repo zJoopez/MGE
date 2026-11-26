@@ -151,9 +151,9 @@ T.test("body parts: an edit moves the joints between moved bodies only; Mirror m
         rot = function(r) return { r[1], r[2], r[3] + 10 } end }
     BodyParts.transform(section, 0, { "breast", "r_pecs" }, inward, BodyParts.mirrorX(section))
     -- turned parts: where the game places them (their pos lines make up for its pivots)
-    T.nearList(BodyParts.placed(section, "r_pecs"), { 0.85, 0.9, 2.15 }, 1e-9, "r_pecs +x")
-    T.nearList(BodyParts.placed(section, "l_pecs"), { 1.15, 0.9, 2.15 }, 1e-9, "its twin -x")
-    T.nearList(BodyParts.placed(section, "breast"), { 1.1, 0.9, 2.2 }, 1e-9, "the middle one as typed")
+    T.nearList(BodyParts.placed(section, "r_pecs"), { 0.85, 0.9, 2.15 }, 1e-5, "r_pecs +x (lines at 6 decimals)")
+    T.nearList(BodyParts.placed(section, "l_pecs"), { 1.15, 0.9, 2.15 }, 1e-5, "its twin -x")
+    T.nearList(BodyParts.placed(section, "breast"), { 1.1, 0.9, 2.2 }, 1e-5, "the middle one as typed")
     T.nearList(vec(section, "body", "r_pecs", "rot"), { 0, 0, 10 }, 1e-9, "rot")
     T.nearList(vec(section, "body", "l_pecs", "rot"), { 0, 0, -10 }, 1e-9, "the twin's mirrored")
     T.nearList(vec(section, "joint", "r_pecs", "pos"), { 0.95, 0.85, 2.2 }, 1e-9, "joint breast-r_pecs: the edit")
@@ -162,7 +162,7 @@ T.test("body parts: an edit moves the joints between moved bodies only; Mirror m
 
     section = BodyParts.parseSection({})
     BodyParts.transform(section, 0, { "r_hand", "l_hand" }, inward, 1)
-    T.nearList(BodyParts.placed(section, "l_hand"), { 2.45, 0.85, 2.3 }, 1e-9, "both selected: both as typed")
+    T.nearList(BodyParts.placed(section, "l_hand"), { 2.45, 0.85, 2.3 }, 1e-5, "both selected: both as typed")
 end)
 
 T.test("body parts: shape changes convert the sides; the head refuses", function()
@@ -518,4 +518,31 @@ T.test("parts selection: the camera looks at the selected parts and joints (foll
     for _, k in ipairs(G) do _G[k] = savedG[k] end
     for _, k in ipairs({ "Main", "Widgets", "PartList", "Camera", "Players" }) do MGE[k] = saved[k] end -- nil ones too
     if not ok then error(err, 0) end
+end)
+
+T.test("body parts: lines at 6 decimals don't drift: a leg turned a full circle in 24 steps comes back", function()
+    local section = BodyParts.parseSection({})
+    local legs = { "r_thigh", "r_leg", "r_foot" }
+    local start = {}
+    for _, n in ipairs(legs) do start[n] = BodyParts.placed(section, n) end
+    local knee0 = BodyParts.jointPlaced(section, "r_knee")
+    local W = Mat3.mul(Mat3.rotX(math.rad(15)), Mat3.rotY(math.rad(5))) -- not about one axis: rot lines change in 3D
+    local about = { 0.9, 1.1, 1.2 }
+    local turned = { pos = function(p)
+        local q = Mat3.apply(W, { p[1] - about[1], p[2] - about[2], p[3] - about[3] })
+        return { about[1] + q[1], about[2] + q[2], about[3] + q[3] }
+    end, rot = function(r) return BodyParts.rotLine(Mat3.mul(W, BodyParts.rotMatrix(r))) end }
+    -- W turned 24 times is not the identity (two axes): undo with its inverse 24 times instead
+    for _ = 1, 24 do BodyParts.transform(section, 0, legs, turned, nil, { "r_hip" }) end
+    local Wt = Mat3.transpose(W)
+    local back = { pos = function(p)
+        local q = Mat3.apply(Wt, { p[1] - about[1], p[2] - about[2], p[3] - about[3] })
+        return { about[1] + q[1], about[2] + q[2], about[3] + q[3] }
+    end, rot = function(r) return BodyParts.rotLine(Mat3.mul(Wt, BodyParts.rotMatrix(r))) end }
+    for _ = 1, 24 do BodyParts.transform(section, 0, legs, back, nil, { "r_hip" }) end
+    for _, n in ipairs(legs) do
+        T.nearList(BodyParts.placed(section, n), start[n], 1e-4, n .. " back where it started")
+        T.nearList(BodyParts.vector(section, "body", n, "rot"), { 0, 0, 0 }, 1e-3, n .. " unturned")
+    end
+    T.nearList(BodyParts.jointPlaced(section, "r_knee"), knee0, 1e-4, "the knee too")
 end)
