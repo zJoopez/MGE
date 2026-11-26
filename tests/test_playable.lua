@@ -482,3 +482,19 @@ T.test("a prop that never becomes real (prop_real 0) gets no dynamic pool object
     local _, plan = Playable.text(ModData.parsed, Atmo.currentText())
     T.eq(#plan.dynamic, 0, "no dynamic pool object for it")
 end)
+
+T.test("the pool plan is reused while the atmo and free ids stay, made again when either changes", function()
+    smallMod()
+    Playable.setPlayable(true)
+    local colliders, props = Playable.colliders(ModData.parsed.atmo)
+    local plan = Playable.poolPlan(ModData.parsed, colliders, props)
+    T.eq(Playable.poolPlan(ModData.parsed, colliders, props), plan, "nothing changed: the same plan")
+    ModData.parsed.env_obj[#ModData.parsed.env_obj + 1] = { kind = "env_obj", id = 200, props = { shape = "box" },
+        lines = {} }
+    local fewer = Playable.poolPlan(ModData.parsed, colliders, props)
+    T.ok(fewer ~= plan and fewer.freeIds == plan.freeIds - 1, "an id taken: planned again")
+    ModData.parsed.atmo[1].props.pos = "50 50 50"
+    local moved, movedProps = Playable.colliders(ModData.parsed.atmo)
+    T.ok(moved ~= colliders, "an atmo line edited: colliders built again")
+    T.ok(Playable.poolPlan(ModData.parsed, moved, movedProps) ~= fewer, "and planned again")
+end)

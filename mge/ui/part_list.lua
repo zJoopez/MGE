@@ -186,6 +186,20 @@ function PartList.edit(apply)
     MGE.apply()
 end
 
+---Players were renumbered (map[old] = new, false: deleted): part selections follow their player, and the
+---parts' selection history is dropped (its steps hold the old numbers)
+---@param map table<integer, integer|false>
+function PartList.renumber(map)
+    local parts = {}
+    for k in pairs(Main.selectedParts) do
+        local p, rest = k:match("^(%d+):(.+)$")
+        local new = p and map[tonumber(p)]
+        if new then parts[new .. ":" .. rest] = true end
+    end
+    Main.selectedParts = parts
+    if MGE.SelectionHistory then MGE.SelectionHistory.resetLayer("parts") end
+end
+
 ---A new mod: nothing selected, player 0 shown
 function PartList.reset()
     Main.selectedParts = {}

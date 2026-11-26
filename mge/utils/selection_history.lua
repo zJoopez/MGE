@@ -75,6 +75,12 @@ function SelectionHistory.reset()
     SelectionHistory.layers = {}
 end
 
+---Forgets one layer's steps (parts after players were renumbered)
+---@param layer string
+function SelectionHistory.resetLayer(layer)
+    SelectionHistory.layers[layer] = nil
+end
+
 ---Selects a stored step's objects (ones gone since are skipped)
 ---@param layer string
 ---@param keys any[]

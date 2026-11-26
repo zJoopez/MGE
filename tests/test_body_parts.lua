@@ -323,7 +323,7 @@ T.test("body parts: joint lines, classic values, moves with Mirror and without m
 end)
 
 T.test("parts selection: bodies and joints apart (names overlap)", function()
-    local saved = { Main = MGE.Main, Widgets = MGE.Widgets, PartList = MGE.PartList }
+    local saved = { Main = MGE.Main, Widgets = MGE.Widgets, PartList = MGE.PartList, SelectionHistory = MGE.SelectionHistory }
     local ok, err = pcall(function()
         MGE.Main = { getPlayerCount = function() return 2 end, activeTabs = { players = "parts" } }
         MGE.Widgets = {}
@@ -347,8 +347,20 @@ T.test("parts selection: bodies and joints apart (names overlap)", function()
         L.add({ { player = 0, name = "groin", kind = "body" }, { player = 1, name = "chest", kind = "body" } })
         T.eq(MGE.Main.selectedPlayer, 1, "kept when one is on the shown player")
         T.eq(updated, 2, "window rebuilt each time")
+
+        -- player 1 deleted: player 2 becomes 1, player 1's parts go; the parts' history is dropped
+        local dropped
+        MGE.SelectionHistory = { resetLayer = function(layer) dropped = layer end }
+        MGE.Main.selectedParts = { ["0:head"] = true, ["1:r_hand"] = true, ["2:j:r_knee"] = true }
+        L.renumber({ [0] = 0, [1] = false, [2] = 1 })
+        local keys = {}
+        for k in pairs(MGE.Main.selectedParts) do keys[#keys + 1] = k end
+        table.sort(keys)
+        T.eq(table.concat(keys, " "), "0:head 1:j:r_knee", "selections follow their player")
+        T.eq(dropped, "parts", "the parts' history forgotten")
     end)
-    MGE.Main, MGE.Widgets, MGE.PartList = saved.Main, saved.Widgets, saved.PartList
+    MGE.Main, MGE.Widgets, MGE.PartList, MGE.SelectionHistory = saved.Main, saved.Widgets, saved.PartList,
+        saved.SelectionHistory
     if not ok then error(err, 0) end
 end)
 

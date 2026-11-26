@@ -232,3 +232,26 @@ T.test("every atmo in data/atmospheres reads and writes back", function()
     end
     print(string.format("  (%d atmos, %d objects)", files, objects))
 end)
+
+T.test("cached atmo text: reused while nothing changed, written again on any change", function()
+    local objects = {
+        { kind = "atmo", id = 1, props = { shape = "box", pos = "1 2 3", sides = "1 1 1" } },
+        { kind = "atmo", id = 2, props = { shape = "sphere", pos = "4 5 6", sides = "0.5 0 0" } },
+    }
+    local first = Atmo.cachedText(objects, { "shader x" })
+    T.eq(Atmo.cachedText(objects, { "shader x" }), first, "unchanged: the same text")
+    T.eq(first, Atmo.text({ header = { "shader x" }, objects = objects }), "as Atmo.text writes it")
+    local function changedBy(fn)
+        local before = Atmo.cachedText(objects, { "shader x" })
+        fn()
+        local after = Atmo.cachedText(objects, { "shader x" })
+        return after ~= before and after == Atmo.text({ header = { "shader x" }, objects = objects })
+    end
+    T.ok(changedBy(function() objects[1].props.pos = "9 9 9" end), "a line edited in place")
+    T.ok(changedBy(function() objects[2].props.color = "1 0 0 1" end), "a line added")
+    T.ok(changedBy(function() objects[2].props.color = nil end), "a line removed")
+    T.ok(changedBy(function() objects[1].atmoName = "lamp" end), "a name")
+    T.ok(changedBy(function() objects[1], objects[2] = objects[2], objects[1] end), "the order")
+    T.ok(changedBy(function() objects[3] = { kind = "atmo", id = 3, props = { pos = "0 0 0" } } end), "an object added")
+    T.ok(Atmo.cachedText(objects, { "shader y" }) ~= Atmo.cachedText(objects, { "shader x" }), "the header")
+end)

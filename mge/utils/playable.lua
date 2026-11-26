@@ -64,7 +64,8 @@ local colliderCache = { text = nil, colliders = nil, props = nil }
 ---@return AtmoPlayCollider[] colliders the static ones
 ---@return AtmoPlayCollider[] props the dynamic ones (pushable in Atmo Play)
 function Playable.colliders(atmo)
-    local text = MGE.Atmo.text({ objects = atmo or {} })
+    -- the footer's text (shared, written again only on changes); its header lines aren't entities
+    local text = MGE.Atmo.cachedText(atmo or {}, MGE.Atmo.state.header)
     if colliderCache.text == text then return colliderCache.colliders, colliderCache.props end
     local lines = {}
     for line in (text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
@@ -77,7 +78,11 @@ end
 ---rereads the atmo), so moves and colors need no reload
 ---@param atmo FileParserEnvObj[]?
 ---@return string
+local splitCache = { text = nil, key = nil }
+
 function Playable.poolSplitKey(atmo)
+    local text = MGE.Atmo.cachedText(atmo or {}, MGE.Atmo.state.header)
+    if splitCache.text == text then return splitCache.key end
     -- from the lines alone: building colliders took ~170 ms on a 5k atmo per edit
     local counts = {}
     for _, obj in ipairs(atmo or {}) do
@@ -96,7 +101,8 @@ function Playable.poolSplitKey(atmo)
     local parts = {}
     for group, n in pairs(counts) do parts[#parts + 1] = group .. "=" .. n end
     table.sort(parts)
-    return table.concat(parts, ";")
+    splitCache.text, splitCache.key = text, table.concat(parts, ";")
+    return splitCache.key
 end
 
 ---@type string? poolSplitKey of the loaded pools, nil: not known yet
@@ -121,6 +127,9 @@ end
 ---@field dynamic { id: integer, group: string }[] the props' pool (ids 1-48), by id
 ---@field park integer? the parking platform's id (with props and a dynamic pool)
 
+---@type { colliders: table?, props: table?, key: string?, plan: PlayablePlan? } read-only plans are shared
+local planCache = {}
+
 ---The pool a save would write: free static ids split by Pool.plan. With props, free ids 1-48 are their
 ---pool and the first free static id their parking platform
 ---@param parsed FileParserResult
@@ -140,6 +149,13 @@ function Playable.poolPlan(parsed, colliders, props)
     end
     if not colliders then colliders, props = Playable.colliders(parsed.atmo) end
     props = props or {}
+    -- the same colliders (an unchanged atmo) and free ids: the same plan. Every edit of a playable mod reloads,
+    -- and planning a 5k atmo took ~95 ms
+    local key = table.concat(free, ",") .. "|" .. table.concat(freeDynamic, ",") .. "|" .. tostring(params.radius) ..
+        "|" .. tostring(params.dradius)
+    if planCache.colliders == colliders and planCache.props == props and planCache.key == key then
+        return planCache.plan
+    end
     local dynamic, park = {}, nil
     if #props > 0 and #freeDynamic > 0 and #free > 0 then
         park = table.remove(free, 1)
@@ -152,8 +168,10 @@ function Playable.poolPlan(parsed, colliders, props)
             or {}
     end
     local plan = Pool.plan(colliders, free, tonumber(params.radius) or Playable.DEFAULT_RADIUS)
-    return { objects = plan.objects, groups = plan.groups, freeIds = #free, solid = #colliders,
+    local result = { objects = plan.objects, groups = plan.groups, freeIds = #free, solid = #colliders,
         atmo = #(parsed.atmo or {}), props = #props, dynamic = dynamic, park = park }
+    planCache = { colliders = colliders, props = props, key = key, plan = result }
+    return result
 end
 
 ---Adds a pool object's lines: the keys, then the group's friction / hardness / bounce / mass (fixed once

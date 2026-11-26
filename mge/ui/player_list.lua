@@ -62,6 +62,7 @@ function player_list.deleteSelected()
         "?\nLater players move down to fill the numbers.\nUndo can bring them back."
     MGE.confirm(message, function()
         MGE.Players.remove(list, function(map)
+            MGE.PartList.renumber(map)
             Main.selectedPlayers = {}
             -- the panel keeps its player, else the one now at its number
             local picked = map[Main.selectedPlayer]

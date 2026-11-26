@@ -141,7 +141,68 @@ end
 ---The layer's text as Save would write it
 ---@return string
 function Atmo.currentText()
-    return Atmo.text({ header = Atmo.state.header, objects = ModData.parsed.atmo or {} })
+    return Atmo.cachedText(ModData.parsed.atmo or {}, Atmo.state.header)
+end
+
+-- Atmo.cachedText's last text and what it was made from: each object with a copy of its props (lines and name
+-- by identity: they're only ever replaced). Comparing those is ~10x cheaper than writing the text again
+local textCache = { objects = nil, header = nil, text = nil, snap = nil }
+
+---One pass: every line the same and as many lines (the snapshot's props are never nil-valued)
+---@param s { props: table<string, string>, count: integer } the snapshot
+---@param b table<string, string> the object's props now
+---@return boolean
+local function sameProps(s, b)
+    local a, n = s.props, 0
+    for k, v in pairs(b) do
+        if a[k] ~= v then return false end
+        n = n + 1
+    end
+    return n == s.count
+end
+
+---Atmo.text of objects with a header, written again only when an object's lines, name or order changed. The
+---footer's unsaved check and Playable's colliders ask after every edit (a 5k atmo's text: ~21 ms to write)
+---@param objects FileParserEnvObj[]
+---@param header string[]?
+---@return string
+function Atmo.cachedText(objects, header)
+    local headerText = table.concat(header or {}, "\n")
+    local snap = textCache.snap
+    -- the same objects in the same order: only the changed ones need a new snapshot (copying all took ~13 ms)
+    local sameList = textCache.objects == objects and textCache.header == headerText and snap ~= nil
+        and #snap == #objects
+    local changed = {}
+    if sameList then
+        for i, obj in ipairs(objects) do
+            local s = snap[i]
+            if s.obj ~= obj then
+                sameList = false
+                break
+            end
+            if s.lines ~= obj.lines or s.name ~= obj.atmoName or not sameProps(s, obj.props) then
+                changed[#changed + 1] = i
+            end
+        end
+        if sameList and #changed == 0 then return textCache.text end
+    end
+    local function snapshot(obj)
+        local props, count = {}, 0
+        for k, v in pairs(obj.props) do
+            props[k] = v
+            count = count + 1
+        end
+        return { obj = obj, props = props, count = count, lines = obj.lines, name = obj.atmoName }
+    end
+    if sameList then
+        for _, i in ipairs(changed) do snap[i] = snapshot(objects[i]) end
+    else
+        snap = {}
+        for i, obj in ipairs(objects) do snap[i] = snapshot(obj) end
+    end
+    local text = Atmo.text({ header = header, objects = objects })
+    textCache.objects, textCache.header, textCache.text, textCache.snap = objects, headerText, text, snap
+    return text
 end
 
 ---The layer differs from its file (or has content and no file)
